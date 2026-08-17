@@ -1,10 +1,14 @@
 """FastAPI entry point for HealthFlow."""
 
+import base64
+import binascii
+import hmac
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
@@ -37,6 +41,40 @@ app.add_middleware(
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+
+def _valid_basic_auth(authorization: str, username: str, password: str) -> bool:
+    if not password:
+        return True
+    scheme, _, token = authorization.partition(" ")
+    if scheme.casefold() != "basic" or not token:
+        return False
+    try:
+        supplied = base64.b64decode(token, validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError):
+        return False
+    supplied_user, separator, supplied_password = supplied.partition(":")
+    return bool(
+        separator
+        and hmac.compare_digest(supplied_user, username)
+        and hmac.compare_digest(supplied_password, password)
+    )
+
+
+@app.middleware("http")
+async def basic_auth(request: Request, call_next):
+    settings = get_settings()
+    if request.url.path not in {"/health", "/ready"} and not _valid_basic_auth(
+        request.headers.get("authorization", ""),
+        settings.HEALTHFLOW_BASIC_USER,
+        settings.HEALTHFLOW_BASIC_PASSWORD,
+    ):
+        return PlainTextResponse(
+            "Unauthorized",
+            status_code=401,
+            headers={"WWW-Authenticate": 'Basic realm="HealthFlow", charset="UTF-8"'},
+        )
+    return await call_next(request)
 
 
 @app.get("/health")

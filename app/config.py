@@ -57,6 +57,8 @@ class Settings(BaseSettings):
     GENESIS_EVIDENCE_TIMEOUT_SECONDS: float = 30.0
     SERVE_FRONTEND: bool = False
     FRONTEND_DIST: str = "frontend/dist"
+    HEALTHFLOW_BASIC_USER: str = "healthflow"
+    HEALTHFLOW_BASIC_PASSWORD: str = ""
 
     @property
     def mysql_url(self) -> str:
