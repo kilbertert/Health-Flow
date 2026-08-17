@@ -1,8 +1,10 @@
 """LLM client封装，集成vLLM推理."""
 
 import json
-from typing import List, Optional, Dict, Any, Union
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from typing import Any, Dict, List, Optional
+
+import httpx
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from app.config import get_settings
@@ -52,6 +54,9 @@ class vLLMClient(LLMClient):
         settings = get_settings()
         self.api_base = api_base or settings.llm_api_base
         self.api_key = settings.llm_api_key
+        self.responses_url = settings.OPENAI_RESPONSES_URL.strip()
+        self.use_responses_api = bool(self.responses_url)
+        self.request_timeout = settings.REPORT_PARSE_TIMEOUT_SECONDS
         self.temperature = temperature
         self.max_tokens = max_tokens
 
@@ -79,6 +84,9 @@ class vLLMClient(LLMClient):
         Returns:
             助手回复文本
         """
+        if self.use_responses_api:
+            return self._responses_text(messages)
+
         from langchain_openai import ChatOpenAI
 
         # Create a new client for each request to avoid state issues
@@ -105,6 +113,32 @@ class vLLMClient(LLMClient):
         response = llm.invoke(langchain_messages)
         return response.content
 
+    def _responses_text(
+        self, input_items: list[dict[str, Any]], *, json_output: bool = False
+    ) -> str:
+        request: dict[str, Any] = {
+            "model": self.model,
+            "input": input_items,
+            "store": False,
+        }
+        if json_output:
+            request["text"] = {"format": {"type": "json_object"}}
+        response = httpx.post(
+            self.responses_url,
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            json=request,
+            timeout=self.request_timeout,
+        )
+        response.raise_for_status()
+        body = response.json()
+        if not isinstance(body, dict) or body.get("status") != "completed":
+            raise ValueError("Responses API 未完成请求")
+        for output in body.get("output", []):
+            for content in output.get("content", []):
+                if content.get("type") == "output_text" and content.get("text"):
+                    return content["text"]
+        raise ValueError("Responses API 未返回文本")
+
     def chat_with_json(
         self,
         messages: List[Dict[str, str]],
@@ -121,6 +155,9 @@ class vLLMClient(LLMClient):
         Returns:
             解析后的JSON响应
         """
+        if self.use_responses_api:
+            return json.loads(self._responses_text(messages, json_output=True))
+
         from openai import OpenAI
 
         client = OpenAI(api_key=self.api_key, base_url=self.api_base)
@@ -192,6 +229,29 @@ class VLMClient(vLLMClient):
         Returns:
             助手回复文本
         """
+        if self.use_responses_api:
+            input_items = []
+            for message in messages:
+                content = message["content"]
+                if not isinstance(content, list):
+                    input_items.append(message)
+                    continue
+                parts = []
+                for part in content:
+                    if part.get("type") == "text":
+                        parts.append({"type": "input_text", "text": part["text"]})
+                    elif part.get("type") == "image_url":
+                        image = part["image_url"]
+                        parts.append({
+                            "type": "input_image",
+                            "image_url": image["url"],
+                            "detail": image.get("detail", "original"),
+                        })
+                input_items.append(
+                    {"role": message.get("role", "user"), "content": parts}
+                )
+            return self._responses_text(input_items, json_output=True)
+
         from openai import OpenAI
 
         client = OpenAI(api_key=self.api_key, base_url=self.api_base)

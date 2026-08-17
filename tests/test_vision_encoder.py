@@ -1,8 +1,8 @@
 """Tests for VisionEncoder Service."""
 
-import pytest
 from unittest.mock import MagicMock, patch
-import io
+
+import pytest
 
 
 class MockVLMClient:
@@ -123,6 +123,19 @@ def test_text_metric_keeps_source_page(mock_deps):
 
     assert len(metrics) == 1
     assert metrics[0].page_number == 3
+
+
+def test_text_metric_provider_error_is_not_hidden():
+    from app.service.vision_encoder import VisionEncoderService
+
+    service = VisionEncoderService()
+    service._llm_client = MagicMock()
+    service._llm_client.chat_with_json.side_effect = RuntimeError(
+        "provider unavailable"
+    )
+
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        service._extract_metrics_from_text("空腹血糖 6.5", page_number=1)
 
 
 def test_render_pdf_to_images_fallback():

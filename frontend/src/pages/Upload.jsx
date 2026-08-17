@@ -50,6 +50,8 @@ export function abnormalTag(flag) {
 }
 
 function evidenceStatus(status) {
+  if (status === 'processing') return <Tag color="processing">正在解析</Tag>;
+  if (status === 'failed') return <Tag color="error">解析失败</Tag>;
   if (status === 'pending_confirmation') return <Tag color="gold">待确认</Tag>;
   if (status === 'confirmed') return <Tag color="blue">已确认，待生成提示</Tag>;
   if (status === 'assessed') return <Tag color="green">已生成健康提示</Tag>;
@@ -210,8 +212,19 @@ export default function UploadPage() {
       fileList.forEach((item) => formData.append('files', item.originFileObj || item));
       if (values.report_type) formData.append('report_type', values.report_type);
       if (values.department && values.department.trim()) formData.append('department', values.department.trim());
-      const data = await uploadReport(formData);
+      let data = await uploadReport(formData);
       setResult(data);
+      message.info('文件已上传，正在后台解析');
+      for (let attempt = 0; data.status === 'processing' && attempt < 300; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 2000));
+        data = await getReport(data.id);
+        setResult(data);
+      }
+      if (data.status === 'failed') throw new Error(data.processing_error || '报告智能解读失败，请重试');
+      if (data.status === 'processing') {
+        message.warning('报告仍在后台解析，可稍后从报告列表查看');
+        return;
+      }
       setDrafts(initialDrafts(data.metrics));
       setSubjectConsistency(data.subject_consistency === 'same' ? 'same' : '');
       message.success(`已解析 ${fileList.length} 个文件，请批量确认指标`);
@@ -425,6 +438,9 @@ export default function UploadPage() {
               style={{ marginBottom: 16 }}
             />
           )}
+          {result.status === 'processing' && (
+            <Alert type="info" showIcon title="报告正在后台解析，完成后将自动显示指标。" style={{ marginBottom: 16 }} />
+          )}
           <Table
             rowKey="id"
             columns={metricColumns}
@@ -432,7 +448,7 @@ export default function UploadPage() {
             pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 项` }}
             size="small"
             scroll={{ x: 1500 }}
-            locale={{ emptyText: '未解析出指标' }}
+            locale={{ emptyText: result.status === 'processing' ? '正在解析' : '未解析出指标' }}
           />
           <Space style={{ marginTop: 16 }}>
             {result.status === 'pending_confirmation' && (

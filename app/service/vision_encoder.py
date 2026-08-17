@@ -57,7 +57,7 @@ class VisionEncoderService:
                 return ("text_pdf" if text_pages >= 1 else "scanned_pdf", page_count)
         except ImportError:
             return "scanned_pdf", 0
-        except Exception as exc:
+        except Exception:
             return "unknown", 0
 
     def parse_text_pdf(self, pdf_bytes: bytes) -> ParsedReport:
@@ -76,7 +76,7 @@ class VisionEncoderService:
                         for row in table
                         if row
                     ]
-                    pages.append("\n".join(item for item in [text, *rows] if item))
+                    pages.append(text if text.strip() else "\n".join(rows))
 
             raw_text = "\n\n".join(page for page in pages if page)
             indexed_pages = [
@@ -91,12 +91,26 @@ class VisionEncoderService:
                     indexed_pages,
                 )
                 metrics = [metric for group in page_metrics for metric in group]
+            unique_metrics = []
+            seen = set()
+            for metric in metrics:
+                key = (
+                    metric.page_number,
+                    metric.metric_name,
+                    metric.metric_value,
+                    metric.unit,
+                    metric.reference_range,
+                )
+                if key not in seen:
+                    seen.add(key)
+                    unique_metrics.append(metric)
             return ParsedReport(
                 report_type="text_pdf",
                 raw_text=raw_text,
-                metrics=metrics,
+                metrics=unique_metrics,
                 page_count=page_count,
-                success=True,
+                success=bool(unique_metrics),
+                error=None if unique_metrics else "未提取到可确认的医学指标",
             )
         except Exception as exc:
             return ParsedReport("text_pdf", "", [], 0, False, str(exc))
@@ -144,7 +158,7 @@ class VisionEncoderService:
         image_base64 = base64.b64encode(image_bytes).decode("ascii")
         width, height = self._image_size(image_bytes)
         prompt = """
-解析体检报告页面，输出严格 JSON，不要输出 Markdown。必须尽量保留版面证据。
+逐行转录页面中有名称和数值的观测项，输出严格 JSON，不要输出 Markdown，不解释或推断。
 每个 metric 必须包含 metric_name、metric_value；如果能定位，请返回页面像素坐标 bbox
 [x1,y1,x2,y2]、归一化坐标 bbox_normalized [0,0,1000,1000]、evidence_text。
 JSON 格式：
@@ -288,29 +302,29 @@ JSON 格式：
         if not text.strip():
             return []
         prompt = (
-            "从体检报告文本中提取医学指标，只输出 JSON："
+            "从以下文本逐行转录有名称和数值的观测项，只输出 JSON，不解释或推断："
             '{"metrics":[{"metric_name":"","metric_value":"","unit":"",'
             '"reference_range":"","abnormal_flag":"","evidence_text":""}]}\n'
             f"文本：{text[:12000]}"
         )
-        try:
-            result = self.llm_client.chat_with_json(
-                messages=[
-                    {"role": "system", "content": "你是医疗报告结构化抽取器，不做诊断。"},
-                    {"role": "user", "content": prompt},
-                ],
-                json_schema={"type": "object"},
-                temperature=0,
-            )
-            values = result.get("metrics", []) if isinstance(result, dict) else []
-            records: list[MetricRecord] = []
-            for index, item in enumerate(values, start=1):
-                metric = self._metric_from_payload(item, page_number, None, None, index)
-                if metric:
-                    records.append(metric)
-            return records
-        except Exception:
-            return []
+        result = self.llm_client.chat_with_json(
+            messages=[
+                {
+                    "role": "system",
+                    "content": "你是结构化数据转录器，只转录原文，不添加结论。",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            json_schema={"type": "object"},
+            temperature=0,
+        )
+        values = result.get("metrics", []) if isinstance(result, dict) else []
+        records: list[MetricRecord] = []
+        for index, item in enumerate(values, start=1):
+            metric = self._metric_from_payload(item, page_number, None, None, index)
+            if metric:
+                records.append(metric)
+        return records
 
 
 _vision_encoder_service: VisionEncoderService | None = None

@@ -49,8 +49,10 @@ class Settings(BaseSettings):
     ROUTER_CONFIDENCE_THRESHOLD: float = 0.55
     MAX_RECURSION: int = 3
     MAX_UPLOAD_BYTES: int = 20 * 1024 * 1024
+    MAX_UPLOAD_TOTAL_BYTES: int = 50 * 1024 * 1024
     MAX_UPLOAD_FILES: int = 20
     REPORT_PARSE_WORKERS: int = 4
+    REPORT_PARSE_TIMEOUT_SECONDS: float = 180.0
 
     GENESIS_EVIDENCE_API_URL: str = "http://127.0.0.1:8125/api/evidence/matches"
     GENESIS_EVIDENCE_API_KEY: str = ""

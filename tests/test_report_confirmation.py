@@ -64,6 +64,10 @@ def test_metric_names_with_report_abbreviations_are_canonicalized():
         "空腹血糖（FPG）": "fasting_glucose",
         "高密度脂蛋白胆固醇（HDL-C）": "hdl_c",
         "血钙（Ca）": "calcium",
+        "⾎钙 Ca": "calcium",
+        "空腹血糖 FPG": "fasting_glucose",
+        "身体质量指数 / BMI": "bmi",
+        "收缩压 / Systolic Blood Pressure": "systolic_blood_pressure",
     }
     assert {name: metric_code_for_name(name) for name in expected} == expected
 
@@ -115,8 +119,9 @@ def test_multi_file_confirmation_matches_published_card():
                     ("files", ("second.png", io.BytesIO(b"two"), "image/png")),
                 ],
             )
-            assert response.status_code == 200, response.text
-            report = response.json()
+            assert response.status_code == 202, response.text
+            report_id = response.json()["id"]
+            report = client.get(f"/api/health/report/{report_id}").json()
             assert report["status"] == "pending_confirmation"
             assert [item["source_file_index"] for item in report["metrics"]] == [1, 2]
             metric_ids = [item["id"] for item in report["metrics"]]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 import uuid
 from collections.abc import Iterable
 from typing import Any
@@ -59,9 +60,18 @@ class EvidenceBridgeError(RuntimeError):
 
 
 def metric_code_for_name(name: str) -> str | None:
-    normalized = "".join(_PARENTHETICAL_RE.sub("", name.casefold()).split())
+    text = unicodedata.normalize("NFKC", _PARENTHETICAL_RE.sub("", name)).casefold()
+    normalized = "".join(text.split())
     for label, code in METRIC_ALIASES.items():
-        if normalized == "".join(label.casefold().split()):
+        alias = "".join(unicodedata.normalize("NFKC", label).casefold().split())
+        suffix = normalized.removeprefix(alias) if normalized.startswith(alias) else ""
+        if normalized == alias or (
+            suffix
+            and (
+                suffix.startswith(("/", "／"))
+                or (suffix.isascii() and re.fullmatch(r"[a-z0-9%+._-]+", suffix))
+            )
+        ):
             return code
     return normalized if normalized in set(METRIC_ALIASES.values()) else None
 
