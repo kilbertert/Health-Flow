@@ -114,6 +114,17 @@ def test_parse_with_filename_jpg(mock_deps):
     assert result.report_type == "image"
 
 
+def test_text_metric_keeps_source_page(mock_deps):
+    """Text-PDF extraction must retain the page sent to the LLM."""
+    from app.service.vision_encoder import VisionEncoderService
+
+    service = VisionEncoderService()
+    metrics = service._extract_metrics_from_text("空腹血糖 6.5", page_number=3)
+
+    assert len(metrics) == 1
+    assert metrics[0].page_number == 3
+
+
 def test_render_pdf_to_images_fallback():
     """Test PDF rendering fallback when pymupdf not available."""
     from app.service.vision_encoder import VisionEncoderService
