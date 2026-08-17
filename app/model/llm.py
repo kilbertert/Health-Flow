@@ -1,5 +1,6 @@
 """LLM client封装，集成vLLM推理."""
 
+import json
 from typing import List, Optional, Dict, Any, Union
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain_openai import ChatOpenAI
@@ -49,14 +50,15 @@ class vLLMClient(LLMClient):
         """
         super().__init__(model)
         settings = get_settings()
-        self.api_base = api_base or f"http://{settings.VLLM_HOST}:{settings.VLLM_PORT}/v1"
+        self.api_base = api_base or settings.llm_api_base
+        self.api_key = settings.llm_api_key
         self.temperature = temperature
         self.max_tokens = max_tokens
 
         # 使用LangChain的OpenAI兼容接口
         self._llm = ChatOpenAI(
             model=self.model,
-            api_key="EMPTY",  # vLLM不需要API key
+            api_key=self.api_key,
             base_url=self.api_base,
             temperature=temperature,
             max_tokens=max_tokens,
@@ -82,7 +84,7 @@ class vLLMClient(LLMClient):
         # Create a new client for each request to avoid state issues
         llm = ChatOpenAI(
             model=self.model,
-            api_key="EMPTY",
+            api_key=self.api_key,
             base_url=self.api_base,
             temperature=kwargs.get("temperature", self.temperature),
             max_tokens=kwargs.get("max_tokens", self.max_tokens),
@@ -107,6 +109,7 @@ class vLLMClient(LLMClient):
         self,
         messages: List[Dict[str, str]],
         json_schema: Optional[Dict[str, Any]] = None,
+        temperature: float | None = None,
     ) -> Dict[str, Any]:
         """
         带JSON结构化输出的聊天接口.
@@ -120,7 +123,7 @@ class vLLMClient(LLMClient):
         """
         from openai import OpenAI
 
-        client = OpenAI(api_key="EMPTY", base_url=self.api_base)
+        client = OpenAI(api_key=self.api_key, base_url=self.api_base)
 
         # 转换消息格式
         chat_messages = []
@@ -137,11 +140,10 @@ class vLLMClient(LLMClient):
             model=self.model,
             messages=chat_messages,
             response_format={"type": "json_object"} if json_schema else {"type": "text"},
-            temperature=self.temperature,
+            temperature=self.temperature if temperature is None else temperature,
             max_tokens=self.max_tokens,
         )
 
-        import json
         content = response.choices[0].message.content
         if json_schema:
             try:
@@ -192,7 +194,7 @@ class VLMClient(vLLMClient):
         """
         from openai import OpenAI
 
-        client = OpenAI(api_key="EMPTY", base_url=self.api_base)
+        client = OpenAI(api_key=self.api_key, base_url=self.api_base)
 
         response = client.chat.completions.create(
             model=self.model,

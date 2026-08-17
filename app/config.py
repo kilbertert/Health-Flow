@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     VLLM_HOST: str = "localhost"
     VLLM_PORT: int = 8000
     VLLM_MODEL: str = "qwen-vl-plus"
+    VLLM_API_BASE: str = ""
+    VLLM_API_KEY: str = ""
+    OPENAI_API_KEY: str = ""
+    OPENAI_RESPONSES_URL: str = ""
 
     MINIMAX_API_KEY: str = ""
     MINIMAX_MODEL: str = "MiniMax-M2.7"
@@ -46,10 +50,13 @@ class Settings(BaseSettings):
     MAX_RECURSION: int = 3
     MAX_UPLOAD_BYTES: int = 20 * 1024 * 1024
     MAX_UPLOAD_FILES: int = 20
+    REPORT_PARSE_WORKERS: int = 4
 
     GENESIS_EVIDENCE_API_URL: str = "http://127.0.0.1:8125/api/evidence/matches"
     GENESIS_EVIDENCE_API_KEY: str = ""
     GENESIS_EVIDENCE_TIMEOUT_SECONDS: float = 30.0
+    SERVE_FRONTEND: bool = False
+    FRONTEND_DIST: str = "frontend/dist"
 
     @property
     def mysql_url(self) -> str:
@@ -70,6 +77,18 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+
+    @property
+    def llm_api_base(self) -> str:
+        if self.VLLM_API_BASE.strip():
+            return self.VLLM_API_BASE.rstrip("/")
+        if self.OPENAI_RESPONSES_URL.strip():
+            return self.OPENAI_RESPONSES_URL.rstrip("/").removesuffix("/responses")
+        return f"http://{self.VLLM_HOST}:{self.VLLM_PORT}/v1"
+
+    @property
+    def llm_api_key(self) -> str:
+        return self.VLLM_API_KEY or self.OPENAI_API_KEY or "EMPTY"
 
 
 @lru_cache

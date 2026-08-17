@@ -40,8 +40,13 @@ METRIC_ALIASES = {
     "肌肉量": "muscle_mass",
     "白蛋白": "albumin",
     "体重指数": "bmi",
+    "身体质量指数": "bmi",
     "前白蛋白": "prealbumin",
+    "谷丙转氨酶": "alt",
+    "谷草转氨酶": "ast",
+    "血钙": "calcium",
 }
+_PARENTHETICAL_RE = re.compile(r"[（(][^）)]*[）)]")
 _NUMBER_RE = re.compile(r"(?<![\d.])-?\d+(?:\.\d+)?(?![\d.])")
 _RANGE_RE = re.compile(r"(?P<low>-?\d+(?:\.\d+)?)\s*(?:-|~|至|到)\s*(?P<high>-?\d+(?:\.\d+)?)")
 _UPPER_RE = re.compile(r"(?:<|<=|≤)\s*(?P<high>-?\d+(?:\.\d+)?)")
@@ -54,7 +59,7 @@ class EvidenceBridgeError(RuntimeError):
 
 
 def metric_code_for_name(name: str) -> str | None:
-    normalized = "".join(name.casefold().split())
+    normalized = "".join(_PARENTHETICAL_RE.sub("", name.casefold()).split())
     for label, code in METRIC_ALIASES.items():
         if normalized == "".join(label.casefold().split()):
             return code

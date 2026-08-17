@@ -15,6 +15,7 @@ def test_vllm_client_init():
     client = vLLMClient()
     assert client.model == "qwen-vl-plus"
     assert "localhost:8000" in client.api_base
+    assert client.api_key == "EMPTY"
     assert client.temperature == 0.7
     assert client.max_tokens == 2048
 
