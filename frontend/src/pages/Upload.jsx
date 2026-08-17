@@ -56,37 +56,70 @@ function evidenceStatus(status) {
   return <Tag>{status || '未知状态'}</Tag>;
 }
 
+function evidenceAlertType(hasFindings, hasUnmatched) {
+  if (hasFindings) return 'success';
+  if (hasUnmatched) return 'warning';
+  return 'info';
+}
+
 function EvidenceResult({ result }) {
   if (!result) return null;
   const findings = Array.isArray(result.findings) ? result.findings : [];
+  const patientReply = result.patient_reply && typeof result.patient_reply === 'object'
+    ? result.patient_reply
+    : null;
+  const replyFindings = Array.isArray(patientReply?.findings) ? patientReply.findings : findings;
   const unmatched = Array.isArray(result.unmatched) ? result.unmatched : [];
   const skipped = Array.isArray(result.skipped) ? result.skipped : [];
+  const findingDetails = new Map(findings.map((finding) => [finding.condition_code, finding]));
+  const urgencyLabels = { routine: '常规', soon: '近期', urgent: '紧急', emergency: '危急' };
+  const urgencyColors = { routine: 'blue', soon: 'orange', urgent: 'red', emergency: 'magenta' };
+  const summary = patientReply?.summary || result.message;
   return (
-    <Card title="正式知识卡匹配结果" style={{ marginTop: 16 }}>
-      {result.message && <Alert type="info" showIcon title={result.message} style={{ marginBottom: 16 }} />}
-      {findings.length > 0 && (
+    <Card
+      title={patientReply?.title || '正式知识卡匹配结果'}
+      style={{ marginTop: 16 }}
+    >
+      {summary && (
+        <Alert
+          type={evidenceAlertType(replyFindings.length > 0, unmatched.length > 0)}
+          showIcon
+          title={summary}
+          style={{ marginBottom: 16 }}
+        />
+      )}
+      {replyFindings.length > 0 && (
         <List
-          dataSource={findings}
+          dataSource={replyFindings}
           renderItem={(finding) => {
-            const card = finding.card || {};
+            const detail = findingDetails.get(finding.condition_code) || finding;
+            const card = detail.card || {};
             const sources = Array.isArray(card.sources) ? card.sources : [];
+            const cardVersion = finding.card_version || card.version || '—';
+            const cardId = finding.card_id || card.id;
+            const body = finding.patient_visible_body || card.patient_visible_body;
             return (
               <List.Item>
                 <div style={{ width: '100%' }}>
                   <Space wrap>
                     <Typography.Text strong>{finding.condition_name || finding.condition_code}</Typography.Text>
-                    <Tag color="green">知识卡 v{card.version || '—'}</Tag>
-                    <Tag>证据等级：{card.grade || finding.evidence_strength || '—'}</Tag>
+                    <Tag color="green">知识卡 {cardId ? `${cardId} · ` : ''}v{cardVersion}</Tag>
+                    <Tag>证据强度：{finding.evidence_strength || card.grade || '—'}</Tag>
+                    {finding.urgency && (
+                      <Tag color={urgencyColors[finding.urgency] || 'blue'}>
+                        紧急程度：{urgencyLabels[finding.urgency] || finding.urgency}
+                      </Tag>
+                    )}
                     <Tag>{finding.department || '建议就诊科室未记录'}</Tag>
                   </Space>
-                  {card.patient_visible_body && (
+                  {body && (
                     <Typography.Paragraph style={{ margin: '8px 0' }}>
-                      {card.patient_visible_body}
+                      {body}
                     </Typography.Paragraph>
                   )}
                   <Typography.Text type="secondary">
                     原始证据指标：{(finding.source_observation_ids || []).join('、') || '—'}
-                    {finding.needs_recheck ? '；建议复查' : ''}
+                    {finding.needs_recheck ? `；建议复查${finding.recheck_direction ? `：${finding.recheck_direction}` : ''}` : ''}
                   </Typography.Text>
                   {sources.length > 0 && (
                     <List
@@ -119,6 +152,11 @@ function EvidenceResult({ result }) {
           description="这些指标不会被模型补写结论，后续需先完成对应主题的知识卡审核发布。"
           style={{ marginTop: 12 }}
         />
+      )}
+      {patientReply?.disclaimer && (
+        <Typography.Paragraph type="secondary" style={{ margin: '12px 0 0' }}>
+          {patientReply.disclaimer}
+        </Typography.Paragraph>
       )}
       {skipped.length > 0 && (
         <Typography.Paragraph type="secondary" style={{ margin: '12px 0 0' }}>
