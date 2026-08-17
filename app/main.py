@@ -1,9 +1,11 @@
 """FastAPI entry point for HealthFlow."""
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from app.config import get_settings
@@ -14,7 +16,6 @@ from app.data.neo4j_client import get_neo4j_client
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    settings = get_settings()
     database = get_mysql_client()
     try:
         database.create_tables()
@@ -36,17 +37,6 @@ app.add_middleware(
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
-
-
-@app.get("/")
-async def root():
-    return {
-        "name": "HealthFlow Medical Assistant",
-        "message": "HealthFlow Medical Assistant API",
-        "version": "0.1.0",
-        "scope": "medical-assistance-only",
-        "docs": "/docs",
-    }
 
 
 @app.get("/health")
@@ -105,3 +95,21 @@ app.include_router(report.router, prefix="/api/health", tags=["Report"])
 app.include_router(metric.router, prefix="/api/health", tags=["Metric"])
 app.include_router(kg.router, prefix="/api/health", tags=["Knowledge Graph"])
 app.include_router(train.router, prefix="/api/health/train", tags=["Training"])
+
+settings = get_settings()
+if settings.SERVE_FRONTEND:
+    frontend_dist = Path(settings.FRONTEND_DIST).expanduser().resolve()
+    if not (frontend_dist / "index.html").is_file():
+        raise RuntimeError(f"frontend build not found: {frontend_dist}")
+    app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
+else:
+
+    @app.get("/")
+    async def root():
+        return {
+            "name": "HealthFlow Medical Assistant",
+            "message": "HealthFlow Medical Assistant API",
+            "version": "0.1.0",
+            "scope": "medical-assistance-only",
+            "docs": "/docs",
+        }
