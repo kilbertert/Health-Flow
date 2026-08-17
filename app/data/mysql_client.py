@@ -1,10 +1,10 @@
 """Database client with SQLite development fallback and production URLs."""
 
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Generator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import get_settings
@@ -34,7 +34,34 @@ class MySQLClient:
 
     def create_tables(self) -> None:
         Base.metadata.create_all(bind=self.engine)
+        self._add_report_columns()
         self._tables_initialized = True
+
+    def _add_report_columns(self) -> None:
+        """Add phase-3 report fields when reusing a pre-bridge database."""
+        additions = {
+            "medical_reports": {
+                "status": "VARCHAR(32) NOT NULL DEFAULT 'pending_confirmation'",
+                "subject_consistency": "VARCHAR(16) DEFAULT 'same'",
+                "evidence_result": "JSON",
+            },
+            "metric_records": {
+                "source_file_index": "INTEGER NOT NULL DEFAULT 1",
+                "metric_code": "VARCHAR(64)",
+                "confirmation_status": "VARCHAR(16) NOT NULL DEFAULT 'pending'",
+                "confirmed_value": "VARCHAR(64)",
+                "confirmed_unit": "VARCHAR(32)",
+                "confirmed_reference_range": "VARCHAR(64)",
+                "confirmed_at": "DATETIME",
+            },
+        }
+        with self.engine.begin() as connection:
+            inspector = inspect(connection)
+            for table, columns in additions.items():
+                existing = {column["name"] for column in inspector.get_columns(table)}
+                for name, definition in columns.items():
+                    if name not in existing:
+                        connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {definition}"))
 
     def drop_tables(self) -> None:
         Base.metadata.drop_all(bind=self.engine)

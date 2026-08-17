@@ -19,6 +19,9 @@ class MedicalReport(Base):
     parsed_content = Column(JSON)
     exam_date = Column(DateTime)
     department = Column(String(64))
+    status = Column(String(32), nullable=False, default="pending_confirmation")
+    subject_consistency = Column(String(16), default="same")
+    evidence_result = Column(JSON)
     created_at = Column(DateTime, default=datetime.now)
 
     metrics = relationship("MetricRecord", back_populates="report", cascade="all, delete-orphan")
@@ -29,6 +32,7 @@ class MetricRecord(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     report_id = Column(Integer, ForeignKey("medical_reports.id"), nullable=False)
+    source_file_index = Column(Integer, nullable=False, default=1)
     metric_name = Column(String(128))
     metric_value = Column(String(64))
     unit = Column(String(32))
@@ -40,6 +44,12 @@ class MetricRecord(Base):
     page_number = Column(Integer)
     evidence_text = Column(Text)
     source_id = Column(String(128))
+    metric_code = Column(String(64))
+    confirmation_status = Column(String(16), nullable=False, default="pending")
+    confirmed_value = Column(String(64))
+    confirmed_unit = Column(String(32))
+    confirmed_reference_range = Column(String(64))
+    confirmed_at = Column(DateTime)
 
     report = relationship("MedicalReport", back_populates="metrics")
 

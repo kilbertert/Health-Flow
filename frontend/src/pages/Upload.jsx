@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Alert,
   Button,
@@ -6,6 +6,7 @@ import {
   Descriptions,
   Form,
   Input,
+  List,
   message,
   Select,
   Space,
@@ -14,10 +15,29 @@ import {
   Typography,
   Upload,
 } from 'antd';
-import { InboxOutlined, ReloadOutlined } from '@ant-design/icons';
-import { uploadReport } from '../api.js';
+import { CheckCircleOutlined, InboxOutlined, ReloadOutlined } from '@ant-design/icons';
+import { assessReport, confirmReport, getReport, uploadReport } from '../api.js';
 
 const REPORT_TYPES = ['体检', '门诊', '住院', '其他'];
+const DECISIONS = [
+  { label: '确认', value: 'confirmed' },
+  { label: '修正', value: 'corrected' },
+  { label: '排除', value: 'excluded' },
+];
+const METRIC_CODES = [
+  ['systolic_blood_pressure', '收缩压'], ['diastolic_blood_pressure', '舒张压'],
+  ['fasting_glucose', '空腹血糖'], ['hba1c', '糖化血红蛋白'],
+  ['triglycerides', '甘油三酯'], ['hdl_c', '高密度脂蛋白胆固醇'],
+  ['ldl_c', '低密度脂蛋白胆固醇'], ['total_cholesterol', '总胆固醇'],
+  ['alt', '丙氨酸氨基转移酶'], ['ast', '天门冬氨酸氨基转移酶'],
+  ['ggt', 'γ-谷氨酰转移酶'], ['uric_acid', '尿酸'], ['egfr', '估算肾小球滤过率'],
+  ['creatinine', '肌酐'], ['uacr', '尿白蛋白肌酐比'], ['hemoglobin', '血红蛋白'],
+  ['mcv', '平均红细胞体积'], ['ferritin', '铁蛋白'], ['tsat', '转铁蛋白饱和度'],
+  ['25_oh_vitamin_d', '25-羟维生素 D'], ['bone_density_t_score', '骨密度 T 值'],
+  ['calcium', '钙'], ['alp', '碱性磷酸酶'], ['grip_strength', '握力'],
+  ['walking_speed', '步速'], ['muscle_mass', '肌肉量'], ['albumin', '白蛋白'],
+  ['bmi', '体重指数'], ['prealbumin', '前白蛋白'],
+].map(([value, label]) => ({ value, label: `${label} · ${value}` }));
 
 // 异常标记：H=偏高(红) L=偏低(橙) N=正常(绿)
 export function abnormalTag(flag) {
@@ -29,44 +49,134 @@ export function abnormalTag(flag) {
   return <Tag>{String(flag)}</Tag>;
 }
 
-const METRIC_COLUMNS = [
-  { title: '指标', dataIndex: 'metric_name', width: 150 },
-  { title: '数值', dataIndex: 'metric_value', width: 100 },
-  { title: '单位', dataIndex: 'unit', width: 90 },
-  { title: '参考范围', dataIndex: 'reference_range', width: 120 },
-  { title: '趋势', dataIndex: 'trend', width: 70 },
-  { title: '异常', dataIndex: 'abnormal_flag', width: 100, render: (v) => abnormalTag(v) },
-  { title: '页码', dataIndex: 'page_number', width: 70 },
-  { title: '证据原文', dataIndex: 'evidence_text', ellipsis: true },
-  { title: '来源', dataIndex: 'source_id', width: 120 },
-];
+function evidenceStatus(status) {
+  if (status === 'pending_confirmation') return <Tag color="gold">待确认</Tag>;
+  if (status === 'confirmed') return <Tag color="blue">已确认，待生成提示</Tag>;
+  if (status === 'assessed') return <Tag color="green">已生成健康提示</Tag>;
+  return <Tag>{status || '未知状态'}</Tag>;
+}
+
+function EvidenceResult({ result }) {
+  if (!result) return null;
+  const findings = Array.isArray(result.findings) ? result.findings : [];
+  const unmatched = Array.isArray(result.unmatched) ? result.unmatched : [];
+  const skipped = Array.isArray(result.skipped) ? result.skipped : [];
+  return (
+    <Card title="正式知识卡匹配结果" style={{ marginTop: 16 }}>
+      {result.message && <Alert type="info" showIcon title={result.message} style={{ marginBottom: 16 }} />}
+      {findings.length > 0 && (
+        <List
+          dataSource={findings}
+          renderItem={(finding) => {
+            const card = finding.card || {};
+            const sources = Array.isArray(card.sources) ? card.sources : [];
+            return (
+              <List.Item>
+                <div style={{ width: '100%' }}>
+                  <Space wrap>
+                    <Typography.Text strong>{finding.condition_name || finding.condition_code}</Typography.Text>
+                    <Tag color="green">知识卡 v{card.version || '—'}</Tag>
+                    <Tag>证据等级：{card.grade || finding.evidence_strength || '—'}</Tag>
+                    <Tag>{finding.department || '建议就诊科室未记录'}</Tag>
+                  </Space>
+                  {card.patient_visible_body && (
+                    <Typography.Paragraph style={{ margin: '8px 0' }}>
+                      {card.patient_visible_body}
+                    </Typography.Paragraph>
+                  )}
+                  <Typography.Text type="secondary">
+                    原始证据指标：{(finding.source_observation_ids || []).join('、') || '—'}
+                    {finding.needs_recheck ? '；建议复查' : ''}
+                  </Typography.Text>
+                  {sources.length > 0 && (
+                    <List
+                      size="small"
+                      header="论文与 Claim 来源"
+                      dataSource={sources}
+                      renderItem={(source) => (
+                        <List.Item>
+                          <Typography.Text>
+                            {source.paper_title || source.paper_id || '未命名论文'}
+                            {source.doi ? `（${source.doi}）` : ''}
+                            {' · '}{source.claim_id || '未命名 Claim'}
+                            {source.locator ? ` · ${source.locator}` : ''}
+                          </Typography.Text>
+                        </List.Item>
+                      )}
+                    />
+                  )}
+                </div>
+              </List.Item>
+            );
+          }}
+        />
+      )}
+      {unmatched.length > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          title={`有 ${unmatched.length} 个异常指标暂未匹配到已发布知识卡`}
+          description="这些指标不会被模型补写结论，后续需先完成对应主题的知识卡审核发布。"
+          style={{ marginTop: 12 }}
+        />
+      )}
+      {skipped.length > 0 && (
+        <Typography.Paragraph type="secondary" style={{ margin: '12px 0 0' }}>
+          {skipped.length} 个指标未进入匹配（正常、缺参考范围或证据不足）。
+        </Typography.Paragraph>
+      )}
+    </Card>
+  );
+}
+
+function initialDrafts(metrics) {
+  return Object.fromEntries((metrics || []).map((metric) => [
+    metric.id,
+    {
+      decision: metric.metric_code ? 'confirmed' : 'excluded',
+      metric_code: metric.metric_code || '',
+      value: metric.metric_value || '',
+      unit: metric.unit || '',
+      reference_range: metric.reference_range || '',
+    },
+  ]));
+}
 
 export default function UploadPage() {
   const [form] = Form.useForm();
   const [fileList, setFileList] = useState([]);
   const [uploading, setUploading] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [result, setResult] = useState(null);
+  const [drafts, setDrafts] = useState({});
+  const [subjectConsistency, setSubjectConsistency] = useState('');
   const [error, setError] = useState('');
+
+  const updateDraft = (id, field, value) => {
+    setDrafts((current) => ({ ...current, [id]: { ...current[id], [field]: value } }));
+  };
 
   const handleUpload = async () => {
     const values = await form.validateFields().catch(() => null);
     if (!values) return;
-    const file = fileList[0]?.originFileObj || fileList[0];
-    if (!file) {
+    if (fileList.length === 0) {
       message.warning('请先选择要上传的报告文件');
       return;
     }
     setUploading(true);
     setError('');
+    setResult(null);
     try {
       const formData = new FormData();
       formData.append('patient_id', values.patient_id.trim());
-      formData.append('file', file);
+      fileList.forEach((item) => formData.append('files', item.originFileObj || item));
       if (values.report_type) formData.append('report_type', values.report_type);
       if (values.department && values.department.trim()) formData.append('department', values.department.trim());
       const data = await uploadReport(formData);
       setResult(data);
-      message.success('报告解析成功');
+      setDrafts(initialDrafts(data.metrics));
+      setSubjectConsistency(data.subject_consistency === 'same' ? 'same' : '');
+      message.success(`已解析 ${fileList.length} 个文件，请批量确认指标`);
     } catch (err) {
       setError(err.message);
       message.error(err.message);
@@ -75,9 +185,138 @@ export default function UploadPage() {
     }
   };
 
+  const handleConfirm = async () => {
+    if (!result) return;
+    if (result.subject_consistency !== 'same' && subjectConsistency !== 'same') {
+      message.warning('请先确认所有文件属于同一主体');
+      return;
+    }
+    setConfirming(true);
+    setError('');
+    const observations = (result.metrics || []).map((metric) => {
+      const draft = drafts[metric.id] || {};
+      const decision = metric.metric_code ? (draft.decision || 'confirmed') : 'excluded';
+      const item = {
+        metric_id: metric.id,
+        decision,
+        metric_code: draft.metric_code || metric.metric_code || undefined,
+      };
+      if (decision === 'corrected') {
+        item.value = draft.value;
+        item.unit = draft.unit;
+        item.reference_range = draft.reference_range || undefined;
+      }
+      return item;
+    });
+    try {
+      const data = await confirmReport(result.id, { observations, subject_consistency: subjectConsistency || 'same' });
+      setResult(data);
+      message.success(data.status === 'assessed' ? '已生成健康风险提示' : '指标已确认，可重试生成健康提示');
+    } catch (err) {
+      const saved = await getReport(result.id).catch(() => null);
+      if (saved) setResult(saved);
+      setError(err.message);
+      message.warning(saved?.status === 'confirmed' ? '确认已保存，但证据服务暂不可用，请重试' : err.message);
+    } finally {
+      setConfirming(false);
+    }
+  };
+
+  const handleAssess = async () => {
+    if (!result) return;
+    setConfirming(true);
+    setError('');
+    try {
+      const data = await assessReport(result.id);
+      setResult(data);
+      message.success('已重新生成健康风险提示');
+    } catch (err) {
+      setError(err.message);
+      message.error(err.message);
+    } finally {
+      setConfirming(false);
+    }
+  };
+
+  const metricColumns = useMemo(() => [
+    { title: '文件', dataIndex: 'source_file_index', width: 60, render: (v) => `#${v}` },
+    { title: '指标', dataIndex: 'metric_name', width: 140 },
+    { title: '模型值', dataIndex: 'metric_value', width: 90 },
+    { title: '单位', dataIndex: 'unit', width: 80 },
+    { title: '参考范围', dataIndex: 'reference_range', width: 110 },
+    { title: '异常', dataIndex: 'abnormal_flag', width: 80, render: (v) => abnormalTag(v) },
+    { title: '证据原文', dataIndex: 'evidence_text', width: 220, ellipsis: true },
+    {
+      title: '标准指标', key: 'metric_code', width: 210,
+      render: (_, record) => (
+        <Select
+          aria-label={`${record.metric_name}标准指标编码`}
+          value={drafts[record.id]?.metric_code || undefined}
+          options={METRIC_CODES}
+          showSearch
+          optionFilterProp="label"
+          allowClear
+          disabled={result.status !== 'pending_confirmation'}
+          onChange={(value) => updateDraft(record.id, 'metric_code', value || '')}
+          placeholder="选择标准指标"
+          style={{ width: 195 }}
+        />
+      ),
+    },
+    {
+      title: '处理', key: 'decision', width: 100, fixed: 'right',
+      render: (_, record) => (
+        <Select
+          aria-label={`${record.metric_name}处理方式`}
+          value={drafts[record.id]?.decision || (record.metric_code ? 'confirmed' : 'excluded')}
+          options={DECISIONS}
+          disabled={result.status !== 'pending_confirmation'}
+          onChange={(value) => updateDraft(record.id, 'decision', value)}
+          style={{ width: 88 }}
+        />
+      ),
+    },
+    {
+      title: '修正值', key: 'corrected_value', width: 105,
+      render: (_, record) => (
+        <Input
+          aria-label={`${record.metric_name}修正值`}
+          disabled={result.status !== 'pending_confirmation' || drafts[record.id]?.decision !== 'corrected'}
+          value={drafts[record.id]?.value || ''}
+          onChange={(event) => updateDraft(record.id, 'value', event.target.value)}
+          placeholder="数值"
+        />
+      ),
+    },
+    {
+      title: '修正单位', key: 'corrected_unit', width: 95,
+      render: (_, record) => (
+        <Input
+          aria-label={`${record.metric_name}修正单位`}
+          disabled={result.status !== 'pending_confirmation' || drafts[record.id]?.decision !== 'corrected'}
+          value={drafts[record.id]?.unit || ''}
+          onChange={(event) => updateDraft(record.id, 'unit', event.target.value)}
+          placeholder="单位"
+        />
+      ),
+    },
+    {
+      title: '修正范围', key: 'corrected_reference', width: 120,
+      render: (_, record) => (
+        <Input
+          aria-label={`${record.metric_name}修正参考范围`}
+          disabled={result.status !== 'pending_confirmation' || drafts[record.id]?.decision !== 'corrected'}
+          value={drafts[record.id]?.reference_range || ''}
+          onChange={(event) => updateDraft(record.id, 'reference_range', event.target.value)}
+          placeholder="如 3.9-6.1"
+        />
+      ),
+    },
+  ], [drafts, result?.status]);
+
   return (
     <div className="page-stack">
-      <Card title="上传体检报告" extra={<Typography.Text type="secondary">支持 PDF / JPG / PNG / GIF / BMP</Typography.Text>}>
+      <Card title="体检报告解读与健康风险提示" extra={<Typography.Text type="secondary">支持多文件，按选择顺序保留来源</Typography.Text>}>
         <Form form={form} layout="inline" style={{ rowGap: 16 }}>
           <Form.Item name="patient_id" label="患者编号" rules={[{ required: true, message: '请输入患者编号' }]}>
             <Input placeholder="例如 P001" style={{ width: 200 }} />
@@ -93,15 +332,15 @@ export default function UploadPage() {
         <Upload.Dragger
           style={{ marginTop: 16 }}
           accept=".pdf,.jpg,.jpeg,.png,.gif,.bmp"
-          maxCount={1}
+          multiple
+          maxCount={20}
           fileList={fileList}
           beforeUpload={() => false}
-          onChange={({ fileList: fl }) => setFileList(fl.slice(-1))}
-          onRemove={() => setFileList([])}
+          onChange={({ fileList: next }) => setFileList(next)}
         >
           <p className="ant-upload-drag-icon"><InboxOutlined /></p>
-          <p className="ant-upload-text">点击或拖拽文件到此区域上传</p>
-          <p className="ant-upload-hint">仅支持 PDF 或常见图片格式，单文件不超过 20MB</p>
+          <p className="ant-upload-text">点击或拖拽多张报告文件到此区域</p>
+          <p className="ant-upload-hint">文件顺序会保留；每个文件不超过 20MB</p>
         </Upload.Dragger>
 
         <Button
@@ -118,22 +357,58 @@ export default function UploadPage() {
       {error && <Alert type="error" showIcon title={error} />}
 
       {result && (
-        <Card title={`解析结果 · 报告 #${result.id}`}>
+        <Card title={<Space>解析结果 · 报告 #{result.id} {evidenceStatus(result.status)}</Space>}>
           <Descriptions column={4} size="small" bordered style={{ marginBottom: 16 }}>
             <Descriptions.Item label="患者编号">{result.patient_id}</Descriptions.Item>
             <Descriptions.Item label="报告类型">{result.report_type}</Descriptions.Item>
             <Descriptions.Item label="科室">{result.department || '—'}</Descriptions.Item>
-            <Descriptions.Item label="检查日期">{result.exam_date ? new Date(result.exam_date).toLocaleString() : '—'}</Descriptions.Item>
+            <Descriptions.Item label="文件主体一致性">
+              {result.status === 'pending_confirmation' && result.subject_consistency !== 'same' ? (
+                <Select
+                  aria-label="确认文件属于同一主体"
+                  value={subjectConsistency || undefined}
+                  placeholder="请选择"
+                  options={[
+                    { label: '同一主体，继续', value: 'same' },
+                    { label: '不同主体，停止', value: 'different' },
+                    { label: '无法确认，停止', value: 'uncertain' },
+                  ]}
+                  onChange={setSubjectConsistency}
+                  style={{ width: 150 }}
+                />
+              ) : (result.subject_consistency || '—')}
+            </Descriptions.Item>
           </Descriptions>
+          {result.status === 'pending_confirmation' && (
+            <Alert
+              type="info"
+              showIcon
+              title="系统已按文件顺序完成解析。默认确认已识别的标准指标，无法映射到正式指标目录的行会自动排除。"
+              style={{ marginBottom: 16 }}
+            />
+          )}
           <Table
-            rowKey={(r) => `${r.source_id || r.metric_name || r.page_number || ''}`}
-            columns={METRIC_COLUMNS}
+            rowKey="id"
+            columns={metricColumns}
             dataSource={result.metrics || []}
-            pagination={false}
+            pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 项` }}
             size="small"
-            scroll={{ x: 900 }}
-            locale={{ emptyText: <Space direction="vertical"><Typography.Text type="secondary">未解析出指标（需要接入 VLM 解析服务）</Typography.Text></Space> }}
+            scroll={{ x: 1500 }}
+            locale={{ emptyText: '未解析出指标' }}
           />
+          <Space style={{ marginTop: 16 }}>
+            {result.status === 'pending_confirmation' && (
+              <Button type="primary" icon={<CheckCircleOutlined />} loading={confirming} onClick={handleConfirm}>
+                确认并生成健康提示
+              </Button>
+            )}
+            {result.status === 'confirmed' && (
+              <Button type="primary" loading={confirming} onClick={handleAssess}>
+                重试生成健康提示
+              </Button>
+            )}
+          </Space>
+          <EvidenceResult result={result.evidence_result} />
         </Card>
       )}
     </div>
