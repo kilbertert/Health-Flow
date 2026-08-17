@@ -41,19 +41,6 @@ class _Vision:
         )
 
 
-class _Embeddings:
-    def embed(self, _: str):
-        return [0.1] * 4
-
-
-class _Milvus:
-    def insert(self, **_):
-        return None
-
-    def flush(self):
-        return None
-
-
 class _DB:
     def __init__(self, engine):
         self.SessionLocal = sessionmaker(bind=engine)
@@ -98,8 +85,6 @@ def test_multi_file_confirmation_matches_published_card():
     with patch("app.data.get_db", override_get_db), \
         patch("app.data.mysql_client.get_mysql_client") as mysql, \
         patch("app.api.report.get_vision_encoder_service", return_value=vision), \
-        patch("app.api.report.get_embedding_client", return_value=_Embeddings()), \
-        patch("app.api.report.get_milvus_client", return_value=_Milvus()), \
         patch(
             "app.api.report.match_published_evidence",
             return_value={

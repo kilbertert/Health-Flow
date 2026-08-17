@@ -15,7 +15,6 @@ from app.api.deps import db_dependency
 from app.config import get_settings
 from app.data.milvus_client import get_milvus_client
 from app.data.models import MedicalReport as ReportModel, MetricRecord as MetricModel
-from app.model.embedding import get_embedding_client
 from app.schema.report import (
     MedicalReportResponse,
     MetricRecord,
@@ -164,25 +163,6 @@ async def upload_report(
         )
     db.commit()
     db.refresh(report)
-
-    # Indexing is best-effort because Milvus is an optional service.  The SQL
-    # report remains the source of truth when the vector service is offline.
-    if raw_text.strip():
-        try:
-            def _index_report() -> None:
-                vector = get_embedding_client().embed(raw_text)
-                client = get_milvus_client()
-                client.insert(
-                    report_ids=[report.id],
-                    texts=[raw_text],
-                    embeddings=[vector],
-                    departments=[department] if department else None,
-                )
-                client.flush()
-
-            await asyncio.to_thread(_index_report)
-        except Exception:
-            pass
 
     db.refresh(report)
     metrics = db.query(MetricModel).filter(MetricModel.report_id == report.id).all()
