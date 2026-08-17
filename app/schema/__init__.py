@@ -5,6 +5,8 @@ from app.schema.report import (
     MedicalReportCreate,
     MedicalReport,
     MedicalReportResponse,
+    MetricConfirmation,
+    ReportConfirmationRequest,
 )
 from app.schema.chat import (
     ChatMessage,
@@ -32,6 +34,8 @@ __all__ = [
     "MedicalReportCreate",
     "MedicalReport",
     "MedicalReportResponse",
+    "MetricConfirmation",
+    "ReportConfirmationRequest",
     "ChatMessage",
     "ChatRequest",
     "ChatResponse",

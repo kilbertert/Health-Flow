@@ -85,6 +85,12 @@ export function uploadReport(formData) {
   return request('/health/report/upload', { method: 'POST', body: formData });
 }
 
+// POST /api/health/report/{id}/confirm —— 保存用户确认/修正并尝试生成健康提示
+export const confirmReport = (id, body) => request(`/health/report/${id}/confirm`, jsonOptions('POST', body));
+
+// POST /api/health/report/{id}/assess —— 证据服务失败后的可重试评估
+export const assessReport = (id) => request(`/health/report/${id}/assess`, { method: 'POST' });
+
 // GET /api/health/report/{id} —— 报告详情（含指标）
 export const getReport = (id) => request(`/health/report/${id}`);
 
