@@ -77,10 +77,16 @@ class VisionEncoderService:
                     pages.append("\n".join(item for item in [text, *rows] if item))
 
             raw_text = "\n\n".join(page for page in pages if page)
+            metrics = [
+                metric
+                for page_number, page_text in enumerate(pages, start=1)
+                if page_text.strip()
+                for metric in self._extract_metrics_from_text(page_text, page_number)
+            ]
             return ParsedReport(
                 report_type="text_pdf",
                 raw_text=raw_text,
-                metrics=self._extract_metrics_from_text(raw_text),
+                metrics=metrics,
                 page_count=page_count,
                 success=True,
             )
@@ -270,7 +276,7 @@ JSON 格式：
             ".bmp": "image/bmp",
         }.get(next((ext for ext in (".jpg", ".jpeg", ".png", ".gif", ".bmp") if filename.endswith(ext)), ".png"), "image/png")
 
-    def _extract_metrics_from_text(self, text: str) -> List[MetricRecord]:
+    def _extract_metrics_from_text(self, text: str, page_number: int = 1) -> List[MetricRecord]:
         if not text.strip():
             return []
         prompt = (
@@ -290,7 +296,7 @@ JSON 格式：
             values = result.get("metrics", []) if isinstance(result, dict) else []
             records: list[MetricRecord] = []
             for index, item in enumerate(values, start=1):
-                metric = self._metric_from_payload(item, 1, None, None, index)
+                metric = self._metric_from_payload(item, page_number, None, None, index)
                 if metric:
                     records.append(metric)
             return records
