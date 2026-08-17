@@ -4,17 +4,27 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from sqlalchemy.orm import Session
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    UploadFile,
+)
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.deps import db_dependency
 from app.config import get_settings
 from app.data.milvus_client import get_milvus_client
-from app.data.models import MedicalReport as ReportModel, MetricRecord as MetricModel
+from app.data.models import MedicalReport as ReportModel
+from app.data.models import MetricRecord as MetricModel
 from app.schema.report import (
     MedicalReportResponse,
     MetricRecord,
@@ -23,14 +33,14 @@ from app.schema.report import (
 from app.service.evidence_bridge import (
     EvidenceBridgeError,
     build_observations,
-    metric_code_for_name,
     match_published_evidence,
+    metric_code_for_name,
 )
 from app.service.vision_encoder import get_vision_encoder_service
 
-
 router = APIRouter()
 ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".gif", ".bmp"}
+logger = logging.getLogger(__name__)
 
 
 def _metric_response(metric: MetricModel) -> MetricRecord:
@@ -65,8 +75,9 @@ def _metric_response(metric: MetricModel) -> MetricRecord:
     )
 
 
-@router.post("/report/upload", response_model=MedicalReportResponse)
+@router.post("/report/upload", response_model=MedicalReportResponse, status_code=202)
 async def upload_report(
+    background_tasks: BackgroundTasks,
     patient_id: str = Form(..., min_length=1, description="患者 ID（必填，非空）"),
     report_type: Optional[str] = Form(None),
     department: Optional[str] = Form(None),
@@ -86,7 +97,9 @@ async def upload_report(
         raise HTTPException(status_code=413, detail="报告文件数量超过限制")
 
     max_bytes = get_settings().MAX_UPLOAD_BYTES
-    parsed_reports = []
+    max_total_bytes = get_settings().MAX_UPLOAD_TOTAL_BYTES
+    total_bytes = 0
+    accepted_files = []
     for file_index, upload_file in enumerate(upload_files, start=1):
         filename = upload_file.filename or f"report-{file_index}"
         suffix = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
@@ -99,41 +112,24 @@ async def upload_report(
             if not chunk:
                 break
             file_total += len(chunk)
+            total_bytes += len(chunk)
             if file_total > max_bytes:
                 raise HTTPException(status_code=413, detail="单个报告文件超过大小限制")
+            if total_bytes > max_total_bytes:
+                raise HTTPException(status_code=413, detail="报告文件总大小超过限制")
             chunks.append(chunk)
         content = b"".join(chunks)
         if not content:
             raise HTTPException(status_code=400, detail=f"第 {file_index} 个报告文件内容为空")
-        parsed = await asyncio.to_thread(get_vision_encoder_service().parse, content, filename)
-        if not parsed.success:
-            raise HTTPException(status_code=422, detail=f"报告解析失败：{parsed.error}")
-        parsed_reports.append((file_index, filename, parsed))
-
-    parsed_metrics = [
-        item.model_copy(
-            update={
-                "source_file_index": file_index,
-                "metric_code": metric_code_for_name(item.metric_name),
-            }
-        )
-        for file_index, _, parsed in parsed_reports
-        for item in parsed.metrics
-    ]
-    raw_text = "\n".join(parsed.raw_text for _, _, parsed in parsed_reports if parsed.raw_text)
+        accepted_files.append((file_index, filename, content))
 
     report = ReportModel(
         patient_id=patient_id,
         report_type=report_type or "体检",
         department=department,
-        parsed_content={
-            "report_type": parsed_reports[0][2].report_type,
-            "raw_text": raw_text,
-            "page_count": sum(parsed.page_count for _, _, parsed in parsed_reports),
-            "metric_count": len(parsed_metrics),
-        },
-        status="pending_confirmation",
-        subject_consistency="same" if len(parsed_reports) == 1 else "uncertain",
+        parsed_content={"file_count": len(accepted_files)},
+        status="processing",
+        subject_consistency="same" if len(accepted_files) == 1 else "uncertain",
         exam_date=datetime.now(),
     )
     db.add(report)
@@ -141,32 +137,82 @@ async def upload_report(
     if report.id is None:
         raise HTTPException(status_code=500, detail="报告写入数据库失败")
 
-    for item in parsed_metrics:
-        db.add(
-            MetricModel(
-                report_id=report.id,
-                source_file_index=item.source_file_index,
-                metric_name=item.metric_name,
-                metric_value=item.metric_value,
-                unit=item.unit,
-                reference_range=item.reference_range,
-                trend=item.trend,
-                abnormal_flag=item.abnormal_flag,
-                bbox=item.bbox,
-                bbox_normalized=item.bbox_normalized,
-                page_number=item.page_number,
-                evidence_text=item.evidence_text,
-                source_id=item.source_id,
-                metric_code=item.metric_code,
-                confirmation_status="pending",
-            )
-        )
     db.commit()
     db.refresh(report)
+    factory = sessionmaker(bind=db.get_bind())
+    # ponytail: in-process jobs fit this single-instance demo; use a durable
+    # queue before horizontal scaling or restart-safe processing is required.
+    background_tasks.add_task(_parse_report, report.id, accepted_files, factory)
+    return _report_response(report, [])
 
-    db.refresh(report)
-    metrics = db.query(MetricModel).filter(MetricModel.report_id == report.id).all()
-    return _report_response(report, metrics)
+
+def _parse_report(report_id: int, accepted_files: list[tuple[int, str, bytes]], factory) -> None:
+    try:
+        parsed_reports = []
+        for file_index, filename, content in accepted_files:
+            parsed = get_vision_encoder_service().parse(content, filename)
+            if not parsed.success:
+                raise ValueError(parsed.error or "未提取到可确认的指标")
+            parsed_reports.append((file_index, parsed))
+        parsed_metrics = [
+            item.model_copy(
+                update={
+                    "source_file_index": file_index,
+                    "metric_code": metric_code_for_name(item.metric_name),
+                }
+            )
+            for file_index, parsed in parsed_reports
+            for item in parsed.metrics
+        ]
+        if not parsed_metrics:
+            raise ValueError("未提取到可确认的指标")
+
+        with factory() as db:
+            report = db.get(ReportModel, report_id)
+            if report is None:
+                return
+            report.parsed_content = {
+                "report_type": parsed_reports[0][1].report_type,
+                "raw_text": "\n".join(
+                    parsed.raw_text for _, parsed in parsed_reports if parsed.raw_text
+                ),
+                "page_count": sum(parsed.page_count for _, parsed in parsed_reports),
+                "metric_count": len(parsed_metrics),
+            }
+            report.status = "pending_confirmation"
+            for item in parsed_metrics:
+                db.add(
+                    MetricModel(
+                        report_id=report.id,
+                        source_file_index=item.source_file_index,
+                        metric_name=item.metric_name,
+                        metric_value=item.metric_value,
+                        unit=item.unit,
+                        reference_range=item.reference_range,
+                        trend=item.trend,
+                        abnormal_flag=item.abnormal_flag,
+                        bbox=item.bbox,
+                        bbox_normalized=item.bbox_normalized,
+                        page_number=item.page_number,
+                        evidence_text=item.evidence_text,
+                        source_id=item.source_id,
+                        metric_code=item.metric_code,
+                        confirmation_status="pending",
+                    )
+                )
+            db.commit()
+    except Exception:
+        logger.exception("report parsing failed", extra={"report_id": report_id})
+        with factory() as db:
+            report = db.get(ReportModel, report_id)
+            if report is None:
+                return
+            report.status = "failed"
+            report.parsed_content = {
+                **(report.parsed_content or {}),
+                "error": "报告智能解读失败，请重新上传或稍后重试。",
+            }
+            db.commit()
 
 
 def _report_response(report: ReportModel, metrics: list[MetricModel]) -> MedicalReportResponse:
@@ -181,6 +227,7 @@ def _report_response(report: ReportModel, metrics: list[MetricModel]) -> Medical
         status=report.status or "pending_confirmation",
         subject_consistency=report.subject_consistency,
         evidence_result=report.evidence_result,
+        processing_error=(report.parsed_content or {}).get("error"),
     )
 
 

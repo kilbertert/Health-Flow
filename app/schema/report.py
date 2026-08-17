@@ -55,6 +55,7 @@ class MedicalReportResponse(BaseModel):
     status: str = "pending_confirmation"
     subject_consistency: Optional[str] = None
     evidence_result: Optional[dict] = None
+    processing_error: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
