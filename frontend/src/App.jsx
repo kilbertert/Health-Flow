@@ -73,7 +73,7 @@ export default function App() {
           <Typography.Title level={4} style={{ margin: 0 }}>
             {current?.label}
           </Typography.Title>
-          <Tag color="blue" style={{ marginRight: 0 }}>后端服务：localhost:8080</Tag>
+          <Tag color="blue" style={{ marginRight: 0 }}>后端服务：已连接</Tag>
         </Header>
         <Content style={{ padding: 24 }}>{renderPage()}</Content>
       </Layout>

@@ -5,9 +5,11 @@ from __future__ import annotations
 import base64
 import io
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 
+from app.config import get_settings
 from app.model.llm import get_llm_client, get_vlm_client
 from app.schema.report import MetricRecord
 
@@ -77,12 +79,18 @@ class VisionEncoderService:
                     pages.append("\n".join(item for item in [text, *rows] if item))
 
             raw_text = "\n\n".join(page for page in pages if page)
-            metrics = [
-                metric
+            indexed_pages = [
+                (page_number, page_text)
                 for page_number, page_text in enumerate(pages, start=1)
                 if page_text.strip()
-                for metric in self._extract_metrics_from_text(page_text, page_number)
             ]
+            workers = max(1, min(get_settings().REPORT_PARSE_WORKERS, len(indexed_pages)))
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                page_metrics = executor.map(
+                    lambda page: self._extract_metrics_from_text(page[1], page[0]),
+                    indexed_pages,
+                )
+                metrics = [metric for group in page_metrics for metric in group]
             return ParsedReport(
                 report_type="text_pdf",
                 raw_text=raw_text,
@@ -157,7 +165,7 @@ JSON 格式：
             }
         ]
         try:
-            response = self.vlm_client.chat_with_image(messages)
+            response = self.vlm_client.chat_with_image(messages, temperature=0)
             payload = self._parse_json_response(response)
             metrics = [
                 self._metric_from_payload(item, page_number, width, height, index)
@@ -292,6 +300,7 @@ JSON 格式：
                     {"role": "user", "content": prompt},
                 ],
                 json_schema={"type": "object"},
+                temperature=0,
             )
             values = result.get("metrics", []) if isinstance(result, dict) else []
             records: list[MetricRecord] = []

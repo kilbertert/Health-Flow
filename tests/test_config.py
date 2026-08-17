@@ -14,7 +14,10 @@ def test_settings_defaults():
     assert settings.NEO4J_URI == "bolt://localhost:7687"
     assert settings.VLLM_HOST == "localhost"
     assert settings.VLLM_PORT == 8000
+    assert settings.llm_api_base == "http://localhost:8000/v1"
+    assert settings.llm_api_key == "EMPTY"
     assert settings.API_PORT == 8080
+    assert settings.REPORT_PARSE_WORKERS == 4
 
 
 def test_settings_from_env(monkeypatch):
@@ -44,3 +47,12 @@ def test_mysql_url_property():
     )
     expected = "mysql+pymysql://admin:secret@db.example.com:3306/testdb"
     assert settings.mysql_url == expected
+
+
+def test_openai_responses_config_is_reused_for_chat_completions():
+    settings = Settings(
+        OPENAI_API_KEY="test-key",
+        OPENAI_RESPONSES_URL="https://provider.example/v1/responses",
+    )
+    assert settings.llm_api_base == "https://provider.example/v1"
+    assert settings.llm_api_key == "test-key"

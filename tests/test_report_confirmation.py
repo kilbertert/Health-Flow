@@ -11,6 +11,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.data.models import Base
 from app.schema.report import MetricRecord
+from app.service.evidence_bridge import metric_code_for_name
 from app.service.vision_encoder import ParsedReport
 
 
@@ -65,6 +66,19 @@ class _DB:
             session.commit()
         finally:
             session.close()
+
+
+def test_metric_names_with_report_abbreviations_are_canonicalized():
+    expected = {
+        "身体质量指数（BMI）": "bmi",
+        "谷丙转氨酶（ALT）": "alt",
+        "谷草转氨酶（AST）": "ast",
+        "估算肾小球滤过率（eGFR）": "egfr",
+        "空腹血糖（FPG）": "fasting_glucose",
+        "高密度脂蛋白胆固醇（HDL-C）": "hdl_c",
+        "血钙（Ca）": "calcium",
+    }
+    assert {name: metric_code_for_name(name) for name in expected} == expected
 
 
 def test_multi_file_confirmation_matches_published_card():
