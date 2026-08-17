@@ -1,7 +1,9 @@
 """Tests for LLM client."""
 
-import pytest
-from app.model.llm import LLMClient, vLLMClient, VLMClient, get_llm_client
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+from app.model.llm import LLMClient, VLMClient, get_llm_client, vLLMClient
 
 
 def test_llm_client_init():
@@ -45,3 +47,58 @@ def test_vlm_client_inheritance():
     client = VLMClient()
     assert isinstance(client, vLLMClient)
     assert client.model == "qwen-vl-plus"
+
+
+def test_responses_api_maps_json_and_image_inputs():
+    settings = SimpleNamespace(
+        VLLM_MODEL="gpt-5.6-sol",
+        llm_api_base="https://proxy.example/v1",
+        llm_api_key="test-key",
+        OPENAI_RESPONSES_URL="https://proxy.example/v1/responses",
+        REPORT_PARSE_TIMEOUT_SECONDS=180,
+    )
+    response = MagicMock()
+    response.json.return_value = {
+        "status": "completed",
+        "output": [
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": '{"metrics": []}'}],
+            }
+        ],
+    }
+
+    with patch("app.model.llm.get_settings", return_value=settings), patch(
+        "app.model.llm.httpx.post", return_value=response
+    ) as post:
+        client = VLMClient()
+        assert client.chat_with_json(
+            [{"role": "user", "content": "extract"}], {"type": "object"}
+        ) == {
+            "metrics": []
+        }
+        client.chat_with_image(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "extract"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,AA=="},
+                        },
+                    ],
+                }
+            ]
+        )
+
+    text_request, image_request = [call.kwargs["json"] for call in post.call_args_list]
+    assert post.call_args_list[0].args[0] == "https://proxy.example/v1/responses"
+    assert post.call_args_list[0].kwargs["timeout"] == 180
+    assert text_request["text"]["format"] == {"type": "json_object"}
+    assert image_request["input"][0]["content"][1] == {
+        "type": "input_image",
+        "image_url": "data:image/png;base64,AA==",
+        "detail": "original",
+    }
+    assert image_request["store"] is False
