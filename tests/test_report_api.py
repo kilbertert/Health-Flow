@@ -25,30 +25,11 @@ class MockVisionService:
         )
 
 
-class MockEmbeddingClient:
-    """Mock Embedding client."""
-
-    def embed(self, text):
-        return [0.1] * 1024
-
-
-class MockMilvusClient:
-    """Mock Milvus client."""
-
-    def insert(self, report_ids, texts, embeddings, departments=None):
-        return report_ids
-
-    def flush(self):
-        pass
-
-
 @pytest.fixture
 def client():
     """Create test client with mocked dependencies."""
     with patch('app.data.mysql_client.get_mysql_client') as mock_mysql, \
-         patch('app.service.vision_encoder.get_vision_encoder_service', return_value=MockVisionService()), \
-         patch('app.model.embedding.get_embedding_client', return_value=MockEmbeddingClient()), \
-         patch('app.data.milvus_client.get_milvus_client', return_value=MockMilvusClient()):
+         patch('app.service.vision_encoder.get_vision_encoder_service', return_value=MockVisionService()):
 
         # Mock MySQL
         mock_client = MagicMock()
@@ -73,8 +54,7 @@ def test_upload_report_endpoint(client):
             yield session
 
     with patch('app.api.report.get_vision_encoder_service', return_value=MockVisionService()), \
-         patch('app.api.report.get_embedding_client', return_value=MockEmbeddingClient()), \
-         patch('app.api.report.get_milvus_client', return_value=MockMilvusClient()), \
+         patch('app.api.report.get_milvus_client') as milvus, \
          patch('app.data.get_db', override_get_db):
 
         fake_pdf = b'%PDF-1.4 fake pdf content'
@@ -92,6 +72,7 @@ def test_upload_report_endpoint(client):
         assert data["department"] == "内分泌科"
         assert data["report_type"] == "体检"
         assert isinstance(data["metrics"], list)
+        milvus.assert_not_called()
 
 
 def test_get_report_endpoint_not_found(client):
