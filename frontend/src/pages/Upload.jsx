@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Button,
@@ -8,15 +8,18 @@ import {
   Input,
   List,
   message,
+  Modal,
   Select,
   Space,
+  Switch,
   Table,
   Tag,
+  Tooltip,
   Typography,
   Upload,
 } from 'antd';
-import { CheckCircleOutlined, InboxOutlined, ReloadOutlined } from '@ant-design/icons';
-import { assessReport, confirmReport, getReport, uploadReport } from '../api.js';
+import { CheckCircleOutlined, EyeOutlined, InboxOutlined, ReloadOutlined } from '@ant-design/icons';
+import { assessReport, confirmReport, getMetricCatalog, getReport, uploadReport } from '../api.js';
 
 const REPORT_TYPES = ['体检', '门诊', '住院', '其他'];
 const DECISIONS = [
@@ -24,21 +27,6 @@ const DECISIONS = [
   { label: '修正', value: 'corrected' },
   { label: '排除', value: 'excluded' },
 ];
-const METRIC_CODES = [
-  ['systolic_blood_pressure', '收缩压'], ['diastolic_blood_pressure', '舒张压'],
-  ['fasting_glucose', '空腹血糖'], ['hba1c', '糖化血红蛋白'],
-  ['triglycerides', '甘油三酯'], ['hdl_c', '高密度脂蛋白胆固醇'],
-  ['ldl_c', '低密度脂蛋白胆固醇'], ['total_cholesterol', '总胆固醇'],
-  ['alt', '丙氨酸氨基转移酶'], ['ast', '天门冬氨酸氨基转移酶'],
-  ['ggt', 'γ-谷氨酰转移酶'], ['uric_acid', '尿酸'], ['egfr', '估算肾小球滤过率'],
-  ['creatinine', '肌酐'], ['uacr', '尿白蛋白肌酐比'], ['hemoglobin', '血红蛋白'],
-  ['mcv', '平均红细胞体积'], ['ferritin', '铁蛋白'], ['tsat', '转铁蛋白饱和度'],
-  ['25_oh_vitamin_d', '25-羟维生素 D'], ['bone_density_t_score', '骨密度 T 值'],
-  ['calcium', '钙'], ['alp', '碱性磷酸酶'], ['grip_strength', '握力'],
-  ['walking_speed', '步速'], ['muscle_mass', '肌肉量'], ['albumin', '白蛋白'],
-  ['bmi', '体重指数'], ['prealbumin', '前白蛋白'],
-].map(([value, label]) => ({ value, label: `${label} · ${value}` }));
-
 // 异常标记：H=偏高(红) L=偏低(橙) N=正常(绿)
 export function abnormalTag(flag) {
   if (!flag) return <Tag>—</Tag>;
@@ -47,6 +35,43 @@ export function abnormalTag(flag) {
   if (f === 'L' || f === 'LOW' || f === '低') return <Tag color="orange">L 偏低</Tag>;
   if (f === 'N' || f === 'NORMAL' || f === '正常') return <Tag color="green">N 正常</Tag>;
   return <Tag>{String(flag)}</Tag>;
+}
+
+function isAbnormal(flag) {
+  return ['H', 'HIGH', '高', 'L', 'LOW', '低'].includes(String(flag || '').toUpperCase());
+}
+
+function SourceEvidence({ reportId, metric, file }) {
+  if (!metric) return null;
+  const page = metric.page_number || 1;
+  const box = metric.bbox_normalized;
+  const sourceUrl = `/api/health/report/${reportId}/files/${metric.source_file_index}/pages/${page}`;
+  const highlight = Array.isArray(box) && box.length === 4 ? {
+    left: `${box[0] / 10}%`,
+    top: `${box[1] / 10}%`,
+    width: `${Math.max(0, box[2] - box[0]) / 10}%`,
+    height: `${Math.max(0, box[3] - box[1]) / 10}%`,
+  } : null;
+  return (
+    <div>
+      <Typography.Paragraph>
+        <Typography.Text strong>{file?.original_filename || `文件 #${metric.source_file_index}`}</Typography.Text>
+        {` · 第 ${page} 页`}
+      </Typography.Paragraph>
+      <div style={{ position: 'relative', width: '100%', maxWidth: 900, margin: '0 auto' }}>
+        <img src={sourceUrl} alt={`报告原文第 ${page} 页`} style={{ width: '100%', display: 'block' }} />
+        {highlight && (
+          <div
+            aria-label="指标原文位置"
+            style={{ position: 'absolute', border: '3px solid #cf1322', background: 'rgba(255, 77, 79, 0.16)', pointerEvents: 'none', ...highlight }}
+          />
+        )}
+      </div>
+      <Typography.Paragraph copyable style={{ marginTop: 12 }}>
+        {metric.evidence_text || '未提取到原文片段'}
+      </Typography.Paragraph>
+    </div>
+  );
 }
 
 function evidenceStatus(status) {
@@ -191,6 +216,22 @@ export default function UploadPage() {
   const [drafts, setDrafts] = useState({});
   const [subjectConsistency, setSubjectConsistency] = useState('');
   const [error, setError] = useState('');
+  const [showAllMetrics, setShowAllMetrics] = useState(false);
+  const [sourceMetric, setSourceMetric] = useState(null);
+  const [metricCatalog, setMetricCatalog] = useState([]);
+  const [metricCatalogError, setMetricCatalogError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    getMetricCatalog()
+      .then((catalog) => {
+        if (active) setMetricCatalog(catalog.map(({ code, label }) => ({ value: code, label: `${label} · ${code}` })));
+      })
+      .catch((err) => {
+        if (active) setMetricCatalogError(err.message);
+      });
+    return () => { active = false; };
+  }, []);
 
   const updateDraft = (id, field, value) => {
     setDrafts((current) => ({ ...current, [id]: { ...current[id], [field]: value } }));
@@ -298,12 +339,20 @@ export default function UploadPage() {
     { title: '异常', dataIndex: 'abnormal_flag', width: 80, render: (v) => abnormalTag(v) },
     { title: '证据原文', dataIndex: 'evidence_text', width: 220, ellipsis: true },
     {
+      title: '原文', key: 'source', width: 62,
+      render: (_, record) => record.page_number ? (
+        <Tooltip title="查看原文定位">
+          <Button type="text" icon={<EyeOutlined />} aria-label={`查看${record.metric_name}原文`} onClick={() => setSourceMetric(record)} />
+        </Tooltip>
+      ) : '—',
+    },
+    {
       title: '标准指标', key: 'metric_code', width: 210,
       render: (_, record) => (
         <Select
           aria-label={`${record.metric_name}标准指标编码`}
           value={drafts[record.id]?.metric_code || undefined}
-          options={METRIC_CODES}
+          options={metricCatalog}
           showSearch
           optionFilterProp="label"
           allowClear
@@ -363,11 +412,28 @@ export default function UploadPage() {
         />
       ),
     },
-  ], [drafts, result?.status]);
+  ], [drafts, metricCatalog, result?.status]);
+
+  const visibleMetrics = useMemo(() => {
+    const metrics = result?.metrics || [];
+    return showAllMetrics
+      ? metrics
+      : metrics.filter((metric) => isAbnormal(metric.abnormal_flag) || !metric.metric_code);
+  }, [result?.metrics, showAllMetrics]);
+  const abnormalCount = (result?.metrics || []).filter((metric) => isAbnormal(metric.abnormal_flag)).length;
 
   return (
     <div className="page-stack">
       <Card title="体检报告解读与健康风险提示" extra={<Typography.Text type="secondary">支持多文件，按选择顺序保留来源</Typography.Text>}>
+        {metricCatalogError && (
+          <Alert
+            type="warning"
+            showIcon
+            title="标准指标目录暂不可用"
+            description="请稍后重试；未加载正式目录前不会使用过期的本地指标列表。"
+            style={{ marginBottom: 16 }}
+          />
+        )}
         <Form form={form} layout="inline" style={{ rowGap: 16 }}>
           <Form.Item name="patient_id" label="患者编号" rules={[{ required: true, message: '请输入患者编号' }]}>
             <Input placeholder="例如 P001" style={{ width: 200 }} />
@@ -434,7 +500,7 @@ export default function UploadPage() {
             <Alert
               type="info"
               showIcon
-              title="系统已按文件顺序完成解析。默认确认已识别的标准指标，无法映射到正式指标目录的行会自动排除。"
+              title={`识别到 ${result.metrics?.length || 0} 项指标，其中 ${abnormalCount} 项异常；当前优先显示异常项和未映射项。`}
               style={{ marginBottom: 16 }}
             />
           )}
@@ -444,13 +510,15 @@ export default function UploadPage() {
           <Table
             rowKey="id"
             columns={metricColumns}
-            dataSource={result.metrics || []}
+            dataSource={visibleMetrics}
             pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 项` }}
             size="small"
             scroll={{ x: 1500 }}
             locale={{ emptyText: result.status === 'processing' ? '正在解析' : '未解析出指标' }}
           />
-          <Space style={{ marginTop: 16 }}>
+          <Space style={{ marginTop: 16 }} wrap>
+            <Switch checked={showAllMetrics} onChange={setShowAllMetrics} />
+            <Typography.Text type="secondary">显示全部指标</Typography.Text>
             {result.status === 'pending_confirmation' && (
               <Button type="primary" icon={<CheckCircleOutlined />} loading={confirming} onClick={handleConfirm}>
                 确认并生成健康提示
@@ -465,6 +533,20 @@ export default function UploadPage() {
           <EvidenceResult result={result.evidence_result} />
         </Card>
       )}
+      <Modal
+        title="报告原文定位"
+        open={Boolean(sourceMetric)}
+        footer={null}
+        width={960}
+        onCancel={() => setSourceMetric(null)}
+        destroyOnHidden
+      >
+        <SourceEvidence
+          reportId={result?.id}
+          metric={sourceMetric}
+          file={(result?.files || []).find((item) => item.file_index === sourceMetric?.source_file_index)}
+        />
+      </Modal>
     </div>
   );
 }

@@ -91,6 +91,9 @@ export const confirmReport = (id, body) => request(`/health/report/${id}/confirm
 // POST /api/health/report/{id}/assess —— 证据服务失败后的可重试评估
 export const assessReport = (id) => request(`/health/report/${id}/assess`, { method: 'POST' });
 
+// GET /api/health/metric-catalog —— Evidence Service canonical metric catalog
+export const getMetricCatalog = () => request('/health/metric-catalog');
+
 // GET /api/health/report/{id} —— 报告详情（含指标）
 export const getReport = (id) => request(`/health/report/${id}`);
 

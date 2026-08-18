@@ -49,7 +49,7 @@ def client():
         yield TestClient(app)
 
 
-def test_upload_report_endpoint(client):
+def test_upload_report_endpoint(client, tmp_path):
     """Test report upload endpoint against a real in-memory SQLite database."""
     engine = create_engine(
         "sqlite://",
@@ -63,16 +63,23 @@ def test_upload_report_endpoint(client):
         with SessionLocal() as session:
             yield session
 
+    settings = SimpleNamespace(
+        MAX_UPLOAD_FILES=20,
+        MAX_UPLOAD_BYTES=20 * 1024 * 1024,
+        MAX_UPLOAD_TOTAL_BYTES=50 * 1024 * 1024,
+        REPORT_FILES_DIR=str(tmp_path),
+    )
     with patch('app.api.report.get_vision_encoder_service', return_value=MockVisionService()), \
          patch('app.api.report.get_milvus_client') as milvus, \
+         patch('app.api.report.get_settings', return_value=settings), \
          patch('app.data.get_db', override_get_db):
 
-        fake_pdf = b'%PDF-1.4 fake pdf content'
+        fake_image = b'fake png content'
 
         response = client.post(
             "/api/health/report/upload",
             data={"patient_id": "P001", "department": "内分泌科"},
-            files={"file": ("test.pdf", io.BytesIO(fake_pdf), "application/pdf")}
+            files={"file": ("test.png", io.BytesIO(fake_image), "text/html")}
         )
 
         assert response.status_code == 202, response.text
@@ -86,7 +93,33 @@ def test_upload_report_endpoint(client):
         parsed = client.get(f"/api/health/report/{data['id']}").json()
         assert parsed["status"] == "pending_confirmation"
         assert len(parsed["metrics"]) == 1
+
+        assert parsed["files"] == [
+            {
+                "file_index": 1,
+                "original_filename": "test.png",
+                "media_type": "image/png",
+                "page_count": 1,
+                "source_url": f"/api/health/report/{data['id']}/files/1/pages/1",
+            }
+        ]
+        source = client.get(parsed["files"][0]["source_url"])
+        assert source.status_code == 200
+        assert source.content == fake_image
+        stored = tmp_path / str(data["id"]) / "1.png"
+        assert stored.is_file()
         milvus.assert_not_called()
+        assert client.delete(f"/api/health/report/{data['id']}").status_code == 200
+        assert not stored.exists()
+
+
+def test_metric_catalog_proxy_returns_evidence_service_catalog(client):
+    catalog = [{"code": "fasting_glucose", "label": "空腹血糖"}]
+    with patch("app.api.report.fetch_metric_catalog", return_value=catalog):
+        response = client.get("/api/health/metric-catalog")
+
+    assert response.status_code == 200
+    assert response.json() == catalog
 
 
 def test_get_report_endpoint_not_found(client):
