@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import math
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -206,12 +207,18 @@ def _parse_report(
     factory,
 ) -> None:
     try:
-        parsed_reports = []
-        for file_index, filename, _, content in accepted_files:
-            parsed = get_vision_encoder_service().parse(content, filename)
+        vision = get_vision_encoder_service()
+
+        def parse_file(source):
+            file_index, filename, _, content = source
+            parsed = vision.parse(content, filename)
             if not parsed.success:
                 raise ValueError(parsed.error or "未提取到可确认的指标")
-            parsed_reports.append((file_index, parsed))
+            return file_index, parsed
+
+        workers = max(1, min(get_settings().REPORT_PARSE_WORKERS, len(accepted_files)))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            parsed_reports = list(executor.map(parse_file, accepted_files))
         parsed_metrics = [
             item.model_copy(
                 update={

@@ -12,7 +12,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.data.models import Base
 from app.schema.report import MetricRecord
-from app.service.evidence_bridge import metric_code_for_name
+from app.service.evidence_bridge import infer_abnormal_flag, metric_code_for_name
 from app.service.vision_encoder import ParsedReport
 
 
@@ -69,8 +69,18 @@ def test_metric_names_with_report_abbreviations_are_canonicalized():
         "空腹血糖 FPG": "fasting_glucose",
         "身体质量指数 / BMI": "bmi",
         "收缩压 / Systolic Blood Pressure": "systolic_blood_pressure",
+        "Total Chol": "total_cholesterol",
+        "Triglyceride": "triglycerides",
+        "HDL-C": "hdl_c",
+        "LDL-C": "ldl_c",
     }
     assert {name: metric_code_for_name(name) for name in expected} == expected
+
+
+def test_reference_range_deterministically_normalizes_abnormality():
+    assert infer_abnormal_flag("5.5", "<5.2") == "H"
+    assert infer_abnormal_flag("1.50", ">1.00") == "N"
+    assert infer_abnormal_flag("<20", "<20") is None
 
 
 def test_multi_file_confirmation_matches_published_card(tmp_path):
@@ -91,6 +101,7 @@ def test_multi_file_confirmation_matches_published_card(tmp_path):
         MAX_UPLOAD_FILES=20,
         MAX_UPLOAD_BYTES=20 * 1024 * 1024,
         MAX_UPLOAD_TOTAL_BYTES=50 * 1024 * 1024,
+        REPORT_PARSE_WORKERS=4,
         REPORT_FILES_DIR=str(tmp_path),
     )
     with patch("app.data.get_db", override_get_db), \
@@ -162,4 +173,4 @@ def test_multi_file_confirmation_matches_published_card(tmp_path):
             assert result["evidence_result"]["findings"][0]["card"]["version"] == "1.0.0"
             assert evidence_match.call_args.args[0][0]["metric_code"] == "custom_glucose"
 
-    assert vision.calls == ["first.png", "second.png"]
+    assert sorted(vision.calls) == ["first.png", "second.png"]

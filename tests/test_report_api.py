@@ -67,6 +67,7 @@ def test_upload_report_endpoint(client, tmp_path):
         MAX_UPLOAD_FILES=20,
         MAX_UPLOAD_BYTES=20 * 1024 * 1024,
         MAX_UPLOAD_TOTAL_BYTES=50 * 1024 * 1024,
+        REPORT_PARSE_WORKERS=4,
         REPORT_FILES_DIR=str(tmp_path),
     )
     with patch('app.api.report.get_vision_encoder_service', return_value=MockVisionService()), \
