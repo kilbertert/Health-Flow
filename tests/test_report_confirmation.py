@@ -2,6 +2,7 @@
 
 import io
 from contextlib import contextmanager
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -72,7 +73,7 @@ def test_metric_names_with_report_abbreviations_are_canonicalized():
     assert {name: metric_code_for_name(name) for name in expected} == expected
 
 
-def test_multi_file_confirmation_matches_published_card():
+def test_multi_file_confirmation_matches_published_card(tmp_path):
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -86,9 +87,20 @@ def test_multi_file_confirmation_matches_published_card():
         with fake_db.get_session() as session:
             yield session
 
+    settings = SimpleNamespace(
+        MAX_UPLOAD_FILES=20,
+        MAX_UPLOAD_BYTES=20 * 1024 * 1024,
+        MAX_UPLOAD_TOTAL_BYTES=50 * 1024 * 1024,
+        REPORT_FILES_DIR=str(tmp_path),
+    )
     with patch("app.data.get_db", override_get_db), \
         patch("app.data.mysql_client.get_mysql_client") as mysql, \
+        patch("app.api.report.get_settings", return_value=settings), \
         patch("app.api.report.get_vision_encoder_service", return_value=vision), \
+        patch(
+            "app.api.report.fetch_metric_catalog",
+            return_value=[{"code": "custom_glucose", "label": "自定义血糖"}],
+        ), \
         patch(
             "app.api.report.match_published_evidence",
             return_value={
@@ -104,7 +116,7 @@ def test_multi_file_confirmation_matches_published_card():
                 "skipped": [],
                 "message": "",
             },
-        ):
+        ) as evidence_match:
         mysql_client = mysql.return_value
         mysql_client.create_tables.return_value = None
         mysql_client.close.return_value = None
@@ -124,6 +136,10 @@ def test_multi_file_confirmation_matches_published_card():
             report = client.get(f"/api/health/report/{report_id}").json()
             assert report["status"] == "pending_confirmation"
             assert [item["source_file_index"] for item in report["metrics"]] == [1, 2]
+            assert [item["original_filename"] for item in report["files"]] == [
+                "first.png",
+                "second.png",
+            ]
             metric_ids = [item["id"] for item in report["metrics"]]
 
             confirmed = client.post(
@@ -131,7 +147,11 @@ def test_multi_file_confirmation_matches_published_card():
                 json={
                     "subject_consistency": "same",
                     "observations": [
-                        {"metric_id": metric_ids[0], "decision": "confirmed"},
+                        {
+                            "metric_id": metric_ids[0],
+                            "decision": "confirmed",
+                            "metric_code": "custom_glucose",
+                        },
                         {"metric_id": metric_ids[1], "decision": "excluded"},
                     ]
                 },
@@ -140,5 +160,6 @@ def test_multi_file_confirmation_matches_published_card():
             result = confirmed.json()
             assert result["status"] == "assessed"
             assert result["evidence_result"]["findings"][0]["card"]["version"] == "1.0.0"
+            assert evidence_match.call_args.args[0][0]["metric_code"] == "custom_glucose"
 
     assert vision.calls == ["first.png", "second.png"]

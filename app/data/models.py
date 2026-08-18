@@ -25,6 +25,22 @@ class MedicalReport(Base):
     created_at = Column(DateTime, default=datetime.now)
 
     metrics = relationship("MetricRecord", back_populates="report", cascade="all, delete-orphan")
+    files = relationship("ReportFile", back_populates="report", cascade="all, delete-orphan")
+
+
+class ReportFile(Base):
+    __tablename__ = "report_files"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    report_id = Column(Integer, ForeignKey("medical_reports.id"), nullable=False, index=True)
+    file_index = Column(Integer, nullable=False)
+    original_filename = Column(String(255), nullable=False)
+    media_type = Column(String(128), nullable=False)
+    stored_path = Column(String(1024), nullable=False)
+    page_count = Column(Integer, nullable=False, default=1)
+    created_at = Column(DateTime, default=datetime.now)
+
+    report = relationship("MedicalReport", back_populates="files")
 
 
 class MetricRecord(Base):

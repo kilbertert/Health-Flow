@@ -52,9 +52,6 @@ _NUMBER_RE = re.compile(r"(?<![\d.])-?\d+(?:\.\d+)?(?![\d.])")
 _RANGE_RE = re.compile(r"(?P<low>-?\d+(?:\.\d+)?)\s*(?:-|~|至|到)\s*(?P<high>-?\d+(?:\.\d+)?)")
 _UPPER_RE = re.compile(r"(?:<|<=|≤)\s*(?P<high>-?\d+(?:\.\d+)?)")
 _LOWER_RE = re.compile(r"(?:>|>=|≥)\s*(?P<low>-?\d+(?:\.\d+)?)")
-_VALID_METRIC_CODES = frozenset(METRIC_ALIASES.values())
-
-
 class EvidenceBridgeError(RuntimeError):
     """Raised when the evidence service cannot return a trustworthy result."""
 
@@ -88,7 +85,6 @@ def build_observations(metrics: Iterable[Any]) -> list[dict[str, object]]:
         code = metric.metric_code or metric_code_for_name(metric.metric_name or "")
         if (
             not code
-            or code not in _VALID_METRIC_CODES
             or not unit
             or not metric.evidence_text
             or metric.page_number is None
@@ -147,6 +143,32 @@ async def match_published_evidence(
     if not isinstance(result, dict):
         raise EvidenceBridgeError("证据服务返回格式无效")
     return result
+
+
+async def fetch_metric_catalog(*, settings: Settings | None = None) -> list[dict[str, str]]:
+    settings = settings or get_settings()
+    url = settings.GENESIS_EVIDENCE_METRICS_URL.strip()
+    if not url:
+        url = settings.GENESIS_EVIDENCE_API_URL.rsplit("/api/evidence/matches", 1)[0]
+        url = f"{url}/api/metrics"
+    try:
+        async with httpx.AsyncClient(timeout=settings.GENESIS_EVIDENCE_TIMEOUT_SECONDS) as client:
+            response = await client.get(url)
+    except httpx.HTTPError as exc:
+        raise EvidenceBridgeError("指标目录服务暂不可用") from exc
+    if response.status_code >= 400:
+        raise EvidenceBridgeError(f"指标目录服务返回 HTTP {response.status_code}")
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise EvidenceBridgeError("指标目录服务返回格式无效") from exc
+    if not isinstance(payload, list):
+        raise EvidenceBridgeError("指标目录服务返回格式无效")
+    return [
+        {"code": str(item["code"]), "label": str(item["label"])}
+        for item in payload
+        if isinstance(item, dict) and item.get("code") and item.get("label")
+    ]
 
 
 def parse_reference_range(value: str | None) -> tuple[float | None, float | None]:

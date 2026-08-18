@@ -1,44 +1,28 @@
 import React, { useState } from 'react';
 import { Layout, Menu, Typography, Tag } from 'antd';
 import {
-  DashboardOutlined,
   UploadOutlined,
   FileTextOutlined,
-  LineChartOutlined,
-  MessageOutlined,
-  ApartmentOutlined,
 } from '@ant-design/icons';
-import Dashboard from './pages/Dashboard.jsx';
 import Upload from './pages/Upload.jsx';
 import Reports from './pages/Reports.jsx';
-import Metrics from './pages/Metrics.jsx';
-import Chat from './pages/Chat.jsx';
-import KnowledgeGraph from './pages/KnowledgeGraph.jsx';
 
 const { Sider, Header, Content } = Layout;
 
 const NAV_ITEMS = [
-  { key: 'dashboard', label: '首页 / 概览', icon: <DashboardOutlined /> },
-  { key: 'upload', label: '报告上传', icon: <UploadOutlined /> },
-  { key: 'reports', label: '报告列表', icon: <FileTextOutlined /> },
-  { key: 'metrics', label: '指标分析', icon: <LineChartOutlined /> },
-  { key: 'chat', label: '智能问答', icon: <MessageOutlined /> },
-  { key: 'kg', label: '知识图谱', icon: <ApartmentOutlined /> },
+  { key: 'upload', label: '报告上传与解读', icon: <UploadOutlined /> },
+  { key: 'reports', label: '报告记录', icon: <FileTextOutlined /> },
 ];
 
 export default function App() {
-  const [page, setPage] = useState('dashboard');
+  const [page, setPage] = useState('upload');
   const current = NAV_ITEMS.find((i) => i.key === page);
 
   const renderPage = () => {
     switch (page) {
-      case 'dashboard': return <Dashboard />;
       case 'upload': return <Upload />;
       case 'reports': return <Reports />;
-      case 'metrics': return <Metrics />;
-      case 'chat': return <Chat />;
-      case 'kg': return <KnowledgeGraph />;
-      default: return <Dashboard />;
+      default: return <Upload />;
     }
   };
 

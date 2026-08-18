@@ -7,6 +7,7 @@ import json
 import logging
 import math
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from fastapi import (
@@ -16,8 +17,10 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Response,
     UploadFile,
 )
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.deps import db_dependency
@@ -25,6 +28,7 @@ from app.config import get_settings
 from app.data.milvus_client import get_milvus_client
 from app.data.models import MedicalReport as ReportModel
 from app.data.models import MetricRecord as MetricModel
+from app.data.models import ReportFile as ReportFileModel
 from app.schema.report import (
     MedicalReportResponse,
     MetricRecord,
@@ -33,6 +37,7 @@ from app.schema.report import (
 from app.service.evidence_bridge import (
     EvidenceBridgeError,
     build_observations,
+    fetch_metric_catalog,
     match_published_evidence,
     metric_code_for_name,
 )
@@ -41,6 +46,54 @@ from app.service.vision_encoder import get_vision_encoder_service
 router = APIRouter()
 ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".gif", ".bmp"}
 logger = logging.getLogger(__name__)
+
+
+def _media_type(filename: str) -> str:
+    return {
+        ".pdf": "application/pdf",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".gif": "image/gif",
+        ".bmp": "image/bmp",
+    }.get(Path(filename).suffix.casefold(), "application/octet-stream")
+
+
+def _page_count(filename: str, content: bytes) -> int:
+    if Path(filename).suffix.casefold() != ".pdf":
+        return 1
+    try:
+        import fitz
+
+        with fitz.open(stream=content, filetype="pdf") as document:
+            return max(1, document.page_count)
+    except Exception:
+        return 1
+
+
+def _persist_report_files(
+    report_id: int,
+    files: list[tuple[int, str, str, bytes]],
+    db: Session,
+) -> None:
+    report_dir = Path(get_settings().REPORT_FILES_DIR).expanduser().resolve() / str(report_id)
+    report_dir.mkdir(parents=True, exist_ok=True)
+    for file_index, filename, media_type, content in files:
+        suffix = Path(filename).suffix.casefold()
+        target = report_dir / f"{file_index}{suffix}"
+        temporary = target.with_suffix(f"{target.suffix}.tmp")
+        temporary.write_bytes(content)
+        temporary.replace(target)
+        db.add(
+            ReportFileModel(
+                report_id=report_id,
+                file_index=file_index,
+                original_filename=filename,
+                media_type=media_type,
+                stored_path=str(target),
+                page_count=_page_count(filename, content),
+            )
+        )
 
 
 def _metric_response(metric: MetricModel) -> MetricRecord:
@@ -121,7 +174,7 @@ async def upload_report(
         content = b"".join(chunks)
         if not content:
             raise HTTPException(status_code=400, detail=f"第 {file_index} 个报告文件内容为空")
-        accepted_files.append((file_index, filename, content))
+        accepted_files.append((file_index, filename, _media_type(filename), content))
 
     report = ReportModel(
         patient_id=patient_id,
@@ -136,6 +189,7 @@ async def upload_report(
     db.flush()
     if report.id is None:
         raise HTTPException(status_code=500, detail="报告写入数据库失败")
+    _persist_report_files(report.id, accepted_files, db)
 
     db.commit()
     db.refresh(report)
@@ -146,10 +200,14 @@ async def upload_report(
     return _report_response(report, [])
 
 
-def _parse_report(report_id: int, accepted_files: list[tuple[int, str, bytes]], factory) -> None:
+def _parse_report(
+    report_id: int,
+    accepted_files: list[tuple[int, str, str, bytes]],
+    factory,
+) -> None:
     try:
         parsed_reports = []
-        for file_index, filename, content in accepted_files:
+        for file_index, filename, _, content in accepted_files:
             parsed = get_vision_encoder_service().parse(content, filename)
             if not parsed.success:
                 raise ValueError(parsed.error or "未提取到可确认的指标")
@@ -223,6 +281,18 @@ def _report_response(report: ReportModel, metrics: list[MetricModel]) -> Medical
         exam_date=report.exam_date,
         department=report.department,
         metrics=[_metric_response(metric) for metric in metrics],
+        files=[
+            {
+                "file_index": item.file_index,
+                "original_filename": item.original_filename,
+                "media_type": item.media_type,
+                "page_count": item.page_count,
+                "source_url": (
+                    f"/api/health/report/{report.id}/files/{item.file_index}/pages/1"
+                ),
+            }
+            for item in sorted(report.files, key=lambda value: value.file_index)
+        ],
         created_at=report.created_at,
         status=report.status or "pending_confirmation",
         subject_consistency=report.subject_consistency,
@@ -258,6 +328,11 @@ async def confirm_report(
     supplied = {item.metric_id: item for item in request.observations}
     if len(supplied) != len(request.observations) or not set(supplied) <= set(by_id):
         raise HTTPException(status_code=422, detail="确认列表包含重复或未知指标")
+    try:
+        metric_catalog = await fetch_metric_catalog()
+    except EvidenceBridgeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    canonical_codes = {item["code"] for item in metric_catalog}
     now = datetime.now()
     for metric in metrics:
         item = supplied.get(metric.id)
@@ -268,8 +343,13 @@ async def confirm_report(
             metric.confirmed_reference_range = None
             metric.confirmed_at = now
             continue
-        code = metric_code_for_name(item.metric_code or metric.metric_code or metric.metric_name or "")
-        if code is None:
+        requested_code = (item.metric_code or metric.metric_code or "").strip()
+        code = (
+            requested_code
+            if requested_code in canonical_codes
+            else metric_code_for_name(metric.metric_name or "")
+        )
+        if code not in canonical_codes:
             # Unknown rows stay in the report for transparency but never cross
             # the evidence boundary.  The UI can still show them as excluded.
             metric.confirmation_status = "excluded"
@@ -341,6 +421,48 @@ async def get_report_metrics(report_id: int, db: Session = Depends(db_dependency
     ]
 
 
+@router.get("/metric-catalog", response_model=list[dict[str, str]])
+async def report_metric_catalog():
+    try:
+        return await fetch_metric_catalog()
+    except EvidenceBridgeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/report/{report_id}/files/{file_index}/pages/{page_number}")
+async def get_report_page(
+    report_id: int,
+    file_index: int,
+    page_number: int,
+    db: Session = Depends(db_dependency),
+):
+    source = (
+        db.query(ReportFileModel)
+        .filter(
+            ReportFileModel.report_id == report_id,
+            ReportFileModel.file_index == file_index,
+        )
+        .first()
+    )
+    if source is None or page_number < 1 or page_number > source.page_count:
+        raise HTTPException(status_code=404, detail="报告原文页不存在")
+    path = Path(source.stored_path)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="报告原文文件不存在")
+    if source.media_type != "application/pdf":
+        if page_number != 1:
+            raise HTTPException(status_code=404, detail="报告原文页不存在")
+        return FileResponse(path, media_type=source.media_type)
+    try:
+        import fitz
+
+        with fitz.open(path) as document:
+            image = document.load_page(page_number - 1).get_pixmap(matrix=fitz.Matrix(2, 2))
+            return Response(content=image.tobytes("png"), media_type="image/png")
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="报告原文页无法渲染") from exc
+
+
 @router.get("/reports", response_model=list[MedicalReportResponse])
 async def list_reports(
     patient_id: Optional[str] = None,
@@ -372,8 +494,16 @@ async def delete_report(report_id: int, db: Session = Depends(db_dependency)):
         raise HTTPException(status_code=404, detail="报告不存在")
     # 先删数据库主记录；向量索引是尽力而为，放在 DB 成功之后，
     # 避免 DB 删除失败时向量索引已被清掉造成状态不一致。
+    stored_paths = [Path(item.stored_path) for item in report.files]
     db.delete(report)
     db.commit()
+    for path in stored_paths:
+        path.unlink(missing_ok=True)
+    if stored_paths:
+        try:
+            stored_paths[0].parent.rmdir()
+        except OSError:
+            pass
     try:
         await asyncio.to_thread(get_milvus_client().delete_by_report_id, report_id)
     except Exception:
