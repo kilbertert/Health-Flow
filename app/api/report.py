@@ -33,12 +33,12 @@ from app.config import get_settings
 from app.data.models import MedicalReport as ReportModel
 from app.data.models import MetricRecord as MetricModel
 from app.data.models import ReportFile as ReportFileModel
+from app.schema.evidence import EvidenceMatchResponse, Skipped
 from app.schema.report import (
     MedicalReportResponse,
     MetricRecord,
     ReportConfirmationRequest,
 )
-from app.schema.evidence import EvidenceMatchResponse, Skipped
 from app.service.evidence_bridge import (
     EvidenceBridgeError,
     build_observations_with_skipped,
@@ -65,6 +65,8 @@ def _authorized_report(
     db: Session, report_id: int, access_token: str, *, owner_id: str
 ) -> ReportModel:
     report = db.query(ReportModel).filter(ReportModel.id == report_id).first()
+    if report is not None and not report.access_token_hash:
+        raise HTTPException(status_code=404, detail="报告不存在")
     expected = report.access_token_hash if report is not None else ""
     if (
         not expected
@@ -355,7 +357,9 @@ async def get_report(
     db: Session = Depends(db_dependency),
     x_report_token: str = Header(default=""),
 ):
-    report = _authorized_report(db, report_id, x_report_token, owner_id=_owner_id(request))
+    report = _authorized_report(
+        db, report_id, x_report_token, owner_id=_owner_id(request)
+    )
     metrics = db.query(MetricModel).filter(MetricModel.report_id == report_id).all()
     return _report_response(report, metrics)
 
@@ -368,15 +372,22 @@ async def confirm_report(
     db: Session = Depends(db_dependency),
     x_report_token: str = Header(default=""),
 ):
-    report = _authorized_report(db, report_id, x_report_token, owner_id=_owner_id(request))
+    report = _authorized_report(
+        db, report_id, x_report_token, owner_id=_owner_id(request)
+    )
     if report.status not in {"pending_confirmation", "confirmed"}:
         raise HTTPException(status_code=409, detail="报告当前状态不允许确认")
-    if report.subject_consistency != "same" and confirmation.subject_consistency != "same":
+    if (
+        report.subject_consistency != "same"
+        and confirmation.subject_consistency != "same"
+    ):
         raise HTTPException(status_code=422, detail="请先确认所有文件属于同一主体")
     metrics = db.query(MetricModel).filter(MetricModel.report_id == report_id).all()
     by_id = {metric.id: metric for metric in metrics}
     supplied = {item.metric_id: item for item in confirmation.observations}
-    if len(supplied) != len(confirmation.observations) or not set(supplied) <= set(by_id):
+    if len(supplied) != len(confirmation.observations) or not set(supplied) <= set(
+        by_id
+    ):
         raise HTTPException(status_code=422, detail="确认列表包含重复或未知指标")
     try:
         metric_catalog = await fetch_metric_catalog()
@@ -465,7 +476,9 @@ async def assess_report(
     db: Session = Depends(db_dependency),
     x_report_token: str = Header(default=""),
 ):
-    report = _authorized_report(db, report_id, x_report_token, owner_id=_owner_id(request))
+    report = _authorized_report(
+        db, report_id, x_report_token, owner_id=_owner_id(request)
+    )
     if report.status not in {"confirmed", "assessed"}:
         raise HTTPException(status_code=409, detail="请先确认报告指标")
     try:
@@ -477,7 +490,9 @@ async def assess_report(
 async def _assess_report(report: ReportModel, db: Session) -> MedicalReportResponse:
     metrics = db.query(MetricModel).filter(MetricModel.report_id == report.id).all()
     observations, local_skipped = build_observations_with_skipped(metrics)
-    typed_result = EvidenceMatchResponse.model_validate(await match_published_evidence(observations))
+    typed_result = EvidenceMatchResponse.model_validate(
+        await match_published_evidence(observations)
+    )
     if local_skipped:
         typed_result = typed_result.model_copy(
             update={
@@ -565,7 +580,9 @@ async def delete_report(
     db: Session = Depends(db_dependency),
     x_report_token: str = Header(default=""),
 ):
-    report = _authorized_report(db, report_id, x_report_token, owner_id=_owner_id(request))
+    report = _authorized_report(
+        db, report_id, x_report_token, owner_id=_owner_id(request)
+    )
     # 先删数据库主记录；向量索引是尽力而为，放在 DB 成功之后，
     # 避免 DB 删除失败时向量索引已被清掉造成状态不一致。
     stored_paths = [Path(item.stored_path) for item in report.files]

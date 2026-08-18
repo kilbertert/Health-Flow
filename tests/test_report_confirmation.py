@@ -126,6 +126,29 @@ def test_report_owner_isolation_rejects_a_valid_token_for_another_owner():
     session.close()
 
 
+def test_legacy_report_without_token_cannot_cross_the_owner_boundary():
+    from app.api.report import _authorized_report
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    report = ReportModel(
+        patient_id="P-legacy",
+        report_type="体检",
+        status="legacy_unclaimed",
+    )
+    session.add(report)
+    session.commit()
+    with pytest.raises(HTTPException) as error:
+        _authorized_report(session, report.id, "any-token", owner_id="owner")
+    assert error.value.status_code == 404
+    session.close()
+
+
 def test_reference_range_deterministically_normalizes_abnormality():
     assert infer_abnormal_flag("5.5", "<5.2") == "H"
     assert infer_abnormal_flag("1.50", ">1.00") == "N"
@@ -277,51 +300,51 @@ def test_multi_file_confirmation_matches_published_card(tmp_path):
         ),
         patch(
             "app.api.report.match_published_evidence",
-                return_value=_evidence_result(
-                    findings=[
-                        {
-                            "condition_code": "COND_PREDIABETES",
-                            "condition_name": "糖尿病前期 / 糖代谢异常",
-                            "source_observation_ids": ["health-flow-metric-1"],
+            return_value=_evidence_result(
+                findings=[
+                    {
+                        "condition_code": "COND_PREDIABETES",
+                        "condition_name": "糖尿病前期 / 糖代谢异常",
+                        "source_observation_ids": ["health-flow-metric-1"],
+                        "urgency": "routine",
+                        "abnormality_severity": 1,
+                        "evidence_strength": "moderate",
+                        "needs_recheck": True,
+                        "department": "内分泌科",
+                        "recheck_direction": "复查空腹血糖",
+                        "epidemiology_background": "",
+                        "source_observations": [],
+                        "sorting": {
                             "urgency": "routine",
                             "abnormality_severity": 1,
                             "evidence_strength": "moderate",
                             "needs_recheck": True,
                             "department": "内分泌科",
-                            "recheck_direction": "复查空腹血糖",
                             "epidemiology_background": "",
-                            "source_observations": [],
-                            "sorting": {
-                                "urgency": "routine",
-                                "abnormality_severity": 1,
-                                "evidence_strength": "moderate",
-                                "needs_recheck": True,
-                                "department": "内分泌科",
-                                "epidemiology_background": "",
-                            },
-                            "card": {
-                                "id": "card-1",
-                                "condition_code": "COND_PREDIABETES",
-                                "version": "1.0.0",
-                                "status": "published",
-                                "grade": "moderate",
-                                "published_at": "2026-08-19T00:00:00Z",
-                                "evidence_profile_id": "profile-1",
-                                "patient_visible_body": "正式知识卡内容",
-                                "sources": [
-                                    {
-                                        "claim_id": "claim-1",
-                                        "paper_id": "paper-1",
-                                        "paper_title": "Test paper",
-                                        "doi": "10.1000/test",
-                                        "evidence": "Test evidence",
-                                        "locator": "p. 1",
-                                    }
-                                ],
-                            },
-                        }
-                    ]
-                ),
+                        },
+                        "card": {
+                            "id": "card-1",
+                            "condition_code": "COND_PREDIABETES",
+                            "version": "1.0.0",
+                            "status": "published",
+                            "grade": "moderate",
+                            "published_at": "2026-08-19T00:00:00Z",
+                            "evidence_profile_id": "profile-1",
+                            "patient_visible_body": "正式知识卡内容",
+                            "sources": [
+                                {
+                                    "claim_id": "claim-1",
+                                    "paper_id": "paper-1",
+                                    "paper_title": "Test paper",
+                                    "doi": "10.1000/test",
+                                    "evidence": "Test evidence",
+                                    "locator": "p. 1",
+                                }
+                            ],
+                        },
+                    }
+                ]
+            ),
         ) as evidence_match,
     ):
         mysql_client = mysql.return_value
