@@ -2,6 +2,8 @@
 
 # 🏥 HealthFlow
 
+> **当前阶段范围**：本仓库只运行“体检报告解读与健康风险提示”链路。Chat、知识图谱、指标趋势和训练接口已冻结，不属于当前运行时契约。
+
 **体检报告理解 · 智能分诊 · 证据检索 · 安全问答 —— 多模态医疗辅助系统**
 
 > 坐标感知解析 ｜ 动态分诊路由 ｜ 专科 Agent ｜ 混合 GraphRAG ｜ Self-Correction ｜ 安全护栏
@@ -94,12 +96,9 @@ Vite + React 单页应用（`frontend/`），dev server 自动把 `/api`、`/hea
 
 | 页面 | 能力 |
 |---|---|
-| 🏠 首页/概览 | 后端健康/就绪状态卡片（数据库 · Milvus · Neo4j） |
 | 📤 报告上传 | PDF/图片 multipart 上传，解析结果指标表（含 H/L/N 异常徽章），413/415/422 错误友好提示 |
-| 📋 报告列表 | 按患者查询报告，详情展示坐标/BBox/页码/证据原文，支持删除 |
-| 📈 指标分析 | 异常指标汇总、趋势折线图（异常点标红）、指标搜索 |
-| 💬 智能问答 | SSE 流式渲染，失败自动回退非流式；展示科室/Agent/置信度/证据引用/安全校验/一致性信息 |
-| 🧠 知识图谱 | 症状 → 科室查询与节点可视化 |
+| 📋 报告确认 | 按上传顺序展示文件、页码/BBox/证据原文，确认或修正异常候选指标 |
+| 🧾 正式知识卡 | 只显示 Evidence Service 返回的 `published` 卡片、Claim、论文和 DOI |
 
 ---
 
@@ -131,27 +130,7 @@ tests/                        # pytest 测试（118 passed）
 | POST | `/api/health/report/upload` | 上传 PDF/图片并解析指标 |
 | GET | `/api/health/report/{id}` | 查询报告和坐标指标 |
 | GET | `/api/health/report/{id}/metrics` | 查询报告指标列表 |
-| GET | `/api/health/reports` | 报告列表（按 patient_id/科室过滤） |
 | DELETE | `/api/health/report/{report_id}` | 删除报告 |
-| POST | `/api/health/chat` | 分诊、检索、专科回答和安全校验 |
-| POST | `/api/health/chat/stream` | SSE 流式返回 |
-| POST | `/api/health/routing` | 仅执行分诊路由 |
-| GET | `/api/health/safety/check` | 独立安全检查 |
-| GET | `/api/health/metric/trend` | 指标趋势分析 |
-| GET | `/api/health/metric/search` | 指标搜索 |
-| GET | `/api/health/metric/anomalies` | 异常指标汇总 |
-| POST | `/api/health/kg/query` | 知识图谱实体查询 |
-| GET | `/api/health/kg/symptoms/{disease}` | 疾病相关症状 |
-| GET | `/api/health/kg/drugs/{disease}` | 疾病相关药品 |
-| GET | `/api/health/kg/examinations/{disease}` | 疾病相关检查 |
-| GET | `/api/health/kg/department/{symptom}` | 症状所属科室 |
-| POST | `/api/health/kg/diagnosis` | 症状到疑似疾病推理 |
-| GET | `/api/health/kg/health` | 图谱连接状态 |
-| POST | `/api/health/train/augment` | 触发数据增强任务 |
-| POST | `/api/health/train/finetune` | 触发模型微调任务 |
-| POST | `/api/health/train/dpo` | 触发 DPO 训练任务 |
-| GET | `/api/health/train/{kind}/{task_id}` | 查询训练任务状态 |
-| DELETE | `/api/health/train/task/{task_id}` | 取消训练任务 |
 
 ---
 

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import math
+import secrets
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -17,7 +19,9 @@ from fastapi import (
     Depends,
     File,
     Form,
+    Header,
     HTTPException,
+    Request,
     Response,
     UploadFile,
 )
@@ -26,10 +30,10 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.deps import db_dependency
 from app.config import get_settings
-from app.data.milvus_client import get_milvus_client
 from app.data.models import MedicalReport as ReportModel
 from app.data.models import MetricRecord as MetricModel
 from app.data.models import ReportFile as ReportFileModel
+from app.schema.evidence import EvidenceMatchResponse, Skipped
 from app.schema.report import (
     MedicalReportResponse,
     MetricRecord,
@@ -37,7 +41,7 @@ from app.schema.report import (
 )
 from app.service.evidence_bridge import (
     EvidenceBridgeError,
-    build_observations,
+    build_observations_with_skipped,
     fetch_metric_catalog,
     match_published_evidence,
     metric_code_for_name,
@@ -47,6 +51,30 @@ from app.service.vision_encoder import get_vision_encoder_service
 router = APIRouter()
 ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".gif", ".bmp"}
 logger = logging.getLogger(__name__)
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _owner_id(request: Request) -> str:
+    return str(getattr(request.state, "owner_id", "anonymous"))
+
+
+def _authorized_report(
+    db: Session, report_id: int, access_token: str, *, owner_id: str
+) -> ReportModel:
+    report = db.query(ReportModel).filter(ReportModel.id == report_id).first()
+    if report is not None and not report.access_token_hash:
+        raise HTTPException(status_code=404, detail="报告不存在")
+    expected = report.access_token_hash if report is not None else ""
+    if (
+        not expected
+        or not hmac.compare_digest(expected, _token_hash(access_token))
+        or (report.owner_id and not hmac.compare_digest(report.owner_id, owner_id))
+    ):
+        raise HTTPException(status_code=404, detail="报告不存在")
+    return report
 
 
 def _media_type(filename: str) -> str:
@@ -77,7 +105,9 @@ def _persist_report_files(
     files: list[tuple[int, str, str, bytes]],
     db: Session,
 ) -> None:
-    report_dir = Path(get_settings().REPORT_FILES_DIR).expanduser().resolve() / str(report_id)
+    report_dir = Path(get_settings().REPORT_FILES_DIR).expanduser().resolve() / str(
+        report_id
+    )
     report_dir.mkdir(parents=True, exist_ok=True)
     for file_index, filename, media_type, content in files:
         suffix = Path(filename).suffix.casefold()
@@ -131,6 +161,7 @@ def _metric_response(metric: MetricModel) -> MetricRecord:
 
 @router.post("/report/upload", response_model=MedicalReportResponse, status_code=202)
 async def upload_report(
+    request: Request,
     background_tasks: BackgroundTasks,
     patient_id: str = Form(..., min_length=1, description="患者 ID（必填，非空）"),
     report_type: Optional[str] = Form(None),
@@ -174,9 +205,12 @@ async def upload_report(
             chunks.append(chunk)
         content = b"".join(chunks)
         if not content:
-            raise HTTPException(status_code=400, detail=f"第 {file_index} 个报告文件内容为空")
+            raise HTTPException(
+                status_code=400, detail=f"第 {file_index} 个报告文件内容为空"
+            )
         accepted_files.append((file_index, filename, _media_type(filename), content))
 
+    access_token = secrets.token_urlsafe(32)
     report = ReportModel(
         patient_id=patient_id,
         report_type=report_type or "体检",
@@ -184,6 +218,8 @@ async def upload_report(
         parsed_content={"file_count": len(accepted_files)},
         status="processing",
         subject_consistency="same" if len(accepted_files) == 1 else "uncertain",
+        access_token_hash=_token_hash(access_token),
+        owner_id=_owner_id(request),
         exam_date=datetime.now(),
     )
     db.add(report)
@@ -198,7 +234,7 @@ async def upload_report(
     # ponytail: in-process jobs fit this single-instance demo; use a durable
     # queue before horizontal scaling or restart-safe processing is required.
     background_tasks.add_task(_parse_report, report.id, accepted_files, factory)
-    return _report_response(report, [])
+    return _report_response(report, [], access_token=access_token)
 
 
 def _parse_report(
@@ -280,7 +316,12 @@ def _parse_report(
             db.commit()
 
 
-def _report_response(report: ReportModel, metrics: list[MetricModel]) -> MedicalReportResponse:
+def _report_response(
+    report: ReportModel,
+    metrics: list[MetricModel],
+    *,
+    access_token: str | None = None,
+) -> MedicalReportResponse:
     return MedicalReportResponse(
         id=report.id,
         patient_id=report.patient_id,
@@ -305,14 +346,20 @@ def _report_response(report: ReportModel, metrics: list[MetricModel]) -> Medical
         subject_consistency=report.subject_consistency,
         evidence_result=report.evidence_result,
         processing_error=(report.parsed_content or {}).get("error"),
+        access_token=access_token,
     )
 
 
 @router.get("/report/{report_id}", response_model=MedicalReportResponse)
-async def get_report(report_id: int, db: Session = Depends(db_dependency)):
-    report = db.query(ReportModel).filter(ReportModel.id == report_id).first()
-    if not report:
-        raise HTTPException(status_code=404, detail="报告不存在")
+async def get_report(
+    report_id: int,
+    request: Request,
+    db: Session = Depends(db_dependency),
+    x_report_token: str = Header(default=""),
+):
+    report = _authorized_report(
+        db, report_id, x_report_token, owner_id=_owner_id(request)
+    )
     metrics = db.query(MetricModel).filter(MetricModel.report_id == report_id).all()
     return _report_response(report, metrics)
 
@@ -320,20 +367,27 @@ async def get_report(report_id: int, db: Session = Depends(db_dependency)):
 @router.post("/report/{report_id}/confirm", response_model=MedicalReportResponse)
 async def confirm_report(
     report_id: int,
-    request: ReportConfirmationRequest,
+    request: Request,
+    confirmation: ReportConfirmationRequest,
     db: Session = Depends(db_dependency),
+    x_report_token: str = Header(default=""),
 ):
-    report = db.query(ReportModel).filter(ReportModel.id == report_id).first()
-    if report is None:
-        raise HTTPException(status_code=404, detail="报告不存在")
+    report = _authorized_report(
+        db, report_id, x_report_token, owner_id=_owner_id(request)
+    )
     if report.status not in {"pending_confirmation", "confirmed"}:
         raise HTTPException(status_code=409, detail="报告当前状态不允许确认")
-    if report.subject_consistency != "same" and request.subject_consistency != "same":
+    if (
+        report.subject_consistency != "same"
+        and confirmation.subject_consistency != "same"
+    ):
         raise HTTPException(status_code=422, detail="请先确认所有文件属于同一主体")
     metrics = db.query(MetricModel).filter(MetricModel.report_id == report_id).all()
     by_id = {metric.id: metric for metric in metrics}
-    supplied = {item.metric_id: item for item in request.observations}
-    if len(supplied) != len(request.observations) or not set(supplied) <= set(by_id):
+    supplied = {item.metric_id: item for item in confirmation.observations}
+    if len(supplied) != len(confirmation.observations) or not set(supplied) <= set(
+        by_id
+    ):
         raise HTTPException(status_code=422, detail="确认列表包含重复或未知指标")
     try:
         metric_catalog = await fetch_metric_catalog()
@@ -358,20 +412,30 @@ async def confirm_report(
         )
         if item.decision == "corrected":
             if not item.value or not item.unit:
-                raise HTTPException(status_code=422, detail=f"指标 {metric.id} 的修正值不完整")
+                raise HTTPException(
+                    status_code=422, detail=f"指标 {metric.id} 的修正值不完整"
+                )
             try:
                 corrected_value = float(item.value)
             except (TypeError, ValueError) as exc:
-                raise HTTPException(status_code=422, detail=f"指标 {metric.id} 的修正值必须是单个数字") from exc
+                raise HTTPException(
+                    status_code=422, detail=f"指标 {metric.id} 的修正值必须是单个数字"
+                ) from exc
             if not math.isfinite(corrected_value):
-                raise HTTPException(status_code=422, detail=f"指标 {metric.id} 的修正值无效")
+                raise HTTPException(
+                    status_code=422, detail=f"指标 {metric.id} 的修正值无效"
+                )
         if code not in canonical_codes:
             # Confirmed unknown anomalies stay auditable but never cross the
             # evidence boundary; assessment reports them as unmatched.
             metric.metric_code = None
             metric.confirmation_status = item.decision
-            metric.confirmed_value = item.value if item.decision == "corrected" else metric.metric_value
-            metric.confirmed_unit = item.unit if item.decision == "corrected" else metric.unit
+            metric.confirmed_value = (
+                item.value if item.decision == "corrected" else metric.metric_value
+            )
+            metric.confirmed_unit = (
+                item.unit if item.decision == "corrected" else metric.unit
+            )
             metric.confirmed_reference_range = (
                 item.reference_range
                 if item.decision == "corrected" and item.reference_range is not None
@@ -381,8 +445,12 @@ async def confirm_report(
             continue
         metric.metric_code = code
         metric.confirmation_status = item.decision
-        metric.confirmed_value = item.value if item.decision == "corrected" else metric.metric_value
-        metric.confirmed_unit = item.unit if item.decision == "corrected" else metric.unit
+        metric.confirmed_value = (
+            item.value if item.decision == "corrected" else metric.metric_value
+        )
+        metric.confirmed_unit = (
+            item.unit if item.decision == "corrected" else metric.unit
+        )
         metric.confirmed_reference_range = (
             item.reference_range
             if item.decision == "corrected" and item.reference_range is not None
@@ -390,7 +458,9 @@ async def confirm_report(
         )
         metric.confirmed_at = now
     report.status = "confirmed"
-    report.subject_consistency = request.subject_consistency or report.subject_consistency or "same"
+    report.subject_consistency = (
+        confirmation.subject_consistency or report.subject_consistency or "same"
+    )
     report.evidence_result = None
     db.commit()
     try:
@@ -400,10 +470,15 @@ async def confirm_report(
 
 
 @router.post("/report/{report_id}/assess", response_model=MedicalReportResponse)
-async def assess_report(report_id: int, db: Session = Depends(db_dependency)):
-    report = db.query(ReportModel).filter(ReportModel.id == report_id).first()
-    if report is None:
-        raise HTTPException(status_code=404, detail="报告不存在")
+async def assess_report(
+    report_id: int,
+    request: Request,
+    db: Session = Depends(db_dependency),
+    x_report_token: str = Header(default=""),
+):
+    report = _authorized_report(
+        db, report_id, x_report_token, owner_id=_owner_id(request)
+    )
     if report.status not in {"confirmed", "assessed"}:
         raise HTTPException(status_code=409, detail="请先确认报告指标")
     try:
@@ -414,29 +489,20 @@ async def assess_report(report_id: int, db: Session = Depends(db_dependency)):
 
 async def _assess_report(report: ReportModel, db: Session) -> MedicalReportResponse:
     metrics = db.query(MetricModel).filter(MetricModel.report_id == report.id).all()
-    result = await match_published_evidence(build_observations(metrics))
-    unmatched = list(result.get("unmatched") or [])
-    for metric in metrics:
-        if (
-            metric.confirmation_status in {"confirmed", "corrected"}
-            and metric.abnormal_flag in {"H", "L", "A"}
-            and not metric.metric_code
-        ):
-            unmatched.append(
-                {
-                    "observation_id": f"health-flow-metric-{metric.id}",
-                    "metric_name": metric.metric_name,
-                    "metric_value": metric.confirmed_value or metric.metric_value,
-                    "unit": metric.confirmed_unit or metric.unit,
-                    "reason": "暂无已审核内容",
-                    "source_file_index": metric.source_file_index,
-                    "source_page": metric.page_number,
-                    "evidence_text": metric.evidence_text,
-                }
-            )
-    if unmatched:
-        result["unmatched"] = unmatched
-    report.evidence_result = result
+    observations, local_skipped = build_observations_with_skipped(metrics)
+    typed_result = EvidenceMatchResponse.model_validate(
+        await match_published_evidence(observations)
+    )
+    if local_skipped:
+        typed_result = typed_result.model_copy(
+            update={
+                "skipped": [
+                    *typed_result.skipped,
+                    *(Skipped.model_validate(item) for item in local_skipped),
+                ]
+            }
+        )
+    report.evidence_result = typed_result.model_dump(mode="json")
     report.status = "assessed"
     db.commit()
     db.refresh(report)
@@ -445,12 +511,18 @@ async def _assess_report(report: ReportModel, db: Session) -> MedicalReportRespo
 
 
 @router.get("/report/{report_id}/metrics", response_model=list[MetricRecord])
-async def get_report_metrics(report_id: int, db: Session = Depends(db_dependency)):
-    if not db.query(ReportModel).filter(ReportModel.id == report_id).first():
-        raise HTTPException(status_code=404, detail="报告不存在")
+async def get_report_metrics(
+    report_id: int,
+    request: Request,
+    db: Session = Depends(db_dependency),
+    x_report_token: str = Header(default=""),
+):
+    _authorized_report(db, report_id, x_report_token, owner_id=_owner_id(request))
     return [
         _metric_response(metric)
-        for metric in db.query(MetricModel).filter(MetricModel.report_id == report_id).all()
+        for metric in db.query(MetricModel)
+        .filter(MetricModel.report_id == report_id)
+        .all()
     ]
 
 
@@ -467,8 +539,11 @@ async def get_report_page(
     report_id: int,
     file_index: int,
     page_number: int,
+    request: Request,
     db: Session = Depends(db_dependency),
+    x_report_token: str = Header(default=""),
 ):
+    _authorized_report(db, report_id, x_report_token, owner_id=_owner_id(request))
     source = (
         db.query(ReportFileModel)
         .filter(
@@ -490,41 +565,24 @@ async def get_report_page(
         import fitz
 
         with fitz.open(path) as document:
-            image = document.load_page(page_number - 1).get_pixmap(matrix=fitz.Matrix(2, 2))
+            image = document.load_page(page_number - 1).get_pixmap(
+                matrix=fitz.Matrix(2, 2)
+            )
             return Response(content=image.tobytes("png"), media_type="image/png")
     except Exception as exc:
         raise HTTPException(status_code=422, detail="报告原文页无法渲染") from exc
 
 
-@router.get("/reports", response_model=list[MedicalReportResponse])
-async def list_reports(
-    patient_id: Optional[str] = None,
-    department: Optional[str] = None,
-    limit: int = 20,
-    offset: int = 0,
-    db: Session = Depends(db_dependency),
-):
-    limit = max(1, min(limit, 100))
-    query = db.query(ReportModel)
-    if patient_id:
-        query = query.filter(ReportModel.patient_id == patient_id)
-    if department:
-        query = query.filter(ReportModel.department == department)
-    reports = query.order_by(ReportModel.created_at.desc()).offset(max(0, offset)).limit(limit).all()
-    return [
-        _report_response(
-            report,
-            db.query(MetricModel).filter(MetricModel.report_id == report.id).all(),
-        )
-        for report in reports
-    ]
-
-
 @router.delete("/report/{report_id}")
-async def delete_report(report_id: int, db: Session = Depends(db_dependency)):
-    report = db.query(ReportModel).filter(ReportModel.id == report_id).first()
-    if not report:
-        raise HTTPException(status_code=404, detail="报告不存在")
+async def delete_report(
+    report_id: int,
+    request: Request,
+    db: Session = Depends(db_dependency),
+    x_report_token: str = Header(default=""),
+):
+    report = _authorized_report(
+        db, report_id, x_report_token, owner_id=_owner_id(request)
+    )
     # 先删数据库主记录；向量索引是尽力而为，放在 DB 成功之后，
     # 避免 DB 删除失败时向量索引已被清掉造成状态不一致。
     stored_paths = [Path(item.stored_path) for item in report.files]
@@ -537,8 +595,4 @@ async def delete_report(report_id: int, db: Session = Depends(db_dependency)):
             stored_paths[0].parent.rmdir()
         except OSError:
             pass
-    try:
-        await asyncio.to_thread(get_milvus_client().delete_by_report_id, report_id)
-    except Exception:
-        pass
     return {"message": "报告已删除", "report_id": report_id}

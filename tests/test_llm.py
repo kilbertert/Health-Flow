@@ -102,3 +102,28 @@ def test_responses_api_maps_json_and_image_inputs():
         "detail": "original",
     }
     assert image_request["store"] is False
+
+
+def test_chat_with_image_uses_report_parse_timeout_for_chat_api():
+    settings = SimpleNamespace(
+        VLLM_MODEL="qwen-vl-plus",
+        llm_api_base="https://proxy.example/v1",
+        llm_api_key="test-key",
+        OPENAI_RESPONSES_URL="",
+        REPORT_PARSE_TIMEOUT_SECONDS=180,
+    )
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content='{"metrics": []}'))]
+    )
+    openai_client = MagicMock()
+    openai_client.chat.completions.create.return_value = response
+
+    with patch("app.model.llm.get_settings", return_value=settings), patch(
+        "openai.OpenAI", return_value=openai_client
+    ) as openai_factory:
+        client = VLMClient()
+        client.chat_with_image(
+            [{"role": "user", "content": [{"type": "text", "text": "extract"}]}]
+        )
+
+    assert openai_factory.call_args.kwargs["timeout"] == 180
