@@ -53,8 +53,10 @@ class Settings(BaseSettings):
     MAX_UPLOAD_FILES: int = 20
     REPORT_PARSE_WORKERS: int = 4
     REPORT_PARSE_TIMEOUT_SECONDS: float = 180.0
+    REPORT_FILES_DIR: str = "data/report-files"
 
     GENESIS_EVIDENCE_API_URL: str = "http://127.0.0.1:8125/api/evidence/matches"
+    GENESIS_EVIDENCE_METRICS_URL: str = ""
     GENESIS_EVIDENCE_API_KEY: str = ""
     GENESIS_EVIDENCE_TIMEOUT_SECONDS: float = 30.0
     SERVE_FRONTEND: bool = False

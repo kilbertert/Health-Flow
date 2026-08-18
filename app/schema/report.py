@@ -44,6 +44,15 @@ class MedicalReport(MedicalReportCreate):
 
     model_config = {"from_attributes": True}
 
+
+class ReportFileRecord(BaseModel):
+    file_index: int
+    original_filename: str
+    media_type: str
+    page_count: int
+    source_url: str
+
+
 class MedicalReportResponse(BaseModel):
     id: int
     patient_id: str
@@ -51,6 +60,7 @@ class MedicalReportResponse(BaseModel):
     exam_date: Optional[datetime] = None
     department: Optional[str] = None
     metrics: List[MetricRecord]
+    files: List[ReportFileRecord] = Field(default_factory=list)
     created_at: datetime
     status: str = "pending_confirmation"
     subject_consistency: Optional[str] = None
