@@ -12,6 +12,7 @@ from typing import Any, List, Optional, Tuple
 from app.config import get_settings
 from app.model.llm import get_llm_client, get_vlm_client
 from app.schema.report import MetricRecord
+from app.service.evidence_bridge import infer_abnormal_flag
 
 
 @dataclass
@@ -209,13 +210,18 @@ JSON 格式：
         if bbox is None and normalized and width and height:
             bbox = self.denormalize_bbox(normalized, width, height)
 
+        raw_flag = str(data.get("abnormal_flag") or "").strip()
+        abnormal_flag = infer_abnormal_flag(value, data.get("reference_range"))
+        if abnormal_flag is None:
+            abnormal_flag = "A" if raw_flag == "*" else raw_flag or None
+
         return MetricRecord(
             metric_name=name,
             metric_value=value,
             unit=data.get("unit"),
             reference_range=data.get("reference_range"),
             trend=data.get("trend"),
-            abnormal_flag=data.get("abnormal_flag"),
+            abnormal_flag=abnormal_flag,
             bbox=bbox,
             bbox_normalized=normalized,
             page_number=page_number,
