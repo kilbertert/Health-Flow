@@ -95,6 +95,8 @@ class Finding(StrictModel):
 
 class Unmatched(StrictModel):
     observation_id: str
+    metric_code: str
+    metric_label: str
     condition_codes: list[str]
     reason: Literal["no_published_knowledge_card"]
 

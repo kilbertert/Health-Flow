@@ -30,6 +30,7 @@ import {
 
 const REPORT_TYPES = ['体检', '门诊', '住院', '其他'];
 const DECISIONS = [
+  { label: '待核对', value: 'pending', disabled: true },
   { label: '确认', value: 'confirmed' },
   { label: '修正', value: 'corrected' },
   { label: '排除', value: 'excluded' },
@@ -85,6 +86,12 @@ function needsReview(metric) {
 
 function displayFlag(metric) {
   return deterministicFlag(metric) || (isAbnormal(metric?.abnormal_flag) ? '待核对' : metric?.abnormal_flag);
+}
+
+function initialDecision(metric) {
+  const flag = deterministicFlag(metric);
+  if (flag === 'H' || flag === 'L') return 'confirmed';
+  return flag === null && isAbnormal(metric?.abnormal_flag) ? 'pending' : 'excluded';
 }
 
 function SourceEvidence({ reportId, reportToken, metric, file }) {
@@ -263,7 +270,7 @@ function EvidenceResult({ result }) {
           type="warning"
           showIcon
           title={`有 ${unmatched.length} 个异常指标暂未匹配到已发布知识卡`}
-          description={`暂无已审核内容：${unmatched.map((item) => item.metric_name || item.metric_code).filter(Boolean).join('、')}。这些指标不会被模型补写结论，后续需先完成对应主题的知识卡审核发布。`}
+          description={`暂无已审核内容：${unmatched.map((item) => item.metric_label || item.metric_code).filter(Boolean).join('、')}。这些指标不会被模型补写结论，后续需先完成对应主题的知识卡审核发布。`}
           style={{ marginTop: 12 }}
         />
       )}
@@ -285,7 +292,7 @@ function initialDrafts(metrics) {
   return Object.fromEntries((metrics || []).map((metric) => [
     metric.id,
     {
-      decision: ['H', 'L'].includes(deterministicFlag(metric)) ? 'confirmed' : 'excluded',
+      decision: initialDecision(metric),
       metric_code: metric.metric_code || '',
       value: metric.metric_value || '',
       unit: metric.unit || '',
@@ -374,14 +381,19 @@ export default function UploadPage() {
       message.warning('请先确认所有文件属于同一主体');
       return;
     }
+    const unresolved = (result.metrics || []).filter(
+      (metric) => (drafts[metric.id]?.decision || initialDecision(metric)) === 'pending',
+    );
+    if (unresolved.length > 0) {
+      message.warning(`还有 ${unresolved.length} 个异常候选项需要确认、修正或排除`);
+      return;
+    }
     setConfirming(true);
     setError('');
     const observations = (result.metrics || []).map((metric) => {
       const draft = drafts[metric.id] || {};
       const selectedCode = draft.metric_code || metric.metric_code;
-      const decision = draft.decision || (
-        ['H', 'L'].includes(deterministicFlag(metric)) ? 'confirmed' : 'excluded'
-      );
+      const decision = draft.decision || initialDecision(metric);
       const item = {
         metric_id: metric.id,
         decision,
@@ -462,7 +474,7 @@ export default function UploadPage() {
       render: (_, record) => (
         <Select
           aria-label={`${record.metric_name}处理方式`}
-          value={drafts[record.id]?.decision || (record.metric_code ? 'confirmed' : 'excluded')}
+          value={drafts[record.id]?.decision || initialDecision(record)}
           options={DECISIONS}
           disabled={result.status !== 'pending_confirmation'}
           onChange={(value) => updateDraft(record.id, 'decision', value)}
