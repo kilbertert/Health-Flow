@@ -33,12 +33,13 @@ export function abnormalTag(flag) {
   const f = String(flag).toUpperCase();
   if (f === 'H' || f === 'HIGH' || f === '高') return <Tag color="red">H 偏高</Tag>;
   if (f === 'L' || f === 'LOW' || f === '低') return <Tag color="orange">L 偏低</Tag>;
+  if (f === 'A' || f === '*') return <Tag color="red">异常</Tag>;
   if (f === 'N' || f === 'NORMAL' || f === '正常') return <Tag color="green">N 正常</Tag>;
   return <Tag>{String(flag)}</Tag>;
 }
 
 function isAbnormal(flag) {
-  return ['H', 'HIGH', '高', 'L', 'LOW', '低'].includes(String(flag || '').toUpperCase());
+  return ['H', 'HIGH', '高', 'L', 'LOW', '低', 'A', '*'].includes(String(flag || '').toUpperCase());
 }
 
 function SourceEvidence({ reportId, metric, file }) {
@@ -198,7 +199,7 @@ function initialDrafts(metrics) {
   return Object.fromEntries((metrics || []).map((metric) => [
     metric.id,
     {
-      decision: metric.metric_code ? 'confirmed' : 'excluded',
+      decision: isAbnormal(metric.abnormal_flag) ? 'confirmed' : 'excluded',
       metric_code: metric.metric_code || '',
       value: metric.metric_value || '',
       unit: metric.unit || '',
@@ -287,11 +288,12 @@ export default function UploadPage() {
     setError('');
     const observations = (result.metrics || []).map((metric) => {
       const draft = drafts[metric.id] || {};
-      const decision = metric.metric_code ? (draft.decision || 'confirmed') : 'excluded';
+      const selectedCode = draft.metric_code || metric.metric_code;
+      const decision = selectedCode ? (draft.decision || 'confirmed') : 'excluded';
       const item = {
         metric_id: metric.id,
         decision,
-        metric_code: draft.metric_code || metric.metric_code || undefined,
+        metric_code: selectedCode || undefined,
       };
       if (decision === 'corrected') {
         item.value = draft.value;
@@ -418,7 +420,7 @@ export default function UploadPage() {
     const metrics = result?.metrics || [];
     return showAllMetrics
       ? metrics
-      : metrics.filter((metric) => isAbnormal(metric.abnormal_flag) || !metric.metric_code);
+      : metrics.filter((metric) => isAbnormal(metric.abnormal_flag));
   }, [result?.metrics, showAllMetrics]);
   const abnormalCount = (result?.metrics || []).filter((metric) => isAbnormal(metric.abnormal_flag)).length;
 

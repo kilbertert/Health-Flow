@@ -99,6 +99,28 @@ def test_parsed_report_dataclass():
     assert report.error is None
 
 
+def test_metric_payload_uses_reference_range_over_provider_star(mock_deps):
+    from app.service.vision_encoder import VisionEncoderService
+
+    service = VisionEncoderService()
+    metric = service._metric_from_payload(
+        {
+            "metric_name": "LDL-C",
+            "metric_value": "3.63",
+            "unit": "mmol/L",
+            "reference_range": "<2.60",
+            "abnormal_flag": "*",
+        },
+        page_number=1,
+        width=None,
+        height=None,
+        index=1,
+    )
+
+    assert metric is not None
+    assert metric.abnormal_flag == "H"
+
+
 def test_parse_with_filename_jpg(mock_deps):
     """Test parsing JPEG file."""
     from app.service.vision_encoder import VisionEncoderService

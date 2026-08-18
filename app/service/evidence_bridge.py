@@ -21,6 +21,12 @@ METRIC_ALIASES = {
     "高密度脂蛋白胆固醇": "hdl_c",
     "低密度脂蛋白胆固醇": "ldl_c",
     "总胆固醇": "total_cholesterol",
+    "Total Cholesterol": "total_cholesterol",
+    "Total Chol": "total_cholesterol",
+    "Triglyceride": "triglycerides",
+    "Triglycerides": "triglycerides",
+    "HDL-C": "hdl_c",
+    "LDL-C": "ldl_c",
     "丙氨酸氨基转移酶": "alt",
     "天门冬氨酸氨基转移酶": "ast",
     "γ-谷氨酰转移酶": "ggt",
@@ -184,6 +190,23 @@ def parse_reference_range(value: str | None) -> tuple[float | None, float | None
     if match:
         return float(match["low"]), None
     return None, None
+
+
+def infer_abnormal_flag(value: str | None, reference: str | None) -> str | None:
+    text = (value or "").strip()
+    if not text or any(marker in text for marker in ("<", ">", "≤", "≥")):
+        return None
+    number = _single_number(text)
+    if number is None:
+        return None
+    low, high = parse_reference_range(reference)
+    if low is None and high is None:
+        return None
+    if low is not None and number < low:
+        return "L"
+    if high is not None and number > high:
+        return "H"
+    return "N"
 
 
 def _single_number(value: str | None) -> float | None:
