@@ -44,6 +44,8 @@ class MySQLClient:
                 "status": "VARCHAR(32) NOT NULL DEFAULT 'pending_confirmation'",
                 "subject_consistency": "VARCHAR(16) DEFAULT 'same'",
                 "evidence_result": "JSON",
+                "access_token_hash": "VARCHAR(64)",
+                "owner_id": "VARCHAR(128)",
             },
             "metric_records": {
                 "source_file_index": "INTEGER NOT NULL DEFAULT 1",

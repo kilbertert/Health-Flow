@@ -57,3 +57,24 @@ def test_basic_auth_middleware_challenges_and_accepts(client):
     finally:
         settings.HEALTHFLOW_BASIC_USER = previous_user
         settings.HEALTHFLOW_BASIC_PASSWORD = previous_password
+
+
+def test_ready_requires_a_full_evidence_api_key(client):
+    settings = get_settings()
+    previous_url = settings.GENESIS_EVIDENCE_API_URL
+    previous_key = settings.GENESIS_EVIDENCE_API_KEY
+    settings.GENESIS_EVIDENCE_API_URL = "http://127.0.0.1:8125/api/evidence/matches"
+    try:
+        settings.GENESIS_EVIDENCE_API_KEY = "short"
+        degraded = client.get("/ready")
+        assert degraded.status_code == 200
+        assert degraded.json()["status"] == "degraded"
+        assert degraded.json()["evidence_service"] == "unconfigured"
+
+        settings.GENESIS_EVIDENCE_API_KEY = "a" * 24
+        ready = client.get("/ready")
+        assert ready.status_code == 200
+        assert ready.json()["evidence_service"] == "configured"
+    finally:
+        settings.GENESIS_EVIDENCE_API_URL = previous_url
+        settings.GENESIS_EVIDENCE_API_KEY = previous_key

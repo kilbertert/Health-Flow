@@ -19,6 +19,7 @@ class MockVisionService:
 
     def parse(self, content, filename):
         from app.service.vision_encoder import ParsedReport
+
         return ParsedReport(
             report_type="text_pdf",
             raw_text="空腹血糖: 6.5 mmol/L",
@@ -31,21 +32,26 @@ class MockVisionService:
                 )
             ],
             page_count=1,
-            success=True
+            success=True,
         )
 
 
 @pytest.fixture
 def client():
     """Create test client with mocked dependencies."""
-    with patch('app.data.mysql_client.get_mysql_client') as mock_mysql, \
-         patch('app.service.vision_encoder.get_vision_encoder_service', return_value=MockVisionService()):
-
+    with (
+        patch("app.data.mysql_client.get_mysql_client") as mock_mysql,
+        patch(
+            "app.service.vision_encoder.get_vision_encoder_service",
+            return_value=MockVisionService(),
+        ),
+    ):
         # Mock MySQL
         mock_client = MagicMock()
         mock_mysql.return_value = mock_client
 
         from app.main import app
+
         yield TestClient(app)
 
 
@@ -70,17 +76,20 @@ def test_upload_report_endpoint(client, tmp_path):
         REPORT_PARSE_WORKERS=4,
         REPORT_FILES_DIR=str(tmp_path),
     )
-    with patch('app.api.report.get_vision_encoder_service', return_value=MockVisionService()), \
-         patch('app.api.report.get_milvus_client') as milvus, \
-         patch('app.api.report.get_settings', return_value=settings), \
-         patch('app.data.get_db', override_get_db):
-
-        fake_image = b'fake png content'
+    with (
+        patch(
+            "app.api.report.get_vision_encoder_service",
+            return_value=MockVisionService(),
+        ),
+        patch("app.api.report.get_settings", return_value=settings),
+        patch("app.data.get_db", override_get_db),
+    ):
+        fake_image = b"fake png content"
 
         response = client.post(
             "/api/health/report/upload",
             data={"patient_id": "P001", "department": "内分泌科"},
-            files={"file": ("test.png", io.BytesIO(fake_image), "text/html")}
+            files={"file": ("test.png", io.BytesIO(fake_image), "text/html")},
         )
 
         assert response.status_code == 202, response.text
@@ -91,7 +100,19 @@ def test_upload_report_endpoint(client, tmp_path):
         assert data["report_type"] == "体检"
         assert data["status"] == "processing"
         assert isinstance(data["metrics"], list)
-        parsed = client.get(f"/api/health/report/{data['id']}").json()
+        token = data["access_token"]
+        headers = {"X-Report-Token": token}
+        parsed_response = client.get(
+            f"/api/health/report/{data['id']}", headers=headers
+        )
+        parsed = parsed_response.json()
+        assert (
+            client.get(
+                f"/api/health/report/{data['id']}",
+                headers={"X-Report-Token": "wrong-token"},
+            ).status_code
+            == 404
+        )
         assert parsed["status"] == "pending_confirmation"
         assert len(parsed["metrics"]) == 1
 
@@ -104,13 +125,17 @@ def test_upload_report_endpoint(client, tmp_path):
                 "source_url": f"/api/health/report/{data['id']}/files/1/pages/1",
             }
         ]
-        source = client.get(parsed["files"][0]["source_url"])
+        source = client.get(parsed["files"][0]["source_url"], headers=headers)
         assert source.status_code == 200
         assert source.content == fake_image
         stored = tmp_path / str(data["id"]) / "1.png"
         assert stored.is_file()
-        milvus.assert_not_called()
-        assert client.delete(f"/api/health/report/{data['id']}").status_code == 200
+        assert (
+            client.delete(
+                f"/api/health/report/{data['id']}", headers=headers
+            ).status_code
+            == 200
+        )
         assert not stored.exists()
 
 
@@ -125,7 +150,7 @@ def test_metric_catalog_proxy_returns_evidence_service_catalog(client):
 
 def test_get_report_endpoint_not_found(client):
     """Test getting non-existent report."""
-    with patch('app.data.get_db') as mock_db:
+    with patch("app.data.get_db") as mock_db:
         mock_session = MagicMock()
         mock_db.return_value = mock_session
         mock_session.query.return_value.filter.return_value.first.return_value = None
@@ -154,23 +179,14 @@ def test_upload_report_rejects_total_size_limit(client):
 
 
 def test_list_reports_endpoint(client):
-    """Test listing reports."""
-    with patch('app.data.get_db') as mock_db:
-        mock_session = MagicMock()
-        mock_db.return_value = mock_session
-        mock_session.query.return_value.filter.return_value.order_by.return_value.offset.return_value.limit.return_value.all.return_value = []
-
-        response = client.get("/api/health/reports")
-
-        # Should return list (possibly empty)
-        assert response.status_code == 200
-        data = response.json()
-        assert isinstance(data, list)
+    """The old cross-report listing route is intentionally frozen."""
+    response = client.get("/api/health/reports")
+    assert response.status_code == 404
 
 
 def test_delete_report_not_found(client):
     """Test deleting non-existent report."""
-    with patch('app.data.get_db') as mock_db:
+    with patch("app.data.get_db") as mock_db:
         mock_session = MagicMock()
         mock_db.return_value = mock_session
         mock_session.query.return_value.filter.return_value.first.return_value = None

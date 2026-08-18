@@ -19,7 +19,14 @@ import {
   Upload,
 } from 'antd';
 import { CheckCircleOutlined, EyeOutlined, InboxOutlined, ReloadOutlined } from '@ant-design/icons';
-import { assessReport, confirmReport, getMetricCatalog, getReport, uploadReport } from '../api.js';
+import {
+  assessReport,
+  confirmReport,
+  fetchReportPage,
+  getMetricCatalog,
+  getReport,
+  uploadReport,
+} from '../api.js';
 
 const REPORT_TYPES = ['体检', '门诊', '住院', '其他'];
 const DECISIONS = [
@@ -35,6 +42,7 @@ export function abnormalTag(flag) {
   if (f === 'L' || f === 'LOW' || f === '低') return <Tag color="orange">L 偏低</Tag>;
   if (f === 'A' || f === '*') return <Tag color="red">异常</Tag>;
   if (f === 'N' || f === 'NORMAL' || f === '正常') return <Tag color="green">N 正常</Tag>;
+  if (flag === '待核对') return <Tag color="gold">待核对</Tag>;
   return <Tag>{String(flag)}</Tag>;
 }
 
@@ -42,11 +50,70 @@ function isAbnormal(flag) {
   return ['H', 'HIGH', '高', 'L', 'LOW', '低', 'A', '*'].includes(String(flag || '').toUpperCase());
 }
 
-function SourceEvidence({ reportId, metric, file }) {
+function singleNumber(value) {
+  const matches = String(value || '').match(/-?\d+(?:\.\d+)?/g) || [];
+  return matches.length === 1 ? Number(matches[0]) : null;
+}
+
+function parseReferenceRange(value) {
+  const text = String(value || '').trim();
+  let match = text.match(/(-?\d+(?:\.\d+)?)\s*(?:-|~|至|到)\s*(-?\d+(?:\.\d+)?)/);
+  if (match) return [Number(match[1]), Number(match[2])];
+  match = text.match(/(?:<|<=|≤)\s*(-?\d+(?:\.\d+)?)/);
+  if (match) return [null, Number(match[1])];
+  match = text.match(/(?:>|>=|≥)\s*(-?\d+(?:\.\d+)?)/);
+  if (match) return [Number(match[1]), null];
+  return [null, null];
+}
+
+function deterministicFlag(metric) {
+  const valueText = metric?.confirmed_value || metric?.metric_value;
+  const reference = metric?.confirmed_reference_range || metric?.reference_range;
+  if (!valueText || /[<>≤≥]/.test(String(valueText))) return null;
+  const value = singleNumber(valueText);
+  const [low, high] = parseReferenceRange(reference);
+  if (value === null || (low === null && high === null)) return null;
+  if (low !== null && value < low) return 'L';
+  if (high !== null && value > high) return 'H';
+  return 'N';
+}
+
+function needsReview(metric) {
+  const flag = deterministicFlag(metric);
+  return flag === 'H' || flag === 'L' || (flag === null && isAbnormal(metric?.abnormal_flag));
+}
+
+function displayFlag(metric) {
+  return deterministicFlag(metric) || (isAbnormal(metric?.abnormal_flag) ? '待核对' : metric?.abnormal_flag);
+}
+
+function SourceEvidence({ reportId, reportToken, metric, file }) {
+  const [sourceUrl, setSourceUrl] = useState('');
+  const [sourceError, setSourceError] = useState('');
+  const page = metric?.page_number || 1;
+  const fileIndex = metric?.source_file_index;
+  useEffect(() => {
+    if (!metric || !reportToken) return undefined;
+    let active = true;
+    let objectUrl = '';
+    setSourceUrl('');
+    setSourceError('');
+    fetchReportPage(reportId, fileIndex, page, reportToken)
+      .then((blob) => {
+        if (!active) return;
+        objectUrl = URL.createObjectURL(blob);
+        setSourceUrl(objectUrl);
+      })
+      .catch((err) => {
+        if (active) setSourceError(err.message);
+      });
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [reportId, reportToken, fileIndex, page, metric]);
   if (!metric) return null;
-  const page = metric.page_number || 1;
   const box = metric.bbox_normalized;
-  const sourceUrl = `/api/health/report/${reportId}/files/${metric.source_file_index}/pages/${page}`;
   const highlight = Array.isArray(box) && box.length === 4 ? {
     left: `${box[0] / 10}%`,
     top: `${box[1] / 10}%`,
@@ -59,8 +126,9 @@ function SourceEvidence({ reportId, metric, file }) {
         <Typography.Text strong>{file?.original_filename || `文件 #${metric.source_file_index}`}</Typography.Text>
         {` · 第 ${page} 页`}
       </Typography.Paragraph>
+      {sourceError && <Alert type="error" showIcon title={sourceError} />}
       <div style={{ position: 'relative', width: '100%', maxWidth: 900, margin: '0 auto' }}>
-        <img src={sourceUrl} alt={`报告原文第 ${page} 页`} style={{ width: '100%', display: 'block' }} />
+        {sourceUrl && <img src={sourceUrl} alt={`报告原文第 ${page} 页`} style={{ width: '100%', display: 'block' }} />}
         {highlight && (
           <div
             aria-label="指标原文位置"
@@ -123,6 +191,9 @@ function EvidenceResult({ result }) {
             const detail = findingDetails.get(finding.condition_code) || finding;
             const card = detail.card || {};
             const sources = Array.isArray(card.sources) ? card.sources : [];
+            const sourceObservations = Array.isArray(finding.source_observations)
+              ? finding.source_observations
+              : (Array.isArray(detail.source_observations) ? detail.source_observations : []);
             const cardVersion = finding.card_version || card.version || '—';
             const cardId = finding.card_id || card.id;
             const body = finding.patient_visible_body || card.patient_visible_body;
@@ -149,6 +220,21 @@ function EvidenceResult({ result }) {
                     原始证据指标：{(finding.source_observation_ids || []).join('、') || '—'}
                     {finding.needs_recheck ? `；建议复查${finding.recheck_direction ? `：${finding.recheck_direction}` : ''}` : ''}
                   </Typography.Text>
+                  {sourceObservations.length > 0 && (
+                    <List
+                      size="small"
+                      header="报告原文证据"
+                      dataSource={sourceObservations}
+                      renderItem={(source) => (
+                        <List.Item>
+                          <Typography.Text>
+                            文件 #{source.source_file_index} · 第 {source.source_page} 页 · {source.evidence_text || '未记录原文'}
+                            {source.bbox_normalized ? ` · BBox ${JSON.stringify(source.bbox_normalized)}` : ''}
+                          </Typography.Text>
+                        </List.Item>
+                      )}
+                    />
+                  )}
                   {sources.length > 0 && (
                     <List
                       size="small"
@@ -199,7 +285,7 @@ function initialDrafts(metrics) {
   return Object.fromEntries((metrics || []).map((metric) => [
     metric.id,
     {
-      decision: isAbnormal(metric.abnormal_flag) ? 'confirmed' : 'excluded',
+      decision: ['H', 'L'].includes(deterministicFlag(metric)) ? 'confirmed' : 'excluded',
       metric_code: metric.metric_code || '',
       value: metric.metric_value || '',
       unit: metric.unit || '',
@@ -219,6 +305,7 @@ export default function UploadPage() {
   const [error, setError] = useState('');
   const [showAllMetrics, setShowAllMetrics] = useState(false);
   const [sourceMetric, setSourceMetric] = useState(null);
+  const [reportToken, setReportToken] = useState('');
   const [metricCatalog, setMetricCatalog] = useState([]);
   const [metricCatalogError, setMetricCatalogError] = useState('');
 
@@ -255,16 +342,19 @@ export default function UploadPage() {
       if (values.report_type) formData.append('report_type', values.report_type);
       if (values.department && values.department.trim()) formData.append('department', values.department.trim());
       let data = await uploadReport(formData);
+      if (!data.access_token) throw new Error('报告访问凭证未返回，请重新上传');
+      const accessToken = data.access_token;
+      setReportToken(accessToken);
       setResult(data);
       message.info('文件已上传，正在后台解析');
       for (let attempt = 0; data.status === 'processing' && attempt < 300; attempt += 1) {
         await new Promise((resolve) => window.setTimeout(resolve, 2000));
-        data = await getReport(data.id);
+        data = await getReport(data.id, accessToken);
         setResult(data);
       }
       if (data.status === 'failed') throw new Error(data.processing_error || '报告智能解读失败，请重试');
       if (data.status === 'processing') {
-        message.warning('报告仍在后台解析，可稍后从报告列表查看');
+        message.warning('报告仍在后台解析，请保持当前页面并稍后重试');
         return;
       }
       setDrafts(initialDrafts(data.metrics));
@@ -289,7 +379,9 @@ export default function UploadPage() {
     const observations = (result.metrics || []).map((metric) => {
       const draft = drafts[metric.id] || {};
       const selectedCode = draft.metric_code || metric.metric_code;
-      const decision = draft.decision || (isAbnormal(metric.abnormal_flag) ? 'confirmed' : 'excluded');
+      const decision = draft.decision || (
+        ['H', 'L'].includes(deterministicFlag(metric)) ? 'confirmed' : 'excluded'
+      );
       const item = {
         metric_id: metric.id,
         decision,
@@ -303,11 +395,11 @@ export default function UploadPage() {
       return item;
     });
     try {
-      const data = await confirmReport(result.id, { observations, subject_consistency: subjectConsistency || 'same' });
+      const data = await confirmReport(result.id, reportToken, { observations, subject_consistency: subjectConsistency || 'same' });
       setResult(data);
       message.success(data.status === 'assessed' ? '已生成健康风险提示' : '指标已确认，可重试生成健康提示');
     } catch (err) {
-      const saved = await getReport(result.id).catch(() => null);
+      const saved = await getReport(result.id, reportToken).catch(() => null);
       if (saved) setResult(saved);
       setError(err.message);
       message.warning(saved?.status === 'confirmed' ? '确认已保存，但证据服务暂不可用，请重试' : err.message);
@@ -321,7 +413,7 @@ export default function UploadPage() {
     setConfirming(true);
     setError('');
     try {
-      const data = await assessReport(result.id);
+      const data = await assessReport(result.id, reportToken);
       setResult(data);
       message.success('已重新生成健康风险提示');
     } catch (err) {
@@ -338,7 +430,7 @@ export default function UploadPage() {
     { title: '模型值', dataIndex: 'metric_value', width: 90 },
     { title: '单位', dataIndex: 'unit', width: 80 },
     { title: '参考范围', dataIndex: 'reference_range', width: 110 },
-    { title: '异常', dataIndex: 'abnormal_flag', width: 80, render: (v) => abnormalTag(v) },
+    { title: '异常', key: 'abnormal_flag', width: 90, render: (_, record) => abnormalTag(displayFlag(record)) },
     { title: '证据原文', dataIndex: 'evidence_text', width: 220, ellipsis: true },
     {
       title: '原文', key: 'source', width: 62,
@@ -420,9 +512,9 @@ export default function UploadPage() {
     const metrics = result?.metrics || [];
     return showAllMetrics
       ? metrics
-      : metrics.filter((metric) => isAbnormal(metric.abnormal_flag));
+      : metrics.filter(needsReview);
   }, [result?.metrics, showAllMetrics]);
-  const abnormalCount = (result?.metrics || []).filter((metric) => isAbnormal(metric.abnormal_flag)).length;
+  const abnormalCount = (result?.metrics || []).filter(needsReview).length;
 
   return (
     <div className="page-stack">
@@ -502,7 +594,7 @@ export default function UploadPage() {
             <Alert
               type="info"
               showIcon
-              title={`识别到 ${result.metrics?.length || 0} 项指标，其中 ${abnormalCount} 项异常；当前优先显示异常项和未映射项。`}
+              title={`识别到 ${result.metrics?.length || 0} 项指标，其中 ${abnormalCount} 项需要确认；当前优先显示异常候选项和未映射项。`}
               style={{ marginBottom: 16 }}
             />
           )}
@@ -545,6 +637,7 @@ export default function UploadPage() {
       >
         <SourceEvidence
           reportId={result?.id}
+          reportToken={reportToken}
           metric={sourceMetric}
           file={(result?.files || []).find((item) => item.file_index === sourceMetric?.source_file_index)}
         />

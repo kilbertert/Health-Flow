@@ -1,9 +1,12 @@
 """Schemas for report parsing and coordinate-aware metric extraction."""
 
+import math
 from datetime import datetime
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from app.schema.evidence import EvidenceMatchResponse
 
 
 class MetricRecord(BaseModel):
@@ -22,10 +25,32 @@ class MetricRecord(BaseModel):
     evidence_text: Optional[str] = None
     source_id: Optional[str] = None
     metric_code: Optional[str] = None
-    confirmation_status: Literal["pending", "confirmed", "corrected", "excluded"] = "pending"
+    confirmation_status: Literal["pending", "confirmed", "corrected", "excluded"] = (
+        "pending"
+    )
     confirmed_value: Optional[str] = None
     confirmed_unit: Optional[str] = None
     confirmed_reference_range: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_bboxes(self) -> "MetricRecord":
+        for name, box in (
+            ("bbox", self.bbox),
+            ("bbox_normalized", self.bbox_normalized),
+        ):
+            if box is None:
+                continue
+            upper = 1000 if name == "bbox_normalized" else None
+            if any(
+                not math.isfinite(coordinate)
+                or coordinate < 0
+                or (upper is not None and coordinate > upper)
+                for coordinate in box
+            ):
+                raise ValueError(f"{name} coordinates are invalid")
+            if box[0] > box[2] or box[1] > box[3]:
+                raise ValueError(f"{name} must be ordered as x1,y1,x2,y2")
+        return self
 
 
 class MedicalReportCreate(BaseModel):
@@ -64,8 +89,9 @@ class MedicalReportResponse(BaseModel):
     created_at: datetime
     status: str = "pending_confirmation"
     subject_consistency: Optional[str] = None
-    evidence_result: Optional[dict] = None
+    evidence_result: Optional[EvidenceMatchResponse] = None
     processing_error: Optional[str] = None
+    access_token: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

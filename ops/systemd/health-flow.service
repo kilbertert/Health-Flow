@@ -5,7 +5,6 @@ After=network-online.target genesis-evidence-portal.service
 [Service]
 Type=simple
 WorkingDirectory=/home/claude/Projects/health-flow
-EnvironmentFile=/home/claude/Projects/genesis-evidence/var/portal.env
 EnvironmentFile=/home/claude/Projects/health-flow/var/health-flow.env
 ExecStart=/home/claude/Projects/health-flow/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8127
 Restart=on-failure

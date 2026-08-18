@@ -9,8 +9,10 @@ from collections.abc import Iterable
 from typing import Any
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 from app.config import Settings, get_settings
+from app.schema.evidence import EvidenceMatchResponse, MetricCatalogItem
 
 METRIC_ALIASES = {
     "收缩压": "systolic_blood_pressure",
@@ -55,11 +57,25 @@ METRIC_ALIASES = {
 }
 _PARENTHETICAL_RE = re.compile(r"[（(][^）)]*[）)]")
 _NUMBER_RE = re.compile(r"(?<![\d.])-?\d+(?:\.\d+)?(?![\d.])")
-_RANGE_RE = re.compile(r"(?P<low>-?\d+(?:\.\d+)?)\s*(?:-|~|至|到)\s*(?P<high>-?\d+(?:\.\d+)?)")
+_RANGE_RE = re.compile(
+    r"(?P<low>-?\d+(?:\.\d+)?)\s*(?:-|~|至|到)\s*(?P<high>-?\d+(?:\.\d+)?)"
+)
 _UPPER_RE = re.compile(r"(?:<|<=|≤)\s*(?P<high>-?\d+(?:\.\d+)?)")
 _LOWER_RE = re.compile(r"(?:>|>=|≥)\s*(?P<low>-?\d+(?:\.\d+)?)")
+
+
 class EvidenceBridgeError(RuntimeError):
     """Raised when the evidence service cannot return a trustworthy result."""
+
+
+def _service_headers(settings: Settings, *, correlate: bool = False) -> dict[str, str]:
+    api_key = settings.GENESIS_EVIDENCE_API_KEY.strip()
+    if not api_key:
+        raise EvidenceBridgeError("证据服务认证未配置")
+    headers = {"X-Genesis-Evidence-Key": api_key}
+    if correlate:
+        headers["X-Correlation-Id"] = str(uuid.uuid4())
+    return headers
 
 
 def metric_code_for_name(name: str) -> str | None:
@@ -80,9 +96,18 @@ def metric_code_for_name(name: str) -> str | None:
 
 
 def build_observations(metrics: Iterable[Any]) -> list[dict[str, object]]:
-    """Build only confirmed observations; model flags never determine abnormality."""
+    """Build confirmed observations, preserving the legacy list return type."""
 
+    observations, _ = build_observations_with_skipped(metrics)
+    return observations
+
+
+def build_observations_with_skipped(
+    metrics: Iterable[Any],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Build confirmed observations and explicitly record rows that cannot cross."""
     observations: list[dict[str, object]] = []
+    skipped: list[dict[str, object]] = []
     for metric in metrics:
         if metric.confirmation_status not in {"confirmed", "corrected"}:
             continue
@@ -95,9 +120,30 @@ def build_observations(metrics: Iterable[Any]) -> list[dict[str, object]]:
             or not metric.evidence_text
             or metric.page_number is None
         ):
+            reason = (
+                "unknown_metric_code"
+                if not code
+                else "missing_unit"
+                if not unit
+                else "missing_source_evidence"
+                if not metric.evidence_text
+                else "missing_source_page"
+            )
+            skipped.append(
+                {
+                    "observation_id": f"health-flow-metric-{metric.id}",
+                    "reason": reason,
+                }
+            )
             continue
         value = _single_number(value_text)
         if value is None:
+            skipped.append(
+                {
+                    "observation_id": f"health-flow-metric-{metric.id}",
+                    "reason": "invalid_value",
+                }
+            )
             continue
         reference = metric.confirmed_reference_range
         if reference is None:
@@ -116,9 +162,10 @@ def build_observations(metrics: Iterable[Any]) -> list[dict[str, object]]:
                 "source_file_index": metric.source_file_index,
                 "source_page": metric.page_number,
                 "source_id": metric.source_id,
+                "bbox_normalized": getattr(metric, "bbox_normalized", None),
             }
         )
-    return observations
+    return observations, skipped
 
 
 async def match_published_evidence(
@@ -127,12 +174,12 @@ async def match_published_evidence(
     settings: Settings | None = None,
 ) -> dict[str, object]:
     settings = settings or get_settings()
-    headers = {"X-Correlation-Id": str(uuid.uuid4())}
-    if settings.GENESIS_EVIDENCE_API_KEY:
-        headers["X-Genesis-Evidence-Key"] = settings.GENESIS_EVIDENCE_API_KEY
+    headers = _service_headers(settings, correlate=True)
     payload = {"schema_version": "1", "observations": observations}
     try:
-        async with httpx.AsyncClient(timeout=settings.GENESIS_EVIDENCE_TIMEOUT_SECONDS) as client:
+        async with httpx.AsyncClient(
+            timeout=settings.GENESIS_EVIDENCE_TIMEOUT_SECONDS
+        ) as client:
             response = await client.post(
                 settings.GENESIS_EVIDENCE_API_URL,
                 json=payload,
@@ -143,38 +190,34 @@ async def match_published_evidence(
     if response.status_code >= 400:
         raise EvidenceBridgeError(f"证据服务返回 HTTP {response.status_code}")
     try:
-        result = response.json()
-    except ValueError as exc:
+        result = EvidenceMatchResponse.model_validate(response.json())
+    except (ValueError, ValidationError) as exc:
         raise EvidenceBridgeError("证据服务返回格式无效") from exc
-    if not isinstance(result, dict):
-        raise EvidenceBridgeError("证据服务返回格式无效")
-    return result
+    return result.model_dump(mode="json")
 
 
-async def fetch_metric_catalog(*, settings: Settings | None = None) -> list[dict[str, str]]:
+async def fetch_metric_catalog(
+    *, settings: Settings | None = None
+) -> list[dict[str, str]]:
     settings = settings or get_settings()
     url = settings.GENESIS_EVIDENCE_METRICS_URL.strip()
     if not url:
         url = settings.GENESIS_EVIDENCE_API_URL.rsplit("/api/evidence/matches", 1)[0]
         url = f"{url}/api/metrics"
     try:
-        async with httpx.AsyncClient(timeout=settings.GENESIS_EVIDENCE_TIMEOUT_SECONDS) as client:
-            response = await client.get(url)
+        async with httpx.AsyncClient(
+            timeout=settings.GENESIS_EVIDENCE_TIMEOUT_SECONDS
+        ) as client:
+            response = await client.get(url, headers=_service_headers(settings))
     except httpx.HTTPError as exc:
         raise EvidenceBridgeError("指标目录服务暂不可用") from exc
     if response.status_code >= 400:
         raise EvidenceBridgeError(f"指标目录服务返回 HTTP {response.status_code}")
     try:
-        payload = response.json()
-    except ValueError as exc:
+        payload = TypeAdapter(list[MetricCatalogItem]).validate_python(response.json())
+    except (ValueError, ValidationError) as exc:
         raise EvidenceBridgeError("指标目录服务返回格式无效") from exc
-    if not isinstance(payload, list):
-        raise EvidenceBridgeError("指标目录服务返回格式无效")
-    return [
-        {"code": str(item["code"]), "label": str(item["label"])}
-        for item in payload
-        if isinstance(item, dict) and item.get("code") and item.get("label")
-    ]
+    return [item.model_dump() for item in payload]
 
 
 def parse_reference_range(value: str | None) -> tuple[float | None, float | None]:

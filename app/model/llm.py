@@ -67,6 +67,7 @@ class vLLMClient(LLMClient):
             base_url=self.api_base,
             temperature=temperature,
             max_tokens=max_tokens,
+            timeout=self.request_timeout,
         )
 
     def chat(
@@ -96,6 +97,7 @@ class vLLMClient(LLMClient):
             base_url=self.api_base,
             temperature=kwargs.get("temperature", self.temperature),
             max_tokens=kwargs.get("max_tokens", self.max_tokens),
+            timeout=self.request_timeout,
         )
 
         langchain_messages = []
@@ -160,7 +162,11 @@ class vLLMClient(LLMClient):
 
         from openai import OpenAI
 
-        client = OpenAI(api_key=self.api_key, base_url=self.api_base)
+        client = OpenAI(
+            api_key=self.api_key,
+            base_url=self.api_base,
+            timeout=self.request_timeout,
+        )
 
         # 转换消息格式
         chat_messages = []
@@ -254,7 +260,11 @@ class VLMClient(vLLMClient):
 
         from openai import OpenAI
 
-        client = OpenAI(api_key=self.api_key, base_url=self.api_base)
+        client = OpenAI(
+            api_key=self.api_key,
+            base_url=self.api_base,
+            timeout=self.request_timeout,
+        )
 
         response = client.chat.completions.create(
             model=self.model,
