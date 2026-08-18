@@ -356,15 +356,6 @@ async def confirm_report(
             if requested_code in canonical_codes
             else metric_code_for_name(metric.metric_name or "")
         )
-        if code not in canonical_codes:
-            # Unknown rows stay in the report for transparency but never cross
-            # the evidence boundary.  The UI can still show them as excluded.
-            metric.confirmation_status = "excluded"
-            metric.confirmed_value = None
-            metric.confirmed_unit = None
-            metric.confirmed_reference_range = None
-            metric.confirmed_at = now
-            continue
         if item.decision == "corrected":
             if not item.value or not item.unit:
                 raise HTTPException(status_code=422, detail=f"指标 {metric.id} 的修正值不完整")
@@ -374,6 +365,20 @@ async def confirm_report(
                 raise HTTPException(status_code=422, detail=f"指标 {metric.id} 的修正值必须是单个数字") from exc
             if not math.isfinite(corrected_value):
                 raise HTTPException(status_code=422, detail=f"指标 {metric.id} 的修正值无效")
+        if code not in canonical_codes:
+            # Confirmed unknown anomalies stay auditable but never cross the
+            # evidence boundary; assessment reports them as unmatched.
+            metric.metric_code = None
+            metric.confirmation_status = item.decision
+            metric.confirmed_value = item.value if item.decision == "corrected" else metric.metric_value
+            metric.confirmed_unit = item.unit if item.decision == "corrected" else metric.unit
+            metric.confirmed_reference_range = (
+                item.reference_range
+                if item.decision == "corrected" and item.reference_range is not None
+                else metric.reference_range
+            )
+            metric.confirmed_at = now
+            continue
         metric.metric_code = code
         metric.confirmation_status = item.decision
         metric.confirmed_value = item.value if item.decision == "corrected" else metric.metric_value
@@ -410,6 +415,27 @@ async def assess_report(report_id: int, db: Session = Depends(db_dependency)):
 async def _assess_report(report: ReportModel, db: Session) -> MedicalReportResponse:
     metrics = db.query(MetricModel).filter(MetricModel.report_id == report.id).all()
     result = await match_published_evidence(build_observations(metrics))
+    unmatched = list(result.get("unmatched") or [])
+    for metric in metrics:
+        if (
+            metric.confirmation_status in {"confirmed", "corrected"}
+            and metric.abnormal_flag in {"H", "L", "A"}
+            and not metric.metric_code
+        ):
+            unmatched.append(
+                {
+                    "observation_id": f"health-flow-metric-{metric.id}",
+                    "metric_name": metric.metric_name,
+                    "metric_value": metric.confirmed_value or metric.metric_value,
+                    "unit": metric.confirmed_unit or metric.unit,
+                    "reason": "暂无已审核内容",
+                    "source_file_index": metric.source_file_index,
+                    "source_page": metric.page_number,
+                    "evidence_text": metric.evidence_text,
+                }
+            )
+    if unmatched:
+        result["unmatched"] = unmatched
     report.evidence_result = result
     report.status = "assessed"
     db.commit()

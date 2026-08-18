@@ -1,5 +1,6 @@
 """Regression tests for the report confirmation and evidence bridge boundary."""
 
+import asyncio
 import io
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -11,6 +12,8 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.data.models import Base
+from app.data.models import MedicalReport as ReportModel
+from app.data.models import MetricRecord as MetricModel
 from app.schema.report import MetricRecord
 from app.service.evidence_bridge import infer_abnormal_flag, metric_code_for_name
 from app.service.vision_encoder import ParsedReport
@@ -81,6 +84,51 @@ def test_reference_range_deterministically_normalizes_abnormality():
     assert infer_abnormal_flag("5.5", "<5.2") == "H"
     assert infer_abnormal_flag("1.50", ">1.00") == "N"
     assert infer_abnormal_flag("<20", "<20") is None
+
+
+def test_confirmed_unmapped_abnormal_is_reported_without_evidence_query():
+    from app.api.report import _assess_report
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    report = ReportModel(
+        patient_id="P-unmatched",
+        report_type="体检",
+        status="confirmed",
+        subject_consistency="same",
+    )
+    session.add(report)
+    session.flush()
+    session.add(
+        MetricModel(
+            report_id=report.id,
+            metric_name="Non-HDL",
+            metric_value="4.00",
+            unit="mmol/L",
+            reference_range="<3.40",
+            abnormal_flag="H",
+            page_number=1,
+            evidence_text="Non-HDL 4.00 mmol/L (<3.40)",
+            source_file_index=1,
+            confirmation_status="confirmed",
+        )
+    )
+    session.commit()
+    with patch(
+        "app.api.report.match_published_evidence",
+        return_value={"findings": [], "unmatched": [], "skipped": [], "message": ""},
+    ) as match:
+        response = asyncio.run(_assess_report(report, session))
+
+    assert match.call_args.args[0] == []
+    assert response.evidence_result["unmatched"][0]["metric_name"] == "Non-HDL"
+    assert response.evidence_result["unmatched"][0]["reason"] == "暂无已审核内容"
+    session.close()
 
 
 def test_multi_file_confirmation_matches_published_card(tmp_path):
