@@ -177,7 +177,7 @@ function EvidenceResult({ result }) {
           type="warning"
           showIcon
           title={`有 ${unmatched.length} 个异常指标暂未匹配到已发布知识卡`}
-          description="这些指标不会被模型补写结论，后续需先完成对应主题的知识卡审核发布。"
+          description={`暂无已审核内容：${unmatched.map((item) => item.metric_name || item.metric_code).filter(Boolean).join('、')}。这些指标不会被模型补写结论，后续需先完成对应主题的知识卡审核发布。`}
           style={{ marginTop: 12 }}
         />
       )}
@@ -289,7 +289,7 @@ export default function UploadPage() {
     const observations = (result.metrics || []).map((metric) => {
       const draft = drafts[metric.id] || {};
       const selectedCode = draft.metric_code || metric.metric_code;
-      const decision = selectedCode ? (draft.decision || 'confirmed') : 'excluded';
+      const decision = draft.decision || (isAbnormal(metric.abnormal_flag) ? 'confirmed' : 'excluded');
       const item = {
         metric_id: metric.id,
         decision,
