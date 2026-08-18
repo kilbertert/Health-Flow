@@ -22,6 +22,8 @@ class MedicalReport(Base):
     status = Column(String(32), nullable=False, default="pending_confirmation")
     subject_consistency = Column(String(16), default="same")
     evidence_result = Column(JSON)
+    access_token_hash = Column(String(64))
+    owner_id = Column(String(128), index=True)
     created_at = Column(DateTime, default=datetime.now)
 
     metrics = relationship("MetricRecord", back_populates="report", cascade="all, delete-orphan")

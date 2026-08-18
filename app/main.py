@@ -13,9 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from app.config import get_settings
-from app.data.milvus_client import get_milvus_client
 from app.data.mysql_client import get_mysql_client
-from app.data.neo4j_client import get_neo4j_client
 
 
 @asynccontextmanager
@@ -64,6 +62,7 @@ def _valid_basic_auth(authorization: str, username: str, password: str) -> bool:
 @app.middleware("http")
 async def basic_auth(request: Request, call_next):
     settings = get_settings()
+    request.state.owner_id = settings.HEALTHFLOW_BASIC_USER if settings.HEALTHFLOW_BASIC_PASSWORD else "anonymous"
     if request.url.path not in {"/health", "/ready"} and not _valid_basic_auth(
         request.headers.get("authorization", ""),
         settings.HEALTHFLOW_BASIC_USER,
@@ -90,10 +89,8 @@ async def health_check():
 
 @app.get("/ready")
 async def readiness_check():
+    settings = get_settings()
     database = get_mysql_client()
-    milvus = get_milvus_client()
-    neo4j = get_neo4j_client()
-
     db_ok = False
     try:
         with database.engine.connect() as connection:
@@ -102,37 +99,20 @@ async def readiness_check():
     except Exception:
         db_ok = False
 
+    evidence_configured = bool(
+        settings.GENESIS_EVIDENCE_API_URL.strip()
+        and len(settings.GENESIS_EVIDENCE_API_KEY.strip()) >= 24
+    )
     return {
-        "status": "ready" if db_ok else "degraded",
+        "status": "ready" if db_ok and evidence_configured else "degraded",
         "database": "ok" if db_ok else "unavailable",
-        "milvus": "ok" if _milvus_probe(milvus) else "optional_unavailable",
-        "neo4j": "ok" if _neo4j_probe(neo4j) else "optional_unavailable",
+        "evidence_service": "configured" if evidence_configured else "unconfigured",
     }
 
 
-def _milvus_probe(client) -> bool:
-    """真实的 Milvus 连通性探测：客户端对象存在不代表服务可用。"""
-    try:
-        return bool(client.client and client.client.list_collections() is not None)
-    except Exception:
-        return False
+from app.api import report  # noqa: E402
 
-
-def _neo4j_probe(client) -> bool:
-    """真实的 Neo4j 连通性探测：执行一次 RETURN 1。"""
-    try:
-        return bool(client.connect())
-    except Exception:
-        return False
-
-
-from app.api import chat, kg, metric, report, train  # noqa: E402
-
-app.include_router(chat.router, prefix="/api/health", tags=["Chat"])
 app.include_router(report.router, prefix="/api/health", tags=["Report"])
-app.include_router(metric.router, prefix="/api/health", tags=["Metric"])
-app.include_router(kg.router, prefix="/api/health", tags=["Knowledge Graph"])
-app.include_router(train.router, prefix="/api/health/train", tags=["Training"])
 
 settings = get_settings()
 if settings.SERVE_FRONTEND:

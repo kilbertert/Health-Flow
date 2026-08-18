@@ -1,30 +1,18 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Layout, Menu, Typography, Tag } from 'antd';
 import {
   UploadOutlined,
-  FileTextOutlined,
 } from '@ant-design/icons';
 import Upload from './pages/Upload.jsx';
-import Reports from './pages/Reports.jsx';
 
 const { Sider, Header, Content } = Layout;
 
 const NAV_ITEMS = [
   { key: 'upload', label: '报告上传与解读', icon: <UploadOutlined /> },
-  { key: 'reports', label: '报告记录', icon: <FileTextOutlined /> },
 ];
 
 export default function App() {
-  const [page, setPage] = useState('upload');
-  const current = NAV_ITEMS.find((i) => i.key === page);
-
-  const renderPage = () => {
-    switch (page) {
-      case 'upload': return <Upload />;
-      case 'reports': return <Reports />;
-      default: return <Upload />;
-    }
-  };
+  const current = NAV_ITEMS[0];
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -38,8 +26,7 @@ export default function App() {
         </div>
         <Menu
           mode="inline"
-          selectedKeys={[page]}
-          onClick={({ key }) => setPage(key)}
+          selectedKeys={['upload']}
           items={NAV_ITEMS}
           style={{ borderInlineEnd: 'none' }}
         />
@@ -59,7 +46,7 @@ export default function App() {
           </Typography.Title>
           <Tag color="blue" style={{ marginRight: 0 }}>后端服务：已连接</Tag>
         </Header>
-        <Content style={{ padding: 24 }}>{renderPage()}</Content>
+        <Content style={{ padding: 24 }}><Upload /></Content>
       </Layout>
     </Layout>
   );

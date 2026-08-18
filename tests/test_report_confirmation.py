@@ -6,6 +6,8 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -17,6 +19,25 @@ from app.data.models import MetricRecord as MetricModel
 from app.schema.report import MetricRecord
 from app.service.evidence_bridge import infer_abnormal_flag, metric_code_for_name
 from app.service.vision_encoder import ParsedReport
+
+
+def _evidence_result(*, findings=None, unmatched=None, skipped=None):
+    return {
+        "schema_version": "1",
+        "sorting_version": "published-card-reference-range-v1",
+        "correlation_id": "00000000-0000-0000-0000-000000000001",
+        "findings": findings or [],
+        "unmatched": unmatched or [],
+        "skipped": skipped or [],
+        "message": "",
+        "patient_reply": {
+            "title": "体检报告解读与健康风险提示",
+            "summary": "",
+            "findings": [],
+            "unmatched_count": len(unmatched or []),
+            "disclaimer": "仅供健康信息参考。",
+        },
+    }
 
 
 class _Vision:
@@ -80,6 +101,54 @@ def test_metric_names_with_report_abbreviations_are_canonicalized():
     assert {name: metric_code_for_name(name) for name in expected} == expected
 
 
+def test_report_owner_isolation_rejects_a_valid_token_for_another_owner():
+    from app.api.report import _authorized_report, _token_hash
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    report = ReportModel(
+        patient_id="P-owner",
+        report_type="体检",
+        status="uploaded",
+        access_token_hash=_token_hash("token"),
+        owner_id="owner-a",
+    )
+    session.add(report)
+    session.commit()
+    with pytest.raises(HTTPException) as error:
+        _authorized_report(session, report.id, "token", owner_id="owner-b")
+    assert error.value.status_code == 404
+    session.close()
+
+
+def test_legacy_report_without_token_cannot_cross_the_owner_boundary():
+    from app.api.report import _authorized_report
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    report = ReportModel(
+        patient_id="P-legacy",
+        report_type="体检",
+        status="legacy_unclaimed",
+    )
+    session.add(report)
+    session.commit()
+    with pytest.raises(HTTPException) as error:
+        _authorized_report(session, report.id, "any-token", owner_id="owner")
+    assert error.value.status_code == 404
+    session.close()
+
+
 def test_reference_range_deterministically_normalizes_abnormality():
     assert infer_abnormal_flag("5.5", "<5.2") == "H"
     assert infer_abnormal_flag("1.50", ">1.00") == "N"
@@ -121,13 +190,81 @@ def test_confirmed_unmapped_abnormal_is_reported_without_evidence_query():
     session.commit()
     with patch(
         "app.api.report.match_published_evidence",
-        return_value={"findings": [], "unmatched": [], "skipped": [], "message": ""},
+        return_value=_evidence_result(),
     ) as match:
         response = asyncio.run(_assess_report(report, session))
 
     assert match.call_args.args[0] == []
-    assert response.evidence_result["unmatched"][0]["metric_name"] == "Non-HDL"
-    assert response.evidence_result["unmatched"][0]["reason"] == "暂无已审核内容"
+    assert response.evidence_result.skipped[0].observation_id == "health-flow-metric-1"
+    assert response.evidence_result.skipped[0].reason == "unknown_metric_code"
+    session.close()
+
+
+def _assessment_fixture(**metric_values):
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    report = ReportModel(
+        patient_id="P-deterministic",
+        report_type="体检",
+        status="confirmed",
+        subject_consistency="same",
+    )
+    session.add(report)
+    session.flush()
+    values = {
+        "report_id": report.id,
+        "metric_name": "空腹血糖",
+        "metric_value": "5.2",
+        "unit": "mmol/L",
+        "reference_range": "3.9-6.1",
+        "abnormal_flag": "H",
+        "page_number": 1,
+        "evidence_text": "空腹血糖 5.2 mmol/L 3.9-6.1",
+        "source_file_index": 1,
+        "confirmation_status": "confirmed",
+    }
+    values.update(metric_values)
+    session.add(MetricModel(**values))
+    session.commit()
+    return session, report
+
+
+def test_assessment_uses_confirmed_range_instead_of_model_flag():
+    from app.api.report import _assess_report
+
+    session, report = _assessment_fixture()
+    with patch(
+        "app.api.report.match_published_evidence",
+        return_value=_evidence_result(),
+    ) as match:
+        response = asyncio.run(_assess_report(report, session))
+
+    assert match.call_args.args[0][0]["metric_code"] == "fasting_glucose"
+    assert response.evidence_result.unmatched == []
+    session.close()
+
+
+def test_assessment_keeps_confirmed_rows_without_source_evidence_visible_as_skipped():
+    from app.api.report import _assess_report
+
+    session, report = _assessment_fixture(
+        metric_code="fasting_glucose",
+        evidence_text=None,
+        abnormal_flag="H",
+    )
+    with patch(
+        "app.api.report.match_published_evidence",
+        return_value=_evidence_result(),
+    ) as match:
+        response = asyncio.run(_assess_report(report, session))
+
+    assert match.call_args.args[0] == []
+    assert response.evidence_result.skipped[0].reason == "missing_source_evidence"
     session.close()
 
 
@@ -152,30 +289,64 @@ def test_multi_file_confirmation_matches_published_card(tmp_path):
         REPORT_PARSE_WORKERS=4,
         REPORT_FILES_DIR=str(tmp_path),
     )
-    with patch("app.data.get_db", override_get_db), \
-        patch("app.data.mysql_client.get_mysql_client") as mysql, \
-        patch("app.api.report.get_settings", return_value=settings), \
-        patch("app.api.report.get_vision_encoder_service", return_value=vision), \
+    with (
+        patch("app.data.get_db", override_get_db),
+        patch("app.data.mysql_client.get_mysql_client") as mysql,
+        patch("app.api.report.get_settings", return_value=settings),
+        patch("app.api.report.get_vision_encoder_service", return_value=vision),
         patch(
             "app.api.report.fetch_metric_catalog",
             return_value=[{"code": "custom_glucose", "label": "自定义血糖"}],
-        ), \
+        ),
         patch(
             "app.api.report.match_published_evidence",
-            return_value={
-                "schema_version": "1",
-                "findings": [
+            return_value=_evidence_result(
+                findings=[
                     {
+                        "condition_code": "COND_PREDIABETES",
                         "condition_name": "糖尿病前期 / 糖代谢异常",
                         "source_observation_ids": ["health-flow-metric-1"],
-                        "card": {"version": "1.0.0", "grade": "moderate", "sources": []},
+                        "urgency": "routine",
+                        "abnormality_severity": 1,
+                        "evidence_strength": "moderate",
+                        "needs_recheck": True,
+                        "department": "内分泌科",
+                        "recheck_direction": "复查空腹血糖",
+                        "epidemiology_background": "",
+                        "source_observations": [],
+                        "sorting": {
+                            "urgency": "routine",
+                            "abnormality_severity": 1,
+                            "evidence_strength": "moderate",
+                            "needs_recheck": True,
+                            "department": "内分泌科",
+                            "epidemiology_background": "",
+                        },
+                        "card": {
+                            "id": "card-1",
+                            "condition_code": "COND_PREDIABETES",
+                            "version": "1.0.0",
+                            "status": "published",
+                            "grade": "moderate",
+                            "published_at": "2026-08-19T00:00:00Z",
+                            "evidence_profile_id": "profile-1",
+                            "patient_visible_body": "正式知识卡内容",
+                            "sources": [
+                                {
+                                    "claim_id": "claim-1",
+                                    "paper_id": "paper-1",
+                                    "paper_title": "Test paper",
+                                    "doi": "10.1000/test",
+                                    "evidence": "Test evidence",
+                                    "locator": "p. 1",
+                                }
+                            ],
+                        },
                     }
-                ],
-                "unmatched": [],
-                "skipped": [],
-                "message": "",
-            },
-        ) as evidence_match:
+                ]
+            ),
+        ) as evidence_match,
+    ):
         mysql_client = mysql.return_value
         mysql_client.create_tables.return_value = None
         mysql_client.close.return_value = None
@@ -191,8 +362,12 @@ def test_multi_file_confirmation_matches_published_card(tmp_path):
                 ],
             )
             assert response.status_code == 202, response.text
-            report_id = response.json()["id"]
-            report = client.get(f"/api/health/report/{report_id}").json()
+            uploaded = response.json()
+            report_id = uploaded["id"]
+            headers = {"X-Report-Token": uploaded["access_token"]}
+            report = client.get(
+                f"/api/health/report/{report_id}", headers=headers
+            ).json()
             assert report["status"] == "pending_confirmation"
             assert [item["source_file_index"] for item in report["metrics"]] == [1, 2]
             assert [item["original_filename"] for item in report["files"]] == [
@@ -203,6 +378,7 @@ def test_multi_file_confirmation_matches_published_card(tmp_path):
 
             confirmed = client.post(
                 f"/api/health/report/{report['id']}/confirm",
+                headers=headers,
                 json={
                     "subject_consistency": "same",
                     "observations": [
@@ -212,13 +388,17 @@ def test_multi_file_confirmation_matches_published_card(tmp_path):
                             "metric_code": "custom_glucose",
                         },
                         {"metric_id": metric_ids[1], "decision": "excluded"},
-                    ]
+                    ],
                 },
             )
             assert confirmed.status_code == 200, confirmed.text
             result = confirmed.json()
             assert result["status"] == "assessed"
-            assert result["evidence_result"]["findings"][0]["card"]["version"] == "1.0.0"
-            assert evidence_match.call_args.args[0][0]["metric_code"] == "custom_glucose"
+            assert (
+                result["evidence_result"]["findings"][0]["card"]["version"] == "1.0.0"
+            )
+            assert (
+                evidence_match.call_args.args[0][0]["metric_code"] == "custom_glucose"
+            )
 
     assert sorted(vision.calls) == ["first.png", "second.png"]
