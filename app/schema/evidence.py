@@ -27,12 +27,22 @@ class SourceObservation(StrictModel):
     source_file_index: int = Field(ge=1)
     source_page: int = Field(ge=1)
     source_id: str | None = None
+    source_url: str | None = None
+    bbox: list[float] | None = Field(default=None, min_length=4, max_length=4)
     bbox_normalized: list[float] | None = Field(
         default=None, min_length=4, max_length=4
     )
 
     @model_validator(mode="after")
     def validate_bbox(self) -> "SourceObservation":
+        if self.bbox is not None:
+            if any(
+                not math.isfinite(coordinate) or coordinate < 0
+                for coordinate in self.bbox
+            ):
+                raise ValueError("bbox coordinates are invalid")
+            if self.bbox[0] > self.bbox[2] or self.bbox[1] > self.bbox[3]:
+                raise ValueError("bbox must be ordered as x1,y1,x2,y2")
         if self.bbox_normalized is not None:
             if any(
                 not math.isfinite(coordinate) or not 0 <= coordinate <= 1000

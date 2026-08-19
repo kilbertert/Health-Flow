@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import math
 import re
 import unicodedata
 import uuid
-import math
 from collections.abc import Iterable
 from typing import Any
 
@@ -189,6 +189,13 @@ def build_observations_with_skipped(
                 "source_file_index": metric.source_file_index,
                 "source_page": metric.page_number,
                 "source_id": metric.source_id,
+                "source_url": (
+                    f"/api/health/report/{metric.report_id}/files/"
+                    f"{metric.source_file_index}/pages/{metric.page_number}"
+                    if metric.report_id is not None and metric.page_number is not None
+                    else None
+                ),
+                "bbox": getattr(metric, "bbox", None),
                 "bbox_normalized": getattr(metric, "bbox_normalized", None),
             }
         )
