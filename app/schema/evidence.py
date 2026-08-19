@@ -27,12 +27,22 @@ class SourceObservation(StrictModel):
     source_file_index: int = Field(ge=1)
     source_page: int = Field(ge=1)
     source_id: str | None = None
+    source_url: str | None = None
+    bbox: list[float] | None = Field(default=None, min_length=4, max_length=4)
     bbox_normalized: list[float] | None = Field(
         default=None, min_length=4, max_length=4
     )
 
     @model_validator(mode="after")
     def validate_bbox(self) -> "SourceObservation":
+        if self.bbox is not None:
+            if any(
+                not math.isfinite(coordinate) or coordinate < 0
+                for coordinate in self.bbox
+            ):
+                raise ValueError("bbox coordinates are invalid")
+            if self.bbox[0] > self.bbox[2] or self.bbox[1] > self.bbox[3]:
+                raise ValueError("bbox must be ordered as x1,y1,x2,y2")
         if self.bbox_normalized is not None:
             if any(
                 not math.isfinite(coordinate) or not 0 <= coordinate <= 1000
@@ -59,6 +69,7 @@ class ClaimSource(StrictModel):
 class PublishedCard(StrictModel):
     id: str
     condition_code: str
+    scope_key: str
     version: str
     status: Literal["published"]
     grade: Literal["high", "moderate", "low", "very_low"]
@@ -118,13 +129,16 @@ class PatientFinding(StrictModel):
     condition_code: str
     condition_name: str
     urgency: Literal["routine", "soon", "urgent", "emergency"]
+    abnormality_severity: int = Field(ge=0, le=3)
     evidence_strength: Literal["high", "moderate", "low", "very_low"]
     needs_recheck: bool
     department: str
     recheck_direction: str
     card_id: str
     card_version: str
+    evidence_profile_id: str
     patient_visible_body: str
+    sources: list[ClaimSource] = Field(min_length=1)
     source_observation_ids: list[str]
     source_observations: list[SourceObservation]
 
@@ -138,7 +152,7 @@ class PatientReply(StrictModel):
 
 
 class EvidenceMatchResponse(StrictModel):
-    schema_version: Literal["1"]
+    schema_version: Literal["2"]
     sorting_version: Literal["published-card-reference-range-v1"]
     correlation_id: str
     findings: list[Finding]

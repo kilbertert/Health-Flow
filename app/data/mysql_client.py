@@ -46,6 +46,15 @@ class MySQLClient:
                 "evidence_result": "JSON",
                 "access_token_hash": "VARCHAR(64)",
                 "owner_id": "VARCHAR(128)",
+                "extraction_provider": "VARCHAR(128)",
+                "extraction_model": "VARCHAR(128)",
+                "extraction_prompt_version": "VARCHAR(128)",
+                "extraction_prompt_hash": "VARCHAR(128)",
+                "extraction_run_id": "VARCHAR(128)",
+                "provider_run_id": "VARCHAR(256)",
+                "provider_run_ids": "TEXT",
+                "evidence_correlation_id": "VARCHAR(64)",
+                "updated_at": "DATETIME",
             },
             "metric_records": {
                 "source_file_index": "INTEGER NOT NULL DEFAULT 1",
@@ -54,6 +63,7 @@ class MySQLClient:
                 "confirmed_value": "VARCHAR(64)",
                 "confirmed_unit": "VARCHAR(32)",
                 "confirmed_reference_range": "VARCHAR(64)",
+                "confirmed_evidence_text": "TEXT",
                 "confirmed_at": "DATETIME",
             },
         }

@@ -2,7 +2,7 @@
 
 import math
 from datetime import datetime
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -31,6 +31,7 @@ class MetricRecord(BaseModel):
     confirmed_value: Optional[str] = None
     confirmed_unit: Optional[str] = None
     confirmed_reference_range: Optional[str] = None
+    confirmed_evidence_text: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_bboxes(self) -> "MetricRecord":
@@ -91,7 +92,10 @@ class MedicalReportResponse(BaseModel):
     subject_consistency: Optional[str] = None
     evidence_result: Optional[EvidenceMatchResponse] = None
     processing_error: Optional[str] = None
+    processing_warnings: List[str] = Field(default_factory=list)
     access_token: Optional[str] = None
+    extraction_trace: Optional[dict[str, Any]] = None
+    audit_events: List[dict[str, Any]] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 
@@ -103,6 +107,7 @@ class MetricConfirmation(BaseModel):
     value: Optional[str] = None
     unit: Optional[str] = None
     reference_range: Optional[str] = None
+    evidence_text: Optional[str] = None
 
 
 class ReportConfirmationRequest(BaseModel):
