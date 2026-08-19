@@ -1,0 +1,14 @@
+[Unit]
+Description=HealthFlow Durable Report Extraction Worker
+After=network-online.target health-flow.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/claude/Projects/health-flow
+EnvironmentFile=/home/claude/Projects/health-flow/var/health-flow.env
+ExecStart=/home/claude/Projects/health-flow/.venv/bin/python3 -m app.service.report_worker
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

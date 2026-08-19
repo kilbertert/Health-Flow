@@ -4,7 +4,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import get_settings
@@ -25,6 +25,8 @@ class MySQLClient:
             engine_kwargs.update({"pool_size": 10, "max_overflow": 20})
 
         self.engine = create_engine(database_url, **engine_kwargs)
+        if database_url.startswith("sqlite"):
+            event.listen(self.engine, "connect", _enable_sqlite_foreign_keys)
         self.SessionLocal = sessionmaker(
             autocommit=False,
             autoflush=False,
@@ -113,6 +115,14 @@ class MySQLClient:
 
 
 _mysql_client: MySQLClient | None = None
+
+
+def _enable_sqlite_foreign_keys(connection, _connection_record) -> None:
+    cursor = connection.cursor()
+    try:
+        cursor.execute("PRAGMA foreign_keys=ON")
+    finally:
+        cursor.close()
 
 
 def get_mysql_client() -> MySQLClient:

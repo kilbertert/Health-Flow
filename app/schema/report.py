@@ -79,6 +79,18 @@ class ReportFileRecord(BaseModel):
     source_url: str
 
 
+class ReportExtractionJobResponse(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    status: Literal["queued", "running", "completed", "failed"]
+    attempt_count: int = Field(..., ge=0)
+    error_class: Optional[str] = None
+    created_at: Optional[datetime] = None
+    started_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+
+
 class MedicalReportResponse(BaseModel):
     id: int
     patient_id: str
@@ -93,6 +105,7 @@ class MedicalReportResponse(BaseModel):
     evidence_result: Optional[EvidenceMatchResponse] = None
     processing_error: Optional[str] = None
     processing_warnings: List[str] = Field(default_factory=list)
+    extraction_job: Optional[ReportExtractionJobResponse] = None
     access_token: Optional[str] = None
     extraction_trace: Optional[dict[str, Any]] = None
     audit_events: List[dict[str, Any]] = Field(default_factory=list)

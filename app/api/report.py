@@ -15,7 +15,6 @@ from typing import Optional
 
 from fastapi import (
     APIRouter,
-    BackgroundTasks,
     Depends,
     File,
     Form,
@@ -26,13 +25,14 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import FileResponse
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
 from app.api.deps import db_dependency
 from app.config import get_settings
 from app.data.models import MedicalReport as ReportModel
 from app.data.models import MetricRecord as MetricModel
-from app.data.models import ReportAuditEvent, ReportFile as ReportFileModel
+from app.data.models import ReportAuditEvent, ReportExtractionJob
+from app.data.models import ReportFile as ReportFileModel
 from app.schema.evidence import EvidenceMatchResponse, Skipped
 from app.schema.report import (
     MedicalReportResponse,
@@ -182,7 +182,6 @@ def _audit(
 @router.post("/report/upload", response_model=MedicalReportResponse, status_code=202)
 async def upload_report(
     request: Request,
-    background_tasks: BackgroundTasks,
     patient_id: str = Form(..., min_length=1, description="患者 ID（必填，非空）"),
     report_type: Optional[str] = Form(None),
     department: Optional[str] = Form(None),
@@ -254,13 +253,10 @@ async def upload_report(
         {"file_count": len(accepted_files)},
         actor=_owner_id(request),
     )
+    db.add(ReportExtractionJob(report_id=report.id, status="queued"))
 
     db.commit()
     db.refresh(report)
-    factory = sessionmaker(bind=db.get_bind())
-    # ponytail: in-process jobs fit this single-instance demo; use a durable
-    # queue before horizontal scaling or restart-safe processing is required.
-    background_tasks.add_task(_parse_report, report.id, accepted_files, factory)
     return _report_response(report, [], access_token=access_token)
 
 
@@ -268,7 +264,7 @@ def _parse_report(
     report_id: int,
     accepted_files: list[tuple[int, str, str, bytes]],
     factory,
-) -> None:
+) -> bool:
     try:
         vision = get_vision_encoder_service()
 
@@ -318,7 +314,10 @@ def _parse_report(
         with factory() as db:
             report = db.get(ReportModel, report_id)
             if report is None:
-                return
+                return False
+            db.query(MetricModel).filter(MetricModel.report_id == report_id).delete(
+                synchronize_session=False
+            )
             report.parsed_content = {
                 "report_type": successful_reports[0][2].report_type,
                 "raw_text": "\n".join(
@@ -405,12 +404,13 @@ def _parse_report(
                 actor="ai:report-extractor",
             )
             db.commit()
+        return True
     except Exception as exc:
         logger.exception("report parsing failed", extra={"report_id": report_id})
         with factory() as db:
             report = db.get(ReportModel, report_id)
             if report is None:
-                return
+                return False
             report.status = "failed"
             report.parsed_content = {
                 **(report.parsed_content or {}),
@@ -424,6 +424,7 @@ def _parse_report(
                 actor="ai:report-extractor",
             )
             db.commit()
+        return False
 
 
 def _report_response(
@@ -432,6 +433,7 @@ def _report_response(
     *,
     access_token: str | None = None,
 ) -> MedicalReportResponse:
+    extraction_job = getattr(report, "extraction_job", None)
     return MedicalReportResponse(
         id=report.id,
         patient_id=report.patient_id,
@@ -457,6 +459,19 @@ def _report_response(
         evidence_result=report.evidence_result,
         processing_error=(report.parsed_content or {}).get("error"),
         processing_warnings=list((report.parsed_content or {}).get("warnings") or []),
+        extraction_job=(
+            {
+                "status": extraction_job.status,
+                "attempt_count": extraction_job.attempt_count,
+                "error_class": extraction_job.error_class,
+                "created_at": extraction_job.created_at,
+                "started_at": extraction_job.started_at,
+                "updated_at": extraction_job.updated_at,
+                "completed_at": extraction_job.completed_at,
+            }
+            if extraction_job is not None
+            else None
+        ),
         access_token=access_token,
         extraction_trace={
             key: getattr(report, key)
