@@ -97,7 +97,7 @@ function initialDecision(metric) {
 function SourceEvidence({ reportId, reportToken, metric, file }) {
   const [sourceUrl, setSourceUrl] = useState('');
   const [sourceError, setSourceError] = useState('');
-  const page = metric?.page_number || 1;
+  const page = metric?.page_number || metric?.source_page || 1;
   const fileIndex = metric?.source_file_index;
   useEffect(() => {
     if (!metric || !reportToken) return undefined;
@@ -165,7 +165,7 @@ function evidenceAlertType(hasFindings, hasUnmatched) {
   return 'info';
 }
 
-function EvidenceResult({ result }) {
+function EvidenceResult({ result, onOpenSource }) {
   if (!result) return null;
   const findings = Array.isArray(result.findings) ? result.findings : [];
   const patientReply = result.patient_reply && typeof result.patient_reply === 'object'
@@ -233,7 +233,18 @@ function EvidenceResult({ result }) {
                       header="报告原文证据"
                       dataSource={sourceObservations}
                       renderItem={(source) => (
-                        <List.Item>
+                        <List.Item
+                          actions={[
+                            <Tooltip key="source" title="查看报告原文定位">
+                              <Button
+                                type="text"
+                                icon={<EyeOutlined />}
+                                aria-label={`查看${source.metric_code || '指标'}报告原文`}
+                                onClick={() => onOpenSource?.(source)}
+                              />
+                            </Tooltip>,
+                          ]}
+                        >
                           <Typography.Text>
                             文件 #{source.source_file_index} · 第 {source.source_page} 页 · {source.evidence_text || '未记录原文'}
                             {source.bbox_normalized ? ` · BBox ${JSON.stringify(source.bbox_normalized)}` : ''}
@@ -251,7 +262,9 @@ function EvidenceResult({ result }) {
                         <List.Item>
                           <Typography.Text>
                             {source.paper_title || source.paper_id || '未命名论文'}
-                            {source.doi ? `（${source.doi}）` : ''}
+                            {source.doi && (
+                              <>（<Typography.Link href={`https://doi.org/${encodeURIComponent(source.doi)}`} target="_blank" rel="noreferrer">{source.doi}</Typography.Link>）</>
+                            )}
                             {' · '}{source.claim_id || '未命名 Claim'}
                             {source.locator ? ` · ${source.locator}` : ''}
                           </Typography.Text>
@@ -297,6 +310,7 @@ function initialDrafts(metrics) {
       value: metric.metric_value || '',
       unit: metric.unit || '',
       reference_range: metric.reference_range || '',
+      evidence_text: metric.evidence_text || '',
     },
   ]));
 }
@@ -403,6 +417,7 @@ export default function UploadPage() {
         item.value = draft.value;
         item.unit = draft.unit;
         item.reference_range = draft.reference_range || undefined;
+        item.evidence_text = draft.evidence_text || undefined;
       }
       return item;
     });
@@ -518,6 +533,18 @@ export default function UploadPage() {
         />
       ),
     },
+    {
+      title: '修正原文证据', key: 'corrected_evidence', width: 240,
+      render: (_, record) => (
+        <Input
+          aria-label={`${record.metric_name}修正原文证据`}
+          disabled={result.status !== 'pending_confirmation' || drafts[record.id]?.decision !== 'corrected'}
+          value={drafts[record.id]?.evidence_text || ''}
+          onChange={(event) => updateDraft(record.id, 'evidence_text', event.target.value)}
+          placeholder="必须包含修正值和参考范围"
+        />
+      ),
+    },
   ], [drafts, metricCatalog, result?.status]);
 
   const visibleMetrics = useMemo(() => {
@@ -601,6 +628,19 @@ export default function UploadPage() {
                 />
               ) : (result.subject_consistency || '—')}
             </Descriptions.Item>
+            {result.extraction_trace && (
+              <>
+                <Descriptions.Item label="抽取模型">
+                  {result.extraction_trace.model || '—'}
+                </Descriptions.Item>
+                <Descriptions.Item label="抽取运行 ID">
+                  {result.extraction_trace.run_id || '—'}
+                </Descriptions.Item>
+                <Descriptions.Item label="Prompt 版本">
+                  {result.extraction_trace.prompt_version || '—'}
+                </Descriptions.Item>
+              </>
+            )}
           </Descriptions>
           {result.status === 'pending_confirmation' && (
             <Alert
@@ -612,6 +652,15 @@ export default function UploadPage() {
           )}
           {result.status === 'processing' && (
             <Alert type="info" showIcon title="报告正在后台解析，完成后将自动显示指标。" style={{ marginBottom: 16 }} />
+          )}
+          {Array.isArray(result.processing_warnings) && result.processing_warnings.length > 0 && (
+            <Alert
+              type="warning"
+              showIcon
+              title="部分文件未能完成解析"
+              description={result.processing_warnings.join('；')}
+              style={{ marginBottom: 16 }}
+            />
           )}
           <Table
             rowKey="id"
@@ -636,7 +685,7 @@ export default function UploadPage() {
               </Button>
             )}
           </Space>
-          <EvidenceResult result={result.evidence_result} />
+          <EvidenceResult result={result.evidence_result} onOpenSource={setSourceMetric} />
         </Card>
       )}
       <Modal

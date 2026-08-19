@@ -1,6 +1,7 @@
 """LLM client封装，集成vLLM推理."""
 
 import json
+from contextvars import ContextVar
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -57,6 +58,12 @@ class vLLMClient(LLMClient):
         self.responses_url = settings.OPENAI_RESPONSES_URL.strip()
         self.use_responses_api = bool(self.responses_url)
         self.request_timeout = settings.REPORT_PARSE_TIMEOUT_SECONDS
+        # Provider calls happen concurrently while a multi-file report is parsed.
+        # Keep the last ID local to the current thread/task so one request cannot
+        # accidentally record another request's provider run.
+        self._last_run_id: ContextVar[str] = ContextVar(
+            f"llm_last_run_id_{id(self)}", default=""
+        )
         self.temperature = temperature
         self.max_tokens = max_tokens
 
@@ -70,11 +77,7 @@ class vLLMClient(LLMClient):
             timeout=self.request_timeout,
         )
 
-    def chat(
-        self,
-        messages: List[Dict[str, str]],
-        **kwargs
-    ) -> str:
+    def chat(self, messages: List[Dict[str, str]], **kwargs) -> str:
         """
         聊天接口.
 
@@ -113,7 +116,20 @@ class vLLMClient(LLMClient):
                 langchain_messages.append(AIMessage(content=content))
 
         response = llm.invoke(langchain_messages)
+        self.last_run_id = str(
+            getattr(response, "id", None)
+            or getattr(response, "response_metadata", {}).get("id", "")
+            or ""
+        )
         return response.content
+
+    @property
+    def last_run_id(self) -> str:
+        return self._last_run_id.get()
+
+    @last_run_id.setter
+    def last_run_id(self, value: str) -> None:
+        self._last_run_id.set(value)
 
     def _responses_text(
         self, input_items: list[dict[str, Any]], *, json_output: bool = False
@@ -133,6 +149,7 @@ class vLLMClient(LLMClient):
         )
         response.raise_for_status()
         body = response.json()
+        self.last_run_id = str(body.get("id") or "") if isinstance(body, dict) else ""
         if not isinstance(body, dict) or body.get("status") != "completed":
             raise ValueError("Responses API 未完成请求")
         for output in body.get("output", []):
@@ -182,10 +199,13 @@ class vLLMClient(LLMClient):
         response = client.chat.completions.create(
             model=self.model,
             messages=chat_messages,
-            response_format={"type": "json_object"} if json_schema else {"type": "text"},
+            response_format={"type": "json_object"}
+            if json_schema
+            else {"type": "text"},
             temperature=self.temperature if temperature is None else temperature,
             max_tokens=self.max_tokens,
         )
+        self.last_run_id = str(getattr(response, "id", "") or "")
 
         content = response.choices[0].message.content
         if json_schema:
@@ -217,11 +237,7 @@ class VLMClient(vLLMClient):
         """
         super().__init__(model, api_base, temperature, max_tokens)
 
-    def chat_with_image(
-        self,
-        messages: List[Dict[str, Any]],
-        **kwargs
-    ) -> str:
+    def chat_with_image(self, messages: List[Dict[str, Any]], **kwargs) -> str:
         """
         带图像的聊天接口.
 
@@ -248,11 +264,13 @@ class VLMClient(vLLMClient):
                         parts.append({"type": "input_text", "text": part["text"]})
                     elif part.get("type") == "image_url":
                         image = part["image_url"]
-                        parts.append({
-                            "type": "input_image",
-                            "image_url": image["url"],
-                            "detail": image.get("detail", "original"),
-                        })
+                        parts.append(
+                            {
+                                "type": "input_image",
+                                "image_url": image["url"],
+                                "detail": image.get("detail", "original"),
+                            }
+                        )
                 input_items.append(
                     {"role": message.get("role", "user"), "content": parts}
                 )
@@ -272,6 +290,7 @@ class VLMClient(vLLMClient):
             temperature=kwargs.get("temperature", self.temperature),
             max_tokens=kwargs.get("max_tokens", self.max_tokens),
         )
+        self.last_run_id = str(getattr(response, "id", "") or "")
 
         return response.choices[0].message.content
 
@@ -391,7 +410,9 @@ class MiniMaxClient(LLMClient):
         response = client.chat.completions.create(
             model=self.model,
             messages=chat_messages,
-            response_format={"type": "json_object"} if json_schema else {"type": "text"},
+            response_format={"type": "json_object"}
+            if json_schema
+            else {"type": "text"},
             temperature=self.temperature,
             max_tokens=self.max_tokens,
         )

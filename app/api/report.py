@@ -32,7 +32,7 @@ from app.api.deps import db_dependency
 from app.config import get_settings
 from app.data.models import MedicalReport as ReportModel
 from app.data.models import MetricRecord as MetricModel
-from app.data.models import ReportFile as ReportFileModel
+from app.data.models import ReportAuditEvent, ReportFile as ReportFileModel
 from app.schema.evidence import EvidenceMatchResponse, Skipped
 from app.schema.report import (
     MedicalReportResponse,
@@ -46,7 +46,7 @@ from app.service.evidence_bridge import (
     match_published_evidence,
     metric_code_for_name,
 )
-from app.service.vision_encoder import get_vision_encoder_service
+from app.service.vision_encoder import ParsedReport, get_vision_encoder_service
 
 router = APIRouter()
 ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".gif", ".bmp"}
@@ -65,13 +65,13 @@ def _authorized_report(
     db: Session, report_id: int, access_token: str, *, owner_id: str
 ) -> ReportModel:
     report = db.query(ReportModel).filter(ReportModel.id == report_id).first()
-    if report is not None and not report.access_token_hash:
+    if report is not None and (not report.access_token_hash or not report.owner_id):
         raise HTTPException(status_code=404, detail="报告不存在")
     expected = report.access_token_hash if report is not None else ""
     if (
         not expected
         or not hmac.compare_digest(expected, _token_hash(access_token))
-        or (report.owner_id and not hmac.compare_digest(report.owner_id, owner_id))
+        or not hmac.compare_digest(report.owner_id or "", owner_id)
     ):
         raise HTTPException(status_code=404, detail="报告不存在")
     return report
@@ -156,6 +156,26 @@ def _metric_response(metric: MetricModel) -> MetricRecord:
         confirmed_value=metric.confirmed_value,
         confirmed_unit=metric.confirmed_unit,
         confirmed_reference_range=metric.confirmed_reference_range,
+        confirmed_evidence_text=metric.confirmed_evidence_text,
+    )
+
+
+def _audit(
+    db: Session,
+    report: ReportModel,
+    action: str,
+    detail: dict[str, object] | None = None,
+    *,
+    actor: str = "system",
+) -> None:
+    db.add(
+        ReportAuditEvent(
+            report_id=report.id,
+            action=action,
+            actor=actor,
+            correlation_id=report.evidence_correlation_id,
+            detail=detail or {},
+        )
     )
 
 
@@ -227,6 +247,13 @@ async def upload_report(
     if report.id is None:
         raise HTTPException(status_code=500, detail="报告写入数据库失败")
     _persist_report_files(report.id, accepted_files, db)
+    _audit(
+        db,
+        report,
+        "uploaded",
+        {"file_count": len(accepted_files)},
+        actor=_owner_id(request),
+    )
 
     db.commit()
     db.refresh(report)
@@ -247,39 +274,99 @@ def _parse_report(
 
         def parse_file(source):
             file_index, filename, _, content = source
-            parsed = vision.parse(content, filename)
-            if not parsed.success:
-                raise ValueError(parsed.error or "未提取到可确认的指标")
-            return file_index, parsed
+            try:
+                parsed = vision.parse(content, filename)
+            except Exception as exc:
+                parsed = ParsedReport(
+                    report_type="unknown",
+                    raw_text="",
+                    metrics=[],
+                    page_count=0,
+                    success=False,
+                    error=str(exc),
+                )
+            return (
+                file_index,
+                filename,
+                parsed,
+                parsed.error or (None if parsed.success else "未提取到可确认的指标"),
+            )
 
         workers = max(1, min(get_settings().REPORT_PARSE_WORKERS, len(accepted_files)))
         with ThreadPoolExecutor(max_workers=workers) as executor:
             parsed_reports = list(executor.map(parse_file, accepted_files))
+        successful_reports = [item for item in parsed_reports if item[2].success]
         parsed_metrics = [
             item.model_copy(
                 update={
                     "source_file_index": file_index,
                     "metric_code": metric_code_for_name(item.metric_name),
+                    "source_id": f"file-{file_index}/{item.source_id or ('p' + str(item.page_number or 1) + '-m' + str(metric_index))}",
                 }
             )
-            for file_index, parsed in parsed_reports
-            for item in parsed.metrics
+            for file_index, _, parsed, error in successful_reports
+            for metric_index, item in enumerate(parsed.metrics, start=1)
         ]
         if not parsed_metrics:
-            raise ValueError("未提取到可确认的指标")
+            errors = "; ".join(
+                f"{filename}: {error}"
+                for _, filename, _, error in parsed_reports
+                if error
+            )
+            raise ValueError(errors or "未提取到可确认的指标")
 
         with factory() as db:
             report = db.get(ReportModel, report_id)
             if report is None:
                 return
             report.parsed_content = {
-                "report_type": parsed_reports[0][1].report_type,
+                "report_type": successful_reports[0][2].report_type,
                 "raw_text": "\n".join(
-                    parsed.raw_text for _, parsed in parsed_reports if parsed.raw_text
+                    parsed.raw_text
+                    for _, _, parsed, _ in parsed_reports
+                    if parsed.raw_text
                 ),
-                "page_count": sum(parsed.page_count for _, parsed in parsed_reports),
+                "page_count": sum(
+                    parsed.page_count for _, _, parsed, _ in parsed_reports
+                ),
                 "metric_count": len(parsed_metrics),
+                "file_results": [
+                    {
+                        "file_index": file_index,
+                        "filename": filename,
+                        "status": "parsed" if error is None else "failed",
+                        **({"error": error} if error else {}),
+                    }
+                    for file_index, filename, _, error in parsed_reports
+                ],
             }
+            warnings = [
+                f"{filename}: {error}"
+                for _, filename, _, error in parsed_reports
+                if error
+            ]
+            if warnings:
+                report.parsed_content["warnings"] = warnings
+            first_trace = next(
+                (parsed for _, _, parsed, _ in parsed_reports if parsed.run_id),
+                parsed_reports[0][2],
+            )
+            report.extraction_provider = first_trace.provider
+            report.extraction_model = first_trace.model
+            report.extraction_prompt_version = first_trace.prompt_version
+            report.extraction_prompt_hash = first_trace.prompt_hash
+            report.extraction_run_id = first_trace.run_id
+            provider_runs = [
+                run_id
+                for _, _, parsed, _ in parsed_reports
+                    for run_id in (
+                        parsed.provider_run_ids
+                        or ((parsed.provider_run_id,) if parsed.provider_run_id else ())
+                    )
+                    if run_id
+                ]
+            report.provider_run_id = provider_runs[0] if provider_runs else None
+            report.provider_run_ids = json.dumps(provider_runs, ensure_ascii=False)
             report.status = "pending_confirmation"
             for item in parsed_metrics:
                 db.add(
@@ -301,8 +388,24 @@ def _parse_report(
                         confirmation_status="pending",
                     )
                 )
+            _audit(
+                db,
+                report,
+                "extraction_completed",
+                {
+                    "metric_count": len(parsed_metrics),
+                    "provider": report.extraction_provider,
+                    "model": report.extraction_model,
+                    "prompt_version": report.extraction_prompt_version,
+                    "prompt_hash": report.extraction_prompt_hash,
+                    "run_id": report.extraction_run_id,
+                    "provider_run_ids": provider_runs,
+                    "warnings": warnings,
+                },
+                actor="ai:report-extractor",
+            )
             db.commit()
-    except Exception:
+    except Exception as exc:
         logger.exception("report parsing failed", extra={"report_id": report_id})
         with factory() as db:
             report = db.get(ReportModel, report_id)
@@ -313,6 +416,13 @@ def _parse_report(
                 **(report.parsed_content or {}),
                 "error": "报告智能解读失败，请重新上传或稍后重试。",
             }
+            _audit(
+                db,
+                report,
+                "extraction_failed",
+                {"error_type": type(exc).__name__},
+                actor="ai:report-extractor",
+            )
             db.commit()
 
 
@@ -346,7 +456,33 @@ def _report_response(
         subject_consistency=report.subject_consistency,
         evidence_result=report.evidence_result,
         processing_error=(report.parsed_content or {}).get("error"),
+        processing_warnings=list((report.parsed_content or {}).get("warnings") or []),
         access_token=access_token,
+        extraction_trace={
+            key: getattr(report, key)
+            for key in (
+                "extraction_provider",
+                "extraction_model",
+                "extraction_prompt_version",
+                "extraction_prompt_hash",
+                "extraction_run_id",
+                "provider_run_id",
+                "provider_run_ids",
+                "evidence_correlation_id",
+            )
+            if getattr(report, key, None)
+        }
+        or None,
+        audit_events=[
+            {
+                "action": event.action,
+                "actor": event.actor,
+                "correlation_id": event.correlation_id,
+                "detail": event.detail or {},
+                "created_at": event.created_at,
+            }
+            for event in sorted(report.audit_events, key=lambda item: item.id)
+        ],
     )
 
 
@@ -395,6 +531,9 @@ async def confirm_report(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     canonical_codes = {item["code"] for item in metric_catalog}
     now = datetime.now()
+    corrected_ids: list[int] = []
+    confirmed_ids: list[int] = []
+    excluded_ids: list[int] = []
     for metric in metrics:
         item = supplied.get(metric.id)
         if item is None or item.decision == "excluded":
@@ -402,7 +541,9 @@ async def confirm_report(
             metric.confirmed_value = None
             metric.confirmed_unit = None
             metric.confirmed_reference_range = None
+            metric.confirmed_evidence_text = None
             metric.confirmed_at = now
+            excluded_ids.append(metric.id)
             continue
         requested_code = (item.metric_code or metric.metric_code or "").strip()
         code = (
@@ -441,7 +582,11 @@ async def confirm_report(
                 if item.decision == "corrected" and item.reference_range is not None
                 else metric.reference_range
             )
+            metric.confirmed_evidence_text = item.evidence_text or metric.evidence_text
             metric.confirmed_at = now
+            (corrected_ids if item.decision == "corrected" else confirmed_ids).append(
+                metric.id
+            )
             continue
         metric.metric_code = code
         metric.confirmation_status = item.decision
@@ -456,12 +601,28 @@ async def confirm_report(
             if item.decision == "corrected" and item.reference_range is not None
             else metric.reference_range
         )
+        metric.confirmed_evidence_text = item.evidence_text or metric.evidence_text
         metric.confirmed_at = now
+        (corrected_ids if item.decision == "corrected" else confirmed_ids).append(
+            metric.id
+        )
     report.status = "confirmed"
     report.subject_consistency = (
         confirmation.subject_consistency or report.subject_consistency or "same"
     )
     report.evidence_result = None
+    _audit(
+        db,
+        report,
+        "confirmed",
+        {
+            "confirmed_metric_ids": confirmed_ids,
+            "corrected_metric_ids": corrected_ids,
+            "excluded_metric_ids": excluded_ids,
+            "subject_consistency": report.subject_consistency,
+        },
+        actor=_owner_id(request),
+    )
     db.commit()
     try:
         return await _assess_report(report, db)
@@ -503,6 +664,19 @@ async def _assess_report(report: ReportModel, db: Session) -> MedicalReportRespo
             }
         )
     report.evidence_result = typed_result.model_dump(mode="json")
+    report.evidence_correlation_id = typed_result.correlation_id
+    _audit(
+        db,
+        report,
+        "assessed",
+        {
+            "finding_count": len(typed_result.findings),
+            "unmatched_count": len(typed_result.unmatched),
+            "skipped_count": len(typed_result.skipped),
+            "correlation_id": typed_result.correlation_id,
+        },
+        actor="system:evidence-service",
+    )
     report.status = "assessed"
     db.commit()
     db.refresh(report)

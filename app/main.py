@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import get_settings
 from app.data.mysql_client import get_mysql_client
@@ -96,21 +97,30 @@ async def readiness_check():
         with database.engine.connect() as connection:
             connection.execute(text("SELECT 1"))
         db_ok = True
-    except Exception:
+    except SQLAlchemyError:
         db_ok = False
 
     evidence_configured = bool(
         settings.GENESIS_EVIDENCE_API_URL.strip()
         and len(settings.GENESIS_EVIDENCE_API_KEY.strip()) >= 24
     )
+    provider_configured = bool(
+        (settings.VLLM_API_KEY.strip() or settings.OPENAI_API_KEY.strip())
+        and settings.llm_api_base.strip()
+        and settings.VLLM_MODEL.strip()
+    )
     return {
-        "status": "ready" if db_ok and evidence_configured else "degraded",
+        "status": "ready"
+        if db_ok and evidence_configured and provider_configured
+        else "degraded",
         "database": "ok" if db_ok else "unavailable",
         "evidence_service": "configured" if evidence_configured else "unconfigured",
+        "report_provider": "configured" if provider_configured else "unconfigured",
+        "report_model": settings.VLLM_MODEL if provider_configured else "unconfigured",
     }
 
 
-from app.api import report  # noqa: E402
+from app.api import report
 
 app.include_router(report.router, prefix="/api/health", tags=["Report"])
 

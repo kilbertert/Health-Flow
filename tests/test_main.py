@@ -2,6 +2,7 @@
 
 import pytest
 from fastapi.testclient import TestClient
+
 from app.config import get_settings
 from app.main import _valid_basic_auth, app
 
@@ -35,7 +36,7 @@ def test_root(client):
 def test_basic_auth_validation():
     import base64
 
-    valid = base64.b64encode("reviewer:secret".encode()).decode()
+    valid = base64.b64encode(b"reviewer:secret").decode()
     assert _valid_basic_auth(f"Basic {valid}", "reviewer", "secret") is True
     assert _valid_basic_auth(f"Basic {valid}", "reviewer", "wrong") is False
     assert _valid_basic_auth("Bearer token", "reviewer", "secret") is False
@@ -63,18 +64,35 @@ def test_ready_requires_a_full_evidence_api_key(client):
     settings = get_settings()
     previous_url = settings.GENESIS_EVIDENCE_API_URL
     previous_key = settings.GENESIS_EVIDENCE_API_KEY
+    previous_vllm_key = settings.VLLM_API_KEY
+    previous_openai_key = settings.OPENAI_API_KEY
+    previous_model = settings.VLLM_MODEL
     settings.GENESIS_EVIDENCE_API_URL = "http://127.0.0.1:8125/api/evidence/matches"
+    settings.VLLM_API_KEY = ""
+    settings.OPENAI_API_KEY = ""
+    settings.VLLM_MODEL = "gpt-5.6-sol"
     try:
         settings.GENESIS_EVIDENCE_API_KEY = "short"
         degraded = client.get("/ready")
         assert degraded.status_code == 200
         assert degraded.json()["status"] == "degraded"
         assert degraded.json()["evidence_service"] == "unconfigured"
+        assert degraded.json()["report_provider"] == "unconfigured"
 
         settings.GENESIS_EVIDENCE_API_KEY = "a" * 24
+        still_degraded = client.get("/ready")
+        assert still_degraded.status_code == 200
+        assert still_degraded.json()["status"] == "degraded"
+        assert still_degraded.json()["evidence_service"] == "configured"
+
+        settings.OPENAI_API_KEY = "provider-key"
         ready = client.get("/ready")
         assert ready.status_code == 200
-        assert ready.json()["evidence_service"] == "configured"
+        assert ready.json()["status"] == "ready"
+        assert ready.json()["report_provider"] == "configured"
     finally:
         settings.GENESIS_EVIDENCE_API_URL = previous_url
         settings.GENESIS_EVIDENCE_API_KEY = previous_key
+        settings.VLLM_API_KEY = previous_vllm_key
+        settings.OPENAI_API_KEY = previous_openai_key
+        settings.VLLM_MODEL = previous_model

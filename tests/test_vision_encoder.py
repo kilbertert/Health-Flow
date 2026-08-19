@@ -1,5 +1,7 @@
 """Tests for VisionEncoder Service."""
 
+import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -158,6 +160,56 @@ def test_text_metric_provider_error_is_not_hidden():
 
     with pytest.raises(RuntimeError, match="provider unavailable"):
         service._extract_metrics_from_text("空腹血糖 6.5", page_number=1)
+
+
+def test_text_pdf_keeps_successful_pages_when_one_provider_call_fails(monkeypatch):
+    from app.schema.report import MetricRecord
+    from app.service.vision_encoder import VisionEncoderService
+
+    class Page:
+        def __init__(self, text):
+            self.text = text
+
+        def extract_text(self):
+            return self.text
+
+        def extract_tables(self):
+            return []
+
+    class Document:
+        def __init__(self):
+            self.pages = [Page("page one"), Page("page two")]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setitem(sys.modules, "pdfplumber", SimpleNamespace(open=lambda _: Document()))
+    service = VisionEncoderService()
+
+    def extract(page):
+        page_number, _ = page
+        if page_number == 2:
+            raise RuntimeError("page provider timeout")
+        return [
+            MetricRecord(
+                metric_name="空腹血糖",
+                metric_value="6.5",
+                unit="mmol/L",
+                reference_range="3.9-6.1",
+                page_number=page_number,
+                evidence_text="空腹血糖 6.5 mmol/L 3.9-6.1",
+            )
+        ], "provider-1"
+
+    service._extract_text_page = extract
+    result = service.parse_text_pdf(b"pdf")
+
+    assert result.success is True
+    assert [metric.page_number for metric in result.metrics] == [1]
+    assert result.error == "page 2: page provider timeout"
 
 
 def test_render_pdf_to_images_fallback():

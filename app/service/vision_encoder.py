@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
+import uuid
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, List, Optional, Tuple
 
 from app.config import get_settings
@@ -23,6 +25,36 @@ class ParsedReport:
     page_count: int
     success: bool
     error: Optional[str] = None
+    provider: str = ""
+    model: str = ""
+    run_id: str = ""
+    prompt_version: str = ""
+    prompt_hash: str = ""
+    provider_run_id: str = ""
+    provider_run_ids: tuple[str, ...] = ()
+
+
+EXTRACTION_PROMPT_VERSION = "health-flow-report-extraction-v2"
+IMAGE_EXTRACTION_PROMPT = """
+逐行转录页面中有名称和数值的观测项，输出严格 JSON，不要输出 Markdown，不解释或推断。
+每个 metric 必须包含 metric_name、metric_value；如果能定位，请返回页面像素坐标 bbox
+[x1,y1,x2,y2]、归一化坐标 bbox_normalized [0,0,1000,1000]、evidence_text。
+JSON 格式：
+{"text_summary":"页面摘要","metrics":[
+ {"metric_name":"空腹血糖","metric_value":"6.5","unit":"mmol/L",
+  "reference_range":"3.9-6.1","abnormal_flag":"H","bbox":[0,0,0,0],
+  "bbox_normalized":[0,0,0,0],"evidence_text":"原文片段"}
+]}
+无法确认的坐标返回 null，禁止猜测坐标。
+""".strip()
+TEXT_EXTRACTION_PROMPT = (
+    "从以下文本逐行转录有名称和数值的观测项，只输出 JSON，不解释或推断："
+    '{"metrics":[{"metric_name":"","metric_value":"","unit":"",'
+    '"reference_range":"","abnormal_flag":"","evidence_text":""}]}'
+)
+PROMPT_HASH = hashlib.sha256(
+    f"{EXTRACTION_PROMPT_VERSION}\n{IMAGE_EXTRACTION_PROMPT}\n{TEXT_EXTRACTION_PROMPT}".encode()
+).hexdigest()
 
 
 class VisionEncoderService:
@@ -51,9 +83,7 @@ class VisionEncoderService:
             with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                 page_count = len(pdf.pages)
                 text_pages = sum(
-                    1
-                    for page in pdf.pages
-                    if (page.extract_text() or "").strip()
+                    1 for page in pdf.pages if (page.extract_text() or "").strip()
                 )
                 return ("text_pdf" if text_pages >= 1 else "scanned_pdf", page_count)
         except ImportError:
@@ -85,13 +115,26 @@ class VisionEncoderService:
                 for page_number, page_text in enumerate(pages, start=1)
                 if page_text.strip()
             ]
-            workers = max(1, min(get_settings().REPORT_PARSE_WORKERS, len(indexed_pages)))
+            workers = max(
+                1, min(get_settings().REPORT_PARSE_WORKERS, len(indexed_pages))
+            )
+            page_results: list[tuple[list[MetricRecord], str]] = []
+            errors: list[str] = []
             with ThreadPoolExecutor(max_workers=workers) as executor:
-                page_metrics = executor.map(
-                    lambda page: self._extract_metrics_from_text(page[1], page[0]),
-                    indexed_pages,
-                )
-                metrics = [metric for group in page_metrics for metric in group]
+                futures = [
+                    (
+                        page_number,
+                        executor.submit(self._extract_text_page, (page_number, page_text)),
+                    )
+                    for page_number, page_text in indexed_pages
+                ]
+                for page_number, future in futures:
+                    try:
+                        page_results.append(future.result())
+                    except Exception as exc:
+                        errors.append(f"page {page_number}: {exc}")
+            metrics = [metric for group, _ in page_results for metric in group]
+            provider_run_ids = tuple(run_id for _, run_id in page_results if run_id)
             unique_metrics = []
             seen = set()
             for metric in metrics:
@@ -105,76 +148,140 @@ class VisionEncoderService:
                 if key not in seen:
                     seen.add(key)
                     unique_metrics.append(metric)
-            return ParsedReport(
-                report_type="text_pdf",
-                raw_text=raw_text,
-                metrics=unique_metrics,
-                page_count=page_count,
-                success=bool(unique_metrics),
-                error=None if unique_metrics else "未提取到可确认的医学指标",
+            parsed = self._with_trace(
+                ParsedReport(
+                    report_type="text_pdf",
+                    raw_text=raw_text,
+                    metrics=unique_metrics,
+                    page_count=page_count,
+                    success=bool(unique_metrics),
+                    error=(
+                        "; ".join(errors)
+                        if errors
+                        else None if unique_metrics else "未提取到可确认的医学指标"
+                    ),
+                ),
+                self.llm_client,
+            )
+            return replace(
+                parsed,
+                provider_run_id=provider_run_ids[0] if provider_run_ids else "",
+                provider_run_ids=provider_run_ids,
             )
         except Exception as exc:
-            return ParsedReport("text_pdf", "", [], 0, False, str(exc))
+            return self._with_trace(
+                ParsedReport("text_pdf", "", [], 0, False, str(exc)), self.llm_client
+            )
 
     def parse_scanned_pdf(self, pdf_bytes: bytes) -> ParsedReport:
         images = self._render_pdf_to_images(pdf_bytes)
         if not images:
-            return ParsedReport("scanned_pdf", "", [], 0, False, "无法渲染 PDF 页面，请安装 PyMuPDF 和 Pillow")
+            return self._with_trace(
+                ParsedReport(
+                    "scanned_pdf",
+                    "",
+                    [],
+                    0,
+                    False,
+                    "无法渲染 PDF 页面，请安装 PyMuPDF 和 Pillow",
+                ),
+                self.vlm_client,
+            )
 
         metrics: list[MetricRecord] = []
         texts: list[str] = []
         errors: list[str] = []
+        provider_run_ids: list[str] = []
         for page_number, image_bytes in enumerate(images, start=1):
             parsed = self._parse_image_with_vlm(image_bytes, "image/png", page_number)
             texts.append(parsed[0])
             metrics.extend(parsed[1])
+            run_id = str(getattr(self.vlm_client, "last_run_id", "") or "")
+            if run_id:
+                provider_run_ids.append(run_id)
             if parsed[2]:
                 errors.append(f"page {page_number}: {parsed[2]}")
 
-        return ParsedReport(
-            report_type="scanned_pdf",
-            raw_text="\n\n".join(texts),
-            metrics=metrics,
-            page_count=len(images),
-            success=bool(texts or metrics) and not errors,
-            error="; ".join(errors) if errors else None,
+        parsed = self._with_trace(
+            ParsedReport(
+                report_type="scanned_pdf",
+                raw_text="\n\n".join(texts),
+                metrics=metrics,
+                page_count=len(images),
+                success=bool(texts or metrics),
+                error="; ".join(errors) if errors else None,
+            ),
+            self.vlm_client,
+        )
+        return replace(
+            parsed,
+            provider_run_id=provider_run_ids[0] if provider_run_ids else "",
+            provider_run_ids=tuple(provider_run_ids),
         )
 
-    def parse_image_report(self, image_bytes: bytes, mime_type: str = "image/png") -> ParsedReport:
+    def parse_image_report(
+        self, image_bytes: bytes, mime_type: str = "image/png"
+    ) -> ParsedReport:
         text, metrics, error = self._parse_image_with_vlm(image_bytes, mime_type, 1)
-        return ParsedReport("image", text, metrics, 1, error is None, error)
+        parsed = self._with_trace(
+            ParsedReport("image", text, metrics, 1, error is None, error),
+            self.vlm_client,
+        )
+        return replace(
+            parsed,
+            provider_run_id=str(getattr(self.vlm_client, "last_run_id", "") or ""),
+            provider_run_ids=(str(getattr(self.vlm_client, "last_run_id", "") or ""),)
+            if getattr(self.vlm_client, "last_run_id", "")
+            else (),
+        )
+
+    @staticmethod
+    def _with_trace(parsed: ParsedReport, client: Any) -> ParsedReport:
+        settings = get_settings()
+        provider = (
+            "openai-compatible-responses"
+            if getattr(client, "use_responses_api", False)
+            else "openai-compatible-chat"
+        )
+        return replace(
+            parsed,
+            provider=provider,
+            model=settings.VLLM_MODEL,
+            run_id=str(uuid.uuid4()),
+            prompt_version=EXTRACTION_PROMPT_VERSION,
+            prompt_hash=PROMPT_HASH,
+            provider_run_id=str(getattr(client, "last_run_id", "") or ""),
+        )
 
     def parse(self, content: bytes, filename: str) -> ParsedReport:
         lower = filename.lower()
         if lower.endswith(".pdf"):
             pdf_type, _ = self.detect_pdf_type(content)
-            return self.parse_text_pdf(content) if pdf_type == "text_pdf" else self.parse_scanned_pdf(content)
+            return (
+                self.parse_text_pdf(content)
+                if pdf_type == "text_pdf"
+                else self.parse_scanned_pdf(content)
+            )
         if lower.endswith((".jpg", ".jpeg", ".png", ".gif", ".bmp")):
             return self.parse_image_report(content, self._get_mime_type(lower))
-        return ParsedReport("unknown", "", [], 0, False, f"不支持的文件类型：{filename}")
+        return ParsedReport(
+            "unknown", "", [], 0, False, f"不支持的文件类型：{filename}"
+        )
 
     def _parse_image_with_vlm(
         self, image_bytes: bytes, mime_type: str, page_number: int
     ) -> tuple[str, list[MetricRecord], Optional[str]]:
         image_base64 = base64.b64encode(image_bytes).decode("ascii")
         width, height = self._image_size(image_bytes)
-        prompt = """
-逐行转录页面中有名称和数值的观测项，输出严格 JSON，不要输出 Markdown，不解释或推断。
-每个 metric 必须包含 metric_name、metric_value；如果能定位，请返回页面像素坐标 bbox
-[x1,y1,x2,y2]、归一化坐标 bbox_normalized [0,0,1000,1000]、evidence_text。
-JSON 格式：
-{"text_summary":"页面摘要","metrics":[
- {"metric_name":"空腹血糖","metric_value":"6.5","unit":"mmol/L",
-  "reference_range":"3.9-6.1","abnormal_flag":"H","bbox":[0,0,0,0],
-  "bbox_normalized":[0,0,0,0],"evidence_text":"原文片段"}
-]}
-无法确认的坐标返回 null，禁止猜测坐标。
-""".strip()
+        prompt = IMAGE_EXTRACTION_PROMPT
         messages = [
             {
                 "role": "user",
                 "content": [
-                    {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_base64}"}},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime_type};base64,{image_base64}"},
+                    },
                     {"type": "text", "text": prompt},
                 ],
             }
@@ -186,7 +293,11 @@ JSON 格式：
                 self._metric_from_payload(item, page_number, width, height, index)
                 for index, item in enumerate(payload.get("metrics", []), start=1)
             ]
-            return str(payload.get("text_summary", "")), [item for item in metrics if item], None
+            return (
+                str(payload.get("text_summary", "")),
+                [item for item in metrics if item],
+                None,
+            )
         except Exception as exc:
             return "", [], str(exc)
 
@@ -257,7 +368,12 @@ JSON 格式：
     @staticmethod
     def denormalize_bbox(bbox: list[float], width: int, height: int) -> list[float]:
         x1, y1, x2, y2 = bbox
-        return [x1 / 1000 * width, y1 / 1000 * height, x2 / 1000 * width, y2 / 1000 * height]
+        return [
+            x1 / 1000 * width,
+            y1 / 1000 * height,
+            x2 / 1000 * width,
+            y2 / 1000 * height,
+        ]
 
     @staticmethod
     def _parse_json_response(response: Any) -> dict[str, Any]:
@@ -288,7 +404,9 @@ JSON 格式：
 
             document = fitz.open(stream=pdf_bytes, filetype="pdf")
             matrix = fitz.Matrix(dpi / 72, dpi / 72)
-            images = [page.get_pixmap(matrix=matrix).tobytes("png") for page in document]
+            images = [
+                page.get_pixmap(matrix=matrix).tobytes("png") for page in document
+            ]
             document.close()
             return images
         except Exception:
@@ -302,17 +420,31 @@ JSON 格式：
             ".png": "image/png",
             ".gif": "image/gif",
             ".bmp": "image/bmp",
-        }.get(next((ext for ext in (".jpg", ".jpeg", ".png", ".gif", ".bmp") if filename.endswith(ext)), ".png"), "image/png")
-
-    def _extract_metrics_from_text(self, text: str, page_number: int = 1) -> List[MetricRecord]:
-        if not text.strip():
-            return []
-        prompt = (
-            "从以下文本逐行转录有名称和数值的观测项，只输出 JSON，不解释或推断："
-            '{"metrics":[{"metric_name":"","metric_value":"","unit":"",'
-            '"reference_range":"","abnormal_flag":"","evidence_text":""}]}\n'
-            f"文本：{text[:12000]}"
+        }.get(
+            next(
+                (
+                    ext
+                    for ext in (".jpg", ".jpeg", ".png", ".gif", ".bmp")
+                    if filename.endswith(ext)
+                ),
+                ".png",
+            ),
+            "image/png",
         )
+
+    def _extract_metrics_from_text(
+        self, text: str, page_number: int = 1
+    ) -> List[MetricRecord]:
+        metrics, _ = self._extract_text_page((page_number, text))
+        return metrics
+
+    def _extract_text_page(
+        self, page: tuple[int, str]
+    ) -> tuple[List[MetricRecord], str]:
+        page_number, text = page
+        if not text.strip():
+            return [], ""
+        prompt = f"{TEXT_EXTRACTION_PROMPT}\n文本：{text[:12000]}"
         result = self.llm_client.chat_with_json(
             messages=[
                 {
@@ -330,7 +462,7 @@ JSON 格式：
             metric = self._metric_from_payload(item, page_number, None, None, index)
             if metric:
                 records.append(metric)
-        return records
+        return records, str(getattr(self.llm_client, "last_run_id", "") or "")
 
 
 _vision_encoder_service: VisionEncoderService | None = None
