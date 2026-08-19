@@ -142,7 +142,7 @@ class PatientReply(StrictModel):
 
 
 class EvidenceMatchResponse(StrictModel):
-    schema_version: Literal["1"]
+    schema_version: Literal["2"]
     sorting_version: Literal["published-card-reference-range-v1"]
     correlation_id: str
     findings: list[Finding]

@@ -24,7 +24,7 @@ from app.service.vision_encoder import ParsedReport
 
 def _evidence_result(*, findings=None, unmatched=None, skipped=None):
     return {
-        "schema_version": "1",
+        "schema_version": "2",
         "sorting_version": "published-card-reference-range-v1",
         "correlation_id": "00000000-0000-0000-0000-000000000001",
         "findings": findings or [],

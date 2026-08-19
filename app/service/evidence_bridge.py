@@ -202,7 +202,7 @@ async def match_published_evidence(
 ) -> dict[str, object]:
     settings = settings or get_settings()
     headers = _service_headers(settings, correlate=True)
-    payload = {"schema_version": "1", "observations": observations}
+    payload = {"schema_version": "2", "observations": observations}
     try:
         async with httpx.AsyncClient(
             timeout=settings.GENESIS_EVIDENCE_TIMEOUT_SECONDS
