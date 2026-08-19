@@ -24,17 +24,35 @@ class MedicalReport(Base):
     evidence_result = Column(JSON)
     access_token_hash = Column(String(64))
     owner_id = Column(String(128), index=True)
+    extraction_provider = Column(String(128))
+    extraction_model = Column(String(128))
+    extraction_prompt_version = Column(String(128))
+    extraction_prompt_hash = Column(String(128))
+    extraction_run_id = Column(String(128))
+    provider_run_id = Column(String(256))
+    provider_run_ids = Column(Text)
+    evidence_correlation_id = Column(String(64))
     created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
-    metrics = relationship("MetricRecord", back_populates="report", cascade="all, delete-orphan")
-    files = relationship("ReportFile", back_populates="report", cascade="all, delete-orphan")
+    metrics = relationship(
+        "MetricRecord", back_populates="report", cascade="all, delete-orphan"
+    )
+    files = relationship(
+        "ReportFile", back_populates="report", cascade="all, delete-orphan"
+    )
+    audit_events = relationship(
+        "ReportAuditEvent", back_populates="report", cascade="all, delete-orphan"
+    )
 
 
 class ReportFile(Base):
     __tablename__ = "report_files"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    report_id = Column(Integer, ForeignKey("medical_reports.id"), nullable=False, index=True)
+    report_id = Column(
+        Integer, ForeignKey("medical_reports.id"), nullable=False, index=True
+    )
     file_index = Column(Integer, nullable=False)
     original_filename = Column(String(255), nullable=False)
     media_type = Column(String(128), nullable=False)
@@ -67,9 +85,26 @@ class MetricRecord(Base):
     confirmed_value = Column(String(64))
     confirmed_unit = Column(String(32))
     confirmed_reference_range = Column(String(64))
+    confirmed_evidence_text = Column(Text)
     confirmed_at = Column(DateTime)
 
     report = relationship("MedicalReport", back_populates="metrics")
+
+
+class ReportAuditEvent(Base):
+    __tablename__ = "report_audit_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    report_id = Column(
+        Integer, ForeignKey("medical_reports.id"), nullable=False, index=True
+    )
+    action = Column(String(64), nullable=False)
+    actor = Column(String(128), nullable=False)
+    correlation_id = Column(String(64))
+    detail = Column(JSON)
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
+
+    report = relationship("MedicalReport", back_populates="audit_events")
 
 
 class ChatSession(Base):
@@ -82,8 +117,12 @@ class ChatSession(Base):
     conversation_summary = Column(Text)
     created_at = Column(DateTime, default=datetime.now)
 
-    messages = relationship("ChatMessage", back_populates="session", cascade="all, delete-orphan")
-    routing_logs = relationship("RoutingLog", back_populates="session", cascade="all, delete-orphan")
+    messages = relationship(
+        "ChatMessage", back_populates="session", cascade="all, delete-orphan"
+    )
+    routing_logs = relationship(
+        "RoutingLog", back_populates="session", cascade="all, delete-orphan"
+    )
 
 
 class ChatMessage(Base):

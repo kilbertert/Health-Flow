@@ -2,6 +2,7 @@
 
 import asyncio
 import io
+import json
 from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -145,6 +146,30 @@ def test_legacy_report_without_token_cannot_cross_the_owner_boundary():
     session.commit()
     with pytest.raises(HTTPException) as error:
         _authorized_report(session, report.id, "any-token", owner_id="owner")
+    assert error.value.status_code == 404
+    session.close()
+
+
+def test_legacy_report_with_a_valid_token_but_no_owner_is_sealed():
+    from app.api.report import _authorized_report, _token_hash
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    report = ReportModel(
+        patient_id="P-legacy-token",
+        report_type="体检",
+        status="legacy_unclaimed",
+        access_token_hash=_token_hash("legacy-token"),
+    )
+    session.add(report)
+    session.commit()
+    with pytest.raises(HTTPException) as error:
+        _authorized_report(session, report.id, "legacy-token", owner_id="owner")
     assert error.value.status_code == 404
     session.close()
 
@@ -325,6 +350,7 @@ def test_multi_file_confirmation_matches_published_card(tmp_path):
                         "card": {
                             "id": "card-1",
                             "condition_code": "COND_PREDIABETES",
+                            "scope_key": "metric:custom_glucose",
                             "version": "1.0.0",
                             "status": "published",
                             "grade": "moderate",
@@ -402,3 +428,82 @@ def test_multi_file_confirmation_matches_published_card(tmp_path):
             )
 
     assert sorted(vision.calls) == ["first.png", "second.png"]
+
+
+def test_report_parse_keeps_successful_files_when_one_file_fails():
+    from app.api.report import _parse_report
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine)
+    session = session_factory()
+    report = ReportModel(
+        patient_id="P-partial",
+        report_type="体检",
+        status="processing",
+        subject_consistency="uncertain",
+    )
+    session.add(report)
+    session.commit()
+    report_id = report.id
+    session.close()
+
+    class PartialVision:
+        def parse(self, content: bytes, filename: str) -> ParsedReport:
+            if filename == "bad.png":
+                return ParsedReport(
+                    report_type="image",
+                    raw_text="",
+                    metrics=[],
+                    page_count=1,
+                    success=False,
+                    error="provider timeout",
+                    provider_run_ids=("provider-bad",),
+                )
+            return ParsedReport(
+                report_type="image",
+                raw_text="空腹血糖 6.8 mmol/L",
+                metrics=[
+                    MetricRecord(
+                        metric_name="空腹血糖",
+                        metric_value="6.8",
+                        unit="mmol/L",
+                        reference_range="3.9-6.1",
+                        page_number=1,
+                        evidence_text="空腹血糖 6.8 mmol/L 3.9-6.1",
+                    )
+                ],
+                page_count=1,
+                success=True,
+                provider_run_ids=("provider-good",),
+            )
+
+    accepted_files = [
+        (1, "good.png", "image/png", b"good"),
+        (2, "bad.png", "image/png", b"bad"),
+    ]
+    with (
+        patch(
+            "app.api.report.get_vision_encoder_service", return_value=PartialVision()
+        ),
+        patch(
+            "app.api.report.get_settings",
+            return_value=SimpleNamespace(REPORT_PARSE_WORKERS=2),
+        ),
+    ):
+        _parse_report(report_id, accepted_files, session_factory)
+
+    session = session_factory()
+    saved = session.get(ReportModel, report_id)
+    assert saved is not None
+    assert saved.status == "pending_confirmation"
+    assert len(saved.metrics) == 1
+    assert saved.metrics[0].source_file_index == 1
+    assert saved.parsed_content["warnings"] == ["bad.png: provider timeout"]
+    assert saved.provider_run_id == "provider-good"
+    assert json.loads(saved.provider_run_ids) == ["provider-good", "provider-bad"]
+    session.close()

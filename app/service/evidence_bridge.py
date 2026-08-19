@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import unicodedata
 import uuid
+import math
 from collections.abc import Iterable
 from typing import Any
 
@@ -114,19 +115,17 @@ def build_observations_with_skipped(
         value_text = metric.confirmed_value or metric.metric_value
         unit = metric.confirmed_unit or metric.unit
         code = metric.metric_code or metric_code_for_name(metric.metric_name or "")
-        if (
-            not code
-            or not unit
-            or not metric.evidence_text
-            or metric.page_number is None
-        ):
+        evidence = (
+            getattr(metric, "confirmed_evidence_text", None) or metric.evidence_text
+        )
+        if not code or not unit or not evidence or metric.page_number is None:
             reason = (
                 "unknown_metric_code"
                 if not code
                 else "missing_unit"
                 if not unit
                 else "missing_source_evidence"
-                if not metric.evidence_text
+                if not evidence
                 else "missing_source_page"
             )
             skipped.append(
@@ -145,10 +144,38 @@ def build_observations_with_skipped(
                 }
             )
             continue
+        if not _evidence_contains_value(evidence, value):
+            skipped.append(
+                {
+                    "observation_id": f"health-flow-metric-{metric.id}",
+                    "reason": "missing_source_evidence",
+                }
+            )
+            continue
         reference = metric.confirmed_reference_range
         if reference is None:
             reference = metric.reference_range
         reference_low, reference_high = parse_reference_range(reference)
+        if reference_low is not None and not _evidence_contains_value(
+            evidence, reference_low
+        ):
+            skipped.append(
+                {
+                    "observation_id": f"health-flow-metric-{metric.id}",
+                    "reason": "missing_source_evidence",
+                }
+            )
+            continue
+        if reference_high is not None and not _evidence_contains_value(
+            evidence, reference_high
+        ):
+            skipped.append(
+                {
+                    "observation_id": f"health-flow-metric-{metric.id}",
+                    "reason": "missing_source_evidence",
+                }
+            )
+            continue
         observations.append(
             {
                 "observation_id": f"health-flow-metric-{metric.id}",
@@ -158,7 +185,7 @@ def build_observations_with_skipped(
                 "unit": unit,
                 "reference_low": reference_low,
                 "reference_high": reference_high,
-                "evidence_text": metric.evidence_text,
+                "evidence_text": evidence,
                 "source_file_index": metric.source_file_index,
                 "source_page": metric.page_number,
                 "source_id": metric.source_id,
@@ -255,3 +282,10 @@ def infer_abnormal_flag(value: str | None, reference: str | None) -> str | None:
 def _single_number(value: str | None) -> float | None:
     matches = _NUMBER_RE.findall(value or "")
     return float(matches[0]) if len(matches) == 1 else None
+
+
+def _evidence_contains_value(evidence: str, value: float) -> bool:
+    for match in _NUMBER_RE.findall(unicodedata.normalize("NFKC", evidence)):
+        if math.isclose(float(match), value, rel_tol=1e-9, abs_tol=1e-12):
+            return True
+    return False
