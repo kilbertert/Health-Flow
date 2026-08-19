@@ -391,6 +391,9 @@ def test_multi_file_confirmation_matches_published_card(tmp_path):
             uploaded = response.json()
             report_id = uploaded["id"]
             headers = {"X-Report-Token": uploaded["access_token"]}
+            from app.service.report_worker import run_next_job
+
+            assert run_next_job(fake_db.SessionLocal) is not None
             report = client.get(
                 f"/api/health/report/{report_id}", headers=headers
             ).json()
