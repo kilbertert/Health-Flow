@@ -44,7 +44,7 @@ app.add_middleware(
 
 def _valid_basic_auth(authorization: str, username: str, password: str) -> bool:
     if not password:
-        return True
+        return False
     scheme, _, token = authorization.partition(" ")
     if scheme.casefold() != "basic" or not token:
         return False
@@ -63,11 +63,24 @@ def _valid_basic_auth(authorization: str, username: str, password: str) -> bool:
 @app.middleware("http")
 async def basic_auth(request: Request, call_next):
     settings = get_settings()
-    request.state.owner_id = settings.HEALTHFLOW_BASIC_USER if settings.HEALTHFLOW_BASIC_PASSWORD else "anonymous"
-    if request.url.path not in {"/health", "/ready"} and not _valid_basic_auth(
-        request.headers.get("authorization", ""),
-        settings.HEALTHFLOW_BASIC_USER,
-        settings.HEALTHFLOW_BASIC_PASSWORD,
+    auth_configured = bool(
+        settings.HEALTHFLOW_BASIC_USER.strip()
+        and settings.HEALTHFLOW_BASIC_PASSWORD.strip()
+    )
+    request.state.owner_id = (
+        settings.HEALTHFLOW_BASIC_USER if auth_configured else "anonymous"
+    )
+    auth_required = (
+        settings.APP_ENV.casefold() in {"prod", "production"} or auth_configured
+    )
+    if (
+        request.url.path not in {"/health", "/ready"}
+        and auth_required
+        and not _valid_basic_auth(
+            request.headers.get("authorization", ""),
+            settings.HEALTHFLOW_BASIC_USER,
+            settings.HEALTHFLOW_BASIC_PASSWORD,
+        )
     ):
         return PlainTextResponse(
             "Unauthorized",
@@ -109,13 +122,22 @@ async def readiness_check():
         and settings.llm_api_base.strip()
         and settings.VLLM_MODEL.strip()
     )
+    owner_configured = bool(
+        settings.HEALTHFLOW_BASIC_USER.strip()
+        and settings.HEALTHFLOW_BASIC_PASSWORD.strip()
+    )
+    owner_required = settings.APP_ENV.casefold() in {"prod", "production"}
     return {
         "status": "ready"
-        if db_ok and evidence_configured and provider_configured
+        if db_ok
+        and evidence_configured
+        and provider_configured
+        and (owner_configured or not owner_required)
         else "degraded",
         "database": "ok" if db_ok else "unavailable",
         "evidence_service": "configured" if evidence_configured else "unconfigured",
         "report_provider": "configured" if provider_configured else "unconfigured",
+        "report_owner": "configured" if owner_configured else "unconfigured",
         "report_model": settings.VLLM_MODEL if provider_configured else "unconfigured",
     }
 

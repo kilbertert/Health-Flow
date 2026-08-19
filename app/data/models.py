@@ -2,9 +2,8 @@
 
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import JSON, Column, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import declarative_base, relationship
-
 
 Base = declarative_base()
 
@@ -43,6 +42,12 @@ class MedicalReport(Base):
     )
     audit_events = relationship(
         "ReportAuditEvent", back_populates="report", cascade="all, delete-orphan"
+    )
+    extraction_job = relationship(
+        "ReportExtractionJob",
+        back_populates="report",
+        uselist=False,
+        cascade="all, delete-orphan",
     )
 
 
@@ -105,6 +110,38 @@ class ReportAuditEvent(Base):
     created_at = Column(DateTime, default=datetime.now, nullable=False)
 
     report = relationship("MedicalReport", back_populates="audit_events")
+
+
+class ReportExtractionJob(Base):
+    __tablename__ = "report_extraction_jobs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    report_id = Column(
+        Integer,
+        ForeignKey("medical_reports.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    status = Column(String(16), nullable=False, default="queued", index=True)
+    attempt_count = Column(Integer, nullable=False, default=0)
+    error_class = Column(String(128))
+    created_at = Column(
+        DateTime,
+        default=datetime.now,
+        server_default=func.current_timestamp(),
+        nullable=False,
+    )
+    started_at = Column(DateTime)
+    updated_at = Column(
+        DateTime,
+        default=datetime.now,
+        onupdate=datetime.now,
+        server_default=func.current_timestamp(),
+        nullable=False,
+    )
+    completed_at = Column(DateTime)
+    report = relationship("MedicalReport", back_populates="extraction_job")
 
 
 class ChatSession(Base):

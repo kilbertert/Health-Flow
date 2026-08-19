@@ -10,8 +10,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.data.models import Base
+from app.data.models import Base, ReportExtractionJob
+from app.data.models import MetricRecord as MetricModel
 from app.schema.report import MetricRecord
+from app.service.report_worker import run_next_job
 
 
 class MockVisionService:
@@ -99,9 +101,12 @@ def test_upload_report_endpoint(client, tmp_path):
         assert data["department"] == "内分泌科"
         assert data["report_type"] == "体检"
         assert data["status"] == "processing"
+        assert data["extraction_job"]["status"] == "queued"
+        assert data["extraction_job"]["attempt_count"] == 0
         assert isinstance(data["metrics"], list)
         token = data["access_token"]
         headers = {"X-Report-Token": token}
+        assert run_next_job(SessionLocal) is not None
         parsed_response = client.get(
             f"/api/health/report/{data['id']}", headers=headers
         )
@@ -114,7 +119,19 @@ def test_upload_report_endpoint(client, tmp_path):
             == 404
         )
         assert parsed["status"] == "pending_confirmation"
+        assert parsed["extraction_job"]["status"] == "completed"
+        assert parsed["extraction_job"]["attempt_count"] == 1
         assert len(parsed["metrics"]) == 1
+
+        # A worker crash after parsing but before acknowledging the job must not
+        # duplicate metrics when the durable job is retried.
+        with SessionLocal() as session:
+            job = session.query(ReportExtractionJob).one()
+            job.status = "queued"
+            session.commit()
+        assert run_next_job(SessionLocal) is not None
+        with SessionLocal() as session:
+            assert session.query(MetricModel).count() == 1
 
         assert parsed["files"] == [
             {

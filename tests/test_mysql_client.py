@@ -126,3 +126,41 @@ def test_legacy_reports_are_sealed_when_owner_columns_are_added(tmp_path, monkey
         "owner_id": None,
     }
     assert "ix_medical_reports_owner_id" in index_names
+
+
+def test_sqlite_foreign_keys_are_enabled_for_report_cleanup(tmp_path, monkeypatch):
+    from app.data.mysql_client import MySQLClient
+
+    database_path = tmp_path / "foreign-keys.db"
+    monkeypatch.setattr(
+        "app.data.mysql_client.get_settings",
+        lambda: type("Settings", (), {"database_url": f"sqlite:///{database_path}"})(),
+    )
+    client = MySQLClient()
+    client.create_tables()
+    with client.engine.begin() as connection:
+        report_id = connection.execute(
+            text(
+                "INSERT INTO medical_reports(patient_id, status) "
+                "VALUES ('patient', 'pending_confirmation') RETURNING id"
+            )
+        ).scalar_one()
+        connection.execute(
+            text(
+                "INSERT INTO report_extraction_jobs(report_id, status, attempt_count) "
+                "VALUES (:report_id, 'queued', 0)"
+            ),
+            {"report_id": report_id},
+        )
+        connection.execute(
+            text("DELETE FROM medical_reports WHERE id = :report_id"),
+            {"report_id": report_id},
+        )
+        remaining = connection.execute(
+            text(
+                "SELECT count(*) FROM report_extraction_jobs WHERE report_id = :report_id"
+            ),
+            {"report_id": report_id},
+        ).scalar_one()
+    client.close()
+    assert remaining == 0

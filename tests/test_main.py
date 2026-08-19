@@ -40,7 +40,7 @@ def test_basic_auth_validation():
     assert _valid_basic_auth(f"Basic {valid}", "reviewer", "secret") is True
     assert _valid_basic_auth(f"Basic {valid}", "reviewer", "wrong") is False
     assert _valid_basic_auth("Bearer token", "reviewer", "secret") is False
-    assert _valid_basic_auth("", "reviewer", "") is True
+    assert _valid_basic_auth("", "reviewer", "") is False
 
 
 def test_basic_auth_middleware_challenges_and_accepts(client):
@@ -90,9 +90,28 @@ def test_ready_requires_a_full_evidence_api_key(client):
         assert ready.status_code == 200
         assert ready.json()["status"] == "ready"
         assert ready.json()["report_provider"] == "configured"
+        assert ready.json()["report_owner"] == "unconfigured"
     finally:
         settings.GENESIS_EVIDENCE_API_URL = previous_url
         settings.GENESIS_EVIDENCE_API_KEY = previous_key
         settings.VLLM_API_KEY = previous_vllm_key
         settings.OPENAI_API_KEY = previous_openai_key
         settings.VLLM_MODEL = previous_model
+
+
+def test_production_without_owner_credentials_is_degraded_and_protected(client):
+    settings = get_settings()
+    previous_env = settings.APP_ENV
+    previous_user = settings.HEALTHFLOW_BASIC_USER
+    previous_password = settings.HEALTHFLOW_BASIC_PASSWORD
+    settings.APP_ENV = "production"
+    settings.HEALTHFLOW_BASIC_USER = "healthflow"
+    settings.HEALTHFLOW_BASIC_PASSWORD = ""
+    try:
+        assert client.get("/").status_code == 401
+        assert client.get("/ready").json()["report_owner"] == "unconfigured"
+        assert client.get("/ready").json()["status"] == "degraded"
+    finally:
+        settings.APP_ENV = previous_env
+        settings.HEALTHFLOW_BASIC_USER = previous_user
+        settings.HEALTHFLOW_BASIC_PASSWORD = previous_password
