@@ -120,17 +120,26 @@ app/
 └── api/                      # FastAPI 路由
 frontend/                     # Vite + React Web 前端
 scripts/                      # Milvus/Neo4j 初始化、数据生成
-tests/                        # pytest 测试（118 passed）
+tests/                        # pytest 测试（132 passed）
 ```
 
 ## 主要接口
 
 | 方法 | 路径 | 作用 |
 |---|---|---|
+| POST | `/api/auth/register` | 邮箱+密码注册并创建会话 |
+| POST | `/api/auth/login` | 登录并轮换服务端会话 |
+| POST | `/api/auth/logout` | 注销当前会话 |
+| GET | `/api/auth/me` | 获取当前账户 |
+| PATCH | `/api/auth/profile` | 更新个人昵称 |
+| GET | `/api/auth/reports` | 获取当前账户的报告历史 |
 | POST | `/api/health/report/upload` | 上传 PDF/图片并解析指标 |
 | GET | `/api/health/report/{id}` | 查询报告和坐标指标 |
 | GET | `/api/health/report/{id}/metrics` | 查询报告指标列表 |
 | DELETE | `/api/health/report/{report_id}` | 删除报告 |
+
+生产环境默认要求账户会话，报告按账户 ID 隔离；浏览器使用 HttpOnly、SameSite=Lax 会话 Cookie。
+`HEALTHFLOW_BASIC_AUTH_ENABLED` 仅用于需要时的运维兼容保护，默认关闭，不是患者登录方式。
 
 ---
 

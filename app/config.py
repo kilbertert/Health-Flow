@@ -1,8 +1,6 @@
 """Application configuration loaded from environment variables."""
 
 from functools import lru_cache
-from typing import Optional
-
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,7 +13,7 @@ class Settings(BaseSettings):
     )
 
     APP_ENV: str = "development"
-    DATABASE_URL: Optional[str] = None
+    DATABASE_URL: str | None = None
 
     MYSQL_HOST: str = "localhost"
     MYSQL_PORT: int = 3306
@@ -63,8 +61,13 @@ class Settings(BaseSettings):
     GENESIS_EVIDENCE_TIMEOUT_SECONDS: float = 30.0
     SERVE_FRONTEND: bool = False
     FRONTEND_DIST: str = "frontend/dist"
+    # Basic Auth is an optional operator compatibility gate, not the patient login.
+    HEALTHFLOW_BASIC_AUTH_ENABLED: bool | None = None
     HEALTHFLOW_BASIC_USER: str = "healthflow"
     HEALTHFLOW_BASIC_PASSWORD: str = ""
+    REPORT_ACCOUNT_REQUIRED: bool | None = None
+    AUTH_SESSION_DAYS: int = 30
+    AUTH_COOKIE_SECURE: bool | None = None
 
     @property
     def mysql_url(self) -> str:
@@ -84,7 +87,9 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins(self) -> list[str]:
-        return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+        return [
+            origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()
+        ]
 
     @property
     def llm_api_base(self) -> str:
@@ -97,6 +102,25 @@ class Settings(BaseSettings):
     @property
     def llm_api_key(self) -> str:
         return self.VLLM_API_KEY or self.OPENAI_API_KEY or "EMPTY"
+
+    @property
+    def report_account_required(self) -> bool:
+        if self.REPORT_ACCOUNT_REQUIRED is not None:
+            return self.REPORT_ACCOUNT_REQUIRED
+        return self.APP_ENV.casefold() in {"prod", "production"}
+
+    @property
+    def basic_auth_enabled(self) -> bool:
+        """Basic Auth is only an explicit operator compatibility gate."""
+        if self.HEALTHFLOW_BASIC_AUTH_ENABLED is not None:
+            return self.HEALTHFLOW_BASIC_AUTH_ENABLED
+        return False
+
+    @property
+    def auth_cookie_secure(self) -> bool:
+        if self.AUTH_COOKIE_SECURE is not None:
+            return self.AUTH_COOKIE_SECURE
+        return self.APP_ENV.casefold() in {"prod", "production"}
 
 
 @lru_cache

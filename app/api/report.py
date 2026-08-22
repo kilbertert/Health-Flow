@@ -27,7 +27,7 @@ from fastapi import (
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from app.api.deps import db_dependency
+from app.api.deps import db_dependency, report_account_dependency
 from app.config import get_settings
 from app.data.models import MedicalReport as ReportModel
 from app.data.models import MetricRecord as MetricModel
@@ -78,21 +78,29 @@ def _token_hash(token: str) -> str:
 
 
 def _owner_id(request: Request) -> str:
+    if getattr(request.state, "account_id", None):
+        return str(request.state.account_id)
     return str(getattr(request.state, "owner_id", "anonymous"))
 
 
 def _authorized_report(
-    db: Session, report_id: int, access_token: str, *, owner_id: str
+    db: Session,
+    report_id: int,
+    access_token: str,
+    *,
+    owner_id: str,
+    session_authenticated: bool = False,
 ) -> ReportModel:
     report = db.query(ReportModel).filter(ReportModel.id == report_id).first()
-    if report is not None and (not report.access_token_hash or not report.owner_id):
+    if report is None or not report.access_token_hash or not report.owner_id:
         raise HTTPException(status_code=404, detail="报告不存在")
-    expected = report.access_token_hash if report is not None else ""
-    if (
-        not expected
-        or not hmac.compare_digest(expected, _token_hash(access_token))
-        or not hmac.compare_digest(report.owner_id or "", owner_id)
-    ):
+    owner_matches = hmac.compare_digest(report.owner_id or "", owner_id)
+    token_matches = bool(
+        report.access_token_hash
+        and access_token
+        and hmac.compare_digest(report.access_token_hash, _token_hash(access_token))
+    )
+    if not owner_matches or (not session_authenticated and not token_matches):
         raise HTTPException(status_code=404, detail="报告不存在")
     return report
 
@@ -223,14 +231,17 @@ def _retryable_error(text: str | None) -> bool:
 @router.post("/report/upload", response_model=MedicalReportResponse, status_code=202)
 async def upload_report(
     request: Request,
-    patient_id: str = Form(..., min_length=1, description="患者 ID（必填，非空）"),
+    patient_id: str | None = Form(None, description="兼容旧客户端的患者 ID"),
     report_type: Optional[str] = Form(None),
     department: Optional[str] = Form(None),
     file: Optional[UploadFile] = File(None),
     files: Optional[list[UploadFile]] = File(None),
     db: Session = Depends(db_dependency),
+    account=Depends(report_account_dependency),
 ):
-    patient_id = patient_id.strip()
+    patient_id = (patient_id or "").strip()
+    if not patient_id and account is not None:
+        patient_id = account.id
     if not patient_id:
         raise HTTPException(status_code=422, detail="patient_id 不能为空")
     upload_files = list(files or [])
@@ -298,7 +309,11 @@ async def upload_report(
 
     db.commit()
     db.refresh(report)
-    return _report_response(report, [], access_token=access_token)
+    return _report_response(
+        report,
+        [],
+        access_token=None if account is not None else access_token,
+    )
 
 
 def _parse_report(
@@ -578,9 +593,14 @@ async def get_report(
     request: Request,
     db: Session = Depends(db_dependency),
     x_report_token: str = Header(default=""),
+    account=Depends(report_account_dependency),
 ):
     report = _authorized_report(
-        db, report_id, x_report_token, owner_id=_owner_id(request)
+        db,
+        report_id,
+        x_report_token,
+        owner_id=_owner_id(request),
+        session_authenticated=account is not None,
     )
     metrics = _ordered_metrics(db, report_id).all()
     return _report_response(report, metrics)
@@ -593,9 +613,14 @@ async def confirm_report(
     confirmation: ReportConfirmationRequest,
     db: Session = Depends(db_dependency),
     x_report_token: str = Header(default=""),
+    account=Depends(report_account_dependency),
 ):
     report = _authorized_report(
-        db, report_id, x_report_token, owner_id=_owner_id(request)
+        db,
+        report_id,
+        x_report_token,
+        owner_id=_owner_id(request),
+        session_authenticated=account is not None,
     )
     if report.status not in {"pending_confirmation", "confirmed"}:
         raise HTTPException(status_code=409, detail="报告当前状态不允许确认")
@@ -727,9 +752,14 @@ async def assess_report(
     request: Request,
     db: Session = Depends(db_dependency),
     x_report_token: str = Header(default=""),
+    account=Depends(report_account_dependency),
 ):
     report = _authorized_report(
-        db, report_id, x_report_token, owner_id=_owner_id(request)
+        db,
+        report_id,
+        x_report_token,
+        owner_id=_owner_id(request),
+        session_authenticated=account is not None,
     )
     if report.status not in {"confirmed", "assessed"}:
         raise HTTPException(status_code=409, detail="请先确认报告指标")
@@ -756,7 +786,11 @@ async def _assess_report(report: ReportModel, db: Session) -> MedicalReportRespo
     )
     source_by_id = {
         observation["observation_id"]: SourceObservation.model_validate(
-            {key: value for key, value in observation.items() if key != "confirmation_status"}
+            {
+                key: value
+                for key, value in observation.items()
+                if key != "confirmation_status"
+            }
         )
         for observation in observations
     }
@@ -792,11 +826,12 @@ async def _assess_report(report: ReportModel, db: Session) -> MedicalReportRespo
                 ]
             }
         )
-    if local_unmatched:
+    if typed_result.unmatched:
         finding_count = len(typed_result.findings)
         unmatched_count = len(typed_result.unmatched)
         summary = (
-            f"已匹配 {finding_count} 个正式知识卡；另有 {unmatched_count} 个异常指标暂无已审核内容。"
+            f"发现 {finding_count} 个可能相关健康问题；"
+            f"另有 {unmatched_count} 条指标与健康问题关联暂无已审核知识卡。"
             if finding_count
             else f"发现 {unmatched_count} 个异常指标，但暂无已审核内容。"
         )
@@ -838,8 +873,15 @@ async def get_report_metrics(
     request: Request,
     db: Session = Depends(db_dependency),
     x_report_token: str = Header(default=""),
+    account=Depends(report_account_dependency),
 ):
-    _authorized_report(db, report_id, x_report_token, owner_id=_owner_id(request))
+    _authorized_report(
+        db,
+        report_id,
+        x_report_token,
+        owner_id=_owner_id(request),
+        session_authenticated=account is not None,
+    )
     return [
         _metric_response(metric) for metric in _ordered_metrics(db, report_id).all()
     ]
@@ -861,8 +903,15 @@ async def get_report_page(
     request: Request,
     db: Session = Depends(db_dependency),
     x_report_token: str = Header(default=""),
+    account=Depends(report_account_dependency),
 ):
-    _authorized_report(db, report_id, x_report_token, owner_id=_owner_id(request))
+    _authorized_report(
+        db,
+        report_id,
+        x_report_token,
+        owner_id=_owner_id(request),
+        session_authenticated=account is not None,
+    )
     source = (
         db.query(ReportFileModel)
         .filter(
@@ -898,9 +947,14 @@ async def delete_report(
     request: Request,
     db: Session = Depends(db_dependency),
     x_report_token: str = Header(default=""),
+    account=Depends(report_account_dependency),
 ):
     report = _authorized_report(
-        db, report_id, x_report_token, owner_id=_owner_id(request)
+        db,
+        report_id,
+        x_report_token,
+        owner_id=_owner_id(request),
+        session_authenticated=account is not None,
     )
     # 先删数据库主记录；向量索引是尽力而为，放在 DB 成功之后，
     # 避免 DB 删除失败时向量索引已被清掉造成状态不一致。

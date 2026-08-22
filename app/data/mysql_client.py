@@ -40,7 +40,7 @@ class MySQLClient:
         self._tables_initialized = True
 
     def _add_report_columns(self) -> None:
-        """Add phase-3 report fields when reusing a pre-bridge database."""
+        """Add report/account fields when reusing a pre-account database."""
         additions = {
             "medical_reports": {
                 "status": "VARCHAR(32) NOT NULL DEFAULT 'pending_confirmation'",
