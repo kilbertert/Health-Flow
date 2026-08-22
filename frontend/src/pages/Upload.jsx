@@ -90,7 +90,8 @@ function displayFlag(metric) {
 
 function initialDecision(metric) {
   const flag = deterministicFlag(metric);
-  if (flag === 'H' || flag === 'L') return 'confirmed';
+  if ((flag === 'H' || flag === 'L') && metric?.evidence_text && metric?.page_number) return 'confirmed';
+  if (flag === 'H' || flag === 'L') return 'pending';
   return flag === null && isAbnormal(metric?.abnormal_flag) ? 'pending' : 'excluded';
 }
 
@@ -279,13 +280,51 @@ function EvidenceResult({ result, onOpenSource }) {
         />
       )}
       {unmatched.length > 0 && (
-        <Alert
-          type="warning"
-          showIcon
-          title={`有 ${unmatched.length} 个异常指标暂未匹配到已发布知识卡`}
-          description={`暂无已审核内容：${unmatched.map((item) => item.metric_label || item.metric_code).filter(Boolean).join('、')}。这些指标不会被模型补写结论，后续需先完成对应主题的知识卡审核发布。`}
-          style={{ marginTop: 12 }}
-        />
+        <div style={{ marginTop: 12 }}>
+          <Alert
+            type="warning"
+            showIcon
+            title={`有 ${unmatched.length} 个异常指标暂未匹配到已发布知识卡`}
+            description="这些指标保留了原始报告证据，但不会由模型补写结论。"
+          />
+          <List
+            size="small"
+            dataSource={unmatched}
+            renderItem={(item) => {
+              const source = item.source_observation;
+              return (
+                <List.Item
+                  actions={source ? [
+                    <Tooltip key="source" title="查看报告原文定位">
+                      <Button
+                        type="text"
+                        icon={<EyeOutlined />}
+                        aria-label={`查看${item.metric_label || '异常指标'}原文`}
+                        onClick={() => onOpenSource?.({
+                          ...source,
+                          page_number: source.source_page,
+                          metric_name: item.metric_label,
+                          evidence_text: source.evidence_text,
+                        })}
+                      />
+                    </Tooltip>,
+                  ] : undefined}
+                >
+                  <Typography.Text>
+                    {item.metric_label || '未命名指标'}：{source?.value ?? '—'} {source?.unit || ''}
+                    {source?.reference_high !== null && source?.reference_high !== undefined
+                      ? `（参考上限 ${source.reference_high}）`
+                      : ''}
+                    {source?.reference_low !== null && source?.reference_low !== undefined
+                      ? `（参考下限 ${source.reference_low}）`
+                      : ''}
+                    {' · 暂无已审核内容'}
+                  </Typography.Text>
+                </List.Item>
+              );
+            }}
+          />
+        </div>
       )}
       {patientReply?.disclaimer && (
         <Typography.Paragraph type="secondary" style={{ margin: '12px 0 0' }}>
@@ -294,7 +333,7 @@ function EvidenceResult({ result, onOpenSource }) {
       )}
       {skipped.length > 0 && (
         <Typography.Paragraph type="secondary" style={{ margin: '12px 0 0' }}>
-          {skipped.length} 个指标未进入匹配（正常、缺参考范围或证据不足）。
+          {skipped.length} 个指标未进入匹配（正常、缺参考范围、原文证据或数值不足）。
         </Typography.Paragraph>
       )}
     </Card>
@@ -391,6 +430,10 @@ export default function UploadPage() {
 
   const handleConfirm = async () => {
     if (!result) return;
+    if (Array.isArray(result.processing_warnings) && result.processing_warnings.length > 0) {
+      message.warning('仍有文件未完成解析，不能生成健康提示');
+      return;
+    }
     if (result.subject_consistency !== 'same' && subjectConsistency !== 'same') {
       message.warning('请先确认所有文件属于同一主体');
       return;
@@ -655,9 +698,9 @@ export default function UploadPage() {
           )}
           {Array.isArray(result.processing_warnings) && result.processing_warnings.length > 0 && (
             <Alert
-              type="warning"
+              type="error"
               showIcon
-              title="部分文件未能完成解析"
+              title="报告解析不完整，已阻止生成健康提示"
               description={result.processing_warnings.join('；')}
               style={{ marginBottom: 16 }}
             />
@@ -675,7 +718,13 @@ export default function UploadPage() {
             <Switch checked={showAllMetrics} onChange={setShowAllMetrics} />
             <Typography.Text type="secondary">显示全部指标</Typography.Text>
             {result.status === 'pending_confirmation' && (
-              <Button type="primary" icon={<CheckCircleOutlined />} loading={confirming} onClick={handleConfirm}>
+              <Button
+                type="primary"
+                icon={<CheckCircleOutlined />}
+                loading={confirming}
+                disabled={(result.processing_warnings || []).length > 0}
+                onClick={handleConfirm}
+              >
                 确认并生成健康提示
               </Button>
             )}

@@ -106,9 +106,22 @@ def build_observations(metrics: Iterable[Any]) -> list[dict[str, object]]:
 def build_observations_with_skipped(
     metrics: Iterable[Any],
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-    """Build confirmed observations and explicitly record rows that cannot cross."""
+    """Build confirmed observations and rows that cannot cross."""
+    observations, skipped, _ = build_observations_with_unmatched(metrics)
+    return observations, skipped
+
+
+def build_observations_with_unmatched(
+    metrics: Iterable[Any],
+) -> tuple[
+    list[dict[str, object]],
+    list[dict[str, object]],
+    list[dict[str, object]],
+]:
+    """Separate safe evidence observations from abnormal unmapped rows."""
     observations: list[dict[str, object]] = []
     skipped: list[dict[str, object]] = []
+    unmatched: list[dict[str, object]] = []
     for metric in metrics:
         if metric.confirmation_status not in {"confirmed", "corrected"}:
             continue
@@ -118,11 +131,9 @@ def build_observations_with_skipped(
         evidence = (
             getattr(metric, "confirmed_evidence_text", None) or metric.evidence_text
         )
-        if not code or not unit or not evidence or metric.page_number is None:
+        if not unit or not evidence or metric.page_number is None:
             reason = (
-                "unknown_metric_code"
-                if not code
-                else "missing_unit"
+                "missing_unit"
                 if not unit
                 else "missing_source_evidence"
                 if not evidence
@@ -132,6 +143,14 @@ def build_observations_with_skipped(
                 {
                     "observation_id": f"health-flow-metric-{metric.id}",
                     "reason": reason,
+                }
+            )
+            continue
+        if any(marker in str(value_text or "") for marker in ("<", ">", "≤", "≥")):
+            skipped.append(
+                {
+                    "observation_id": f"health-flow-metric-{metric.id}",
+                    "reason": "invalid_value",
                 }
             )
             continue
@@ -156,6 +175,14 @@ def build_observations_with_skipped(
         if reference is None:
             reference = metric.reference_range
         reference_low, reference_high = parse_reference_range(reference)
+        if reference_low is None and reference_high is None:
+            skipped.append(
+                {
+                    "observation_id": f"health-flow-metric-{metric.id}",
+                    "reason": "missing_reference_range",
+                }
+            )
+            continue
         if reference_low is not None and not _evidence_contains_value(
             evidence, reference_low
         ):
@@ -173,6 +200,48 @@ def build_observations_with_skipped(
                 {
                     "observation_id": f"health-flow-metric-{metric.id}",
                     "reason": "missing_source_evidence",
+                }
+            )
+            continue
+        flag = infer_abnormal_flag(str(value), reference)
+        if flag == "N":
+            skipped.append(
+                {
+                    "observation_id": f"health-flow-metric-{metric.id}",
+                    "reason": "within_reference_range",
+                }
+            )
+            continue
+        if not code:
+            source_observation = {
+                "observation_id": f"health-flow-metric-{metric.id}",
+                "metric_code": None,
+                "metric_label": metric.metric_name or "未命名指标",
+                "value": value,
+                "unit": unit,
+                "reference_low": reference_low,
+                "reference_high": reference_high,
+                "evidence_text": evidence,
+                "source_file_index": metric.source_file_index,
+                "source_page": metric.page_number,
+                "source_id": metric.source_id,
+                "source_url": (
+                    f"/api/health/report/{metric.report_id}/files/"
+                    f"{metric.source_file_index}/pages/{metric.page_number}"
+                    if metric.report_id is not None
+                    else None
+                ),
+                "bbox": getattr(metric, "bbox", None),
+                "bbox_normalized": getattr(metric, "bbox_normalized", None),
+            }
+            unmatched.append(
+                {
+                    "observation_id": source_observation["observation_id"],
+                    "metric_code": None,
+                    "metric_label": metric.metric_name or "未命名指标",
+                    "condition_codes": [],
+                    "reason": "unknown_metric_code",
+                    "source_observation": source_observation,
                 }
             )
             continue
@@ -199,7 +268,7 @@ def build_observations_with_skipped(
                 "bbox_normalized": getattr(metric, "bbox_normalized", None),
             }
         )
-    return observations, skipped
+    return observations, skipped, unmatched
 
 
 async def match_published_evidence(
