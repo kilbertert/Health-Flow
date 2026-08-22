@@ -1,65 +1,206 @@
-/* 全局样式：Ant Design 已承担大部分组件样式，这里只保留布局与业务细节 */
+:root {
+  color: #1e1e1e;
+  background: #fff;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --gold: #c98b28;
+  --gold-strong: #b97718;
+  --gold-soft: #fff4df;
+  --ink: #1e1e1e;
+  --muted: #7a7a7a;
+  --line: #eee9e0;
+  --surface: #fffdfa;
+}
 
 * { box-sizing: border-box; }
-html, body, #root { margin: 0; padding: 0; min-height: 100%; }
+html, body, #root { min-height: 100%; margin: 0; }
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
-    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
-  background: #f0f4fa;
+  min-width: 320px;
+  background: #fff;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+}
+button, input { font: inherit; }
+button { cursor: pointer; }
+
+.health-flow-app {
+  min-height: 100vh;
+  background: #fff;
 }
 
-/* 侧边栏品牌区 */
-.brand { display: flex; align-items: center; gap: 10px; padding: 20px 20px 16px; }
-.brand-logo { font-size: 26px; }
-.brand-name { font-size: 17px; font-weight: 700; color: #1f2937; line-height: 1.2; }
-.brand-sub { font-size: 12px; color: #94a3b8; }
-
-/* 页面纵向间距 */
-.page-stack { display: flex; flex-direction: column; gap: 16px; max-width: 1280px; }
-
-/* Dashboard 状态卡片 */
-.status-card { display: flex; align-items: center; gap: 12px; }
-.status-icon { font-size: 26px; }
-.status-title { color: #94a3b8; font-size: 13px; }
-.status-value { font-size: 15px; }
-
-/* 聊天 */
-.chat-window {
-  height: 420px; overflow-y: auto;
-  display: flex; flex-direction: column; gap: 14px;
-  background: #fafbfc; border: 1px solid #f0f0f0; border-radius: 10px; padding: 16px;
-}
-.chat-empty {
-  margin: auto; display: flex; flex-direction: column; align-items: center; gap: 10px;
-  color: #8c8c8c;
-}
-.chat-msg { display: flex; gap: 10px; max-width: 85%; }
-.chat-msg.user { align-self: flex-end; flex-direction: row-reverse; }
-.chat-avatar {
-  width: 34px; height: 34px; border-radius: 50%;
-  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
-}
-.chat-avatar.user { background: #1677ff; color: #fff; }
-.chat-avatar.assistant { background: #e6f4ff; color: #1677ff; }
-.chat-bubble {
-  padding: 10px 14px; border-radius: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word;
-}
-.chat-bubble.user { background: #1677ff; color: #fff; border-top-right-radius: 4px; }
-.chat-bubble.assistant { background: #fff; border: 1px solid #eef0f4; border-top-left-radius: 4px; }
-.chat-meta {
-  margin-top: 8px; background: #fafbfc; border: 1px dashed #e5e7eb;
-  border-radius: 8px; padding: 8px 12px;
+.app-header {
+  position: sticky;
+  z-index: 20;
+  top: 0;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 64px;
+  padding: 14px max(18px, calc((100vw - 1120px) / 2));
+  background: rgba(255, 255, 255, .94);
+  border-bottom: 1px solid rgba(238, 233, 224, .7);
+  backdrop-filter: blur(14px);
 }
 
-/* 知识图谱节点 */
-.kg-visual {
-  display: flex; align-items: center; justify-content: center; gap: 32px;
-  padding: 40px 16px;
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  font-size: 20px;
 }
-.kg-node {
-  display: flex; flex-direction: column; align-items: center; gap: 4px;
-  border: 2px solid #d9d9d9; border-radius: 12px; padding: 20px 32px; min-width: 140px;
+.icon-button:hover, .icon-button:focus-visible { color: var(--gold-strong); background: var(--gold-soft); }
+
+.service-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(10px, 3vw, 34px);
+  min-width: 0;
 }
-.kg-node.kg-symptom { border-color: #ffa940; background: #fff7e6; }
-.kg-node.kg-dept { border-color: #1677ff; background: #e6f4ff; }
-.kg-arrow { font-size: 30px; color: #bfbfbf; }
+.service-nav-item {
+  position: relative;
+  padding: 7px 0 9px;
+  color: #272727;
+  white-space: nowrap;
+  background: transparent;
+  border: 0;
+  font-size: clamp(13px, 1.5vw, 16px);
+}
+.service-nav-item::after {
+  position: absolute;
+  right: 15%;
+  bottom: 0;
+  left: 15%;
+  height: 2px;
+  background: transparent;
+  border-radius: 2px;
+  content: "";
+}
+.service-nav-item.is-active { color: var(--gold-strong); font-weight: 600; }
+.service-nav-item.is-active::after { background: var(--gold); }
+.service-nav-item:not(.is-active):hover { color: var(--gold-strong); }
+.header-actions { display: flex; gap: 2px; }
+
+.home-page, .report-page {
+  width: min(100% - 32px, 960px);
+  margin: 0 auto;
+}
+.home-page { padding: 32px 0 52px; }
+.home-hero { padding: 28px 12px 26px; text-align: center; }
+.brand-mark {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.brand-mark-large {
+  width: 184px;
+  height: 184px;
+}
+.home-hero h1 { margin: 16px 0 0; color: #4c3b24; font-size: clamp(27px, 5vw, 42px); font-weight: 600; }
+.hero-copy { max-width: 520px; margin: 13px auto 0; color: var(--muted); font-size: 15px; line-height: 1.8; }
+
+.health-actions { margin-top: 4px; }
+.health-action-card, .health-action-tile {
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: 0 10px 30px rgba(95, 73, 35, .05);
+}
+.health-action-card {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 16px;
+  padding: 22px 20px;
+  text-align: left;
+  border-radius: 18px;
+}
+.health-action-card:hover, .health-action-card:focus-visible { border-color: #e3b86f; box-shadow: 0 12px 32px rgba(201, 139, 40, .14); }
+.action-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  flex: 0 0 52px;
+  color: var(--gold-strong);
+  background: var(--gold-soft);
+  border-radius: 50%;
+  font-size: 25px;
+}
+.action-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 5px; }
+.action-copy strong { font-size: 18px; font-weight: 600; }
+.action-copy span { color: var(--muted); font-size: 13px; }
+.action-arrow { color: #aaa; font-size: 16px; }
+.health-action-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-top: 14px; }
+.health-action-tile { display: flex; min-height: 112px; flex-direction: column; align-items: flex-start; justify-content: center; gap: 7px; padding: 18px; border-radius: 16px; }
+.health-action-tile > svg { color: var(--gold); font-size: 24px; }
+.health-action-tile span { font-size: 16px; font-weight: 600; }
+.health-action-tile small { color: var(--muted); font-size: 12px; }
+.home-note { display: flex; align-items: flex-start; gap: 9px; margin: 24px 4px 0; color: #8d816f; font-size: 12px; line-height: 1.7; }
+.home-note svg { margin-top: 2px; color: var(--gold); }
+.home-note p { margin: 0; }
+
+.report-page { padding: 20px 0 54px; }
+.report-heading { display: flex; align-items: flex-start; gap: 12px; margin: 0 0 18px; }
+.report-heading .ant-btn { margin: -4px 0 0 -10px; color: var(--gold-strong); }
+.eyebrow { margin: 0 0 4px; color: var(--gold-strong); font-size: 12px; letter-spacing: 1px; }
+.report-heading h1 { margin: 0; color: #3d3326; font-size: clamp(23px, 4vw, 34px); }
+.report-heading p:last-child { margin: 7px 0 0; color: var(--muted); font-size: 13px; }
+
+.menu-sheet .ant-drawer-content { background: #fffdfa; }
+.menu-sheet .ant-drawer-header { border-bottom-color: var(--line); }
+.sheet-title { display: flex; align-items: center; gap: 10px; }
+.sheet-title strong { font-size: 18px; }
+.sheet-link { display: flex; align-items: center; width: 100%; gap: 13px; margin-top: 22px; padding: 16px 12px; color: var(--ink); text-align: left; background: var(--gold-soft); border: 0; border-radius: 13px; }
+.sheet-link span { flex: 1; font-weight: 600; }
+.sheet-link svg:first-child { color: var(--gold-strong); font-size: 19px; }
+.sheet-status { display: flex; gap: 12px; margin-top: 20px; padding: 14px 12px; color: #8a7e6e; background: #fff; border: 1px solid var(--line); border-radius: 13px; font-size: 12px; line-height: 1.6; }
+.sheet-status > svg { margin-top: 3px; color: var(--gold); font-size: 18px; }
+.sheet-status div { display: flex; flex-direction: column; }
+
+/* The report workflow keeps Ant Design's accessible controls, with a mobile-first surface. */
+.report-page .page-stack { max-width: none; gap: 14px; }
+.report-page .ant-card { border-color: var(--line); border-radius: 16px; box-shadow: 0 8px 26px rgba(95, 73, 35, .05); }
+.report-page .ant-card-head { min-height: 56px; border-bottom-color: var(--line); }
+.report-page .ant-card-head-title { color: #3d3326; }
+.report-page .ant-btn-primary { background: var(--gold); border-color: var(--gold); box-shadow: none; }
+.report-page .ant-btn-primary:hover { background: var(--gold-strong) !important; border-color: var(--gold-strong) !important; }
+.report-page .ant-upload-wrapper .ant-upload-drag { border-color: #e6d5b8; background: #fffdf8; border-radius: 14px; }
+.report-page .ant-upload-wrapper .ant-upload-drag:hover { border-color: var(--gold); }
+.report-page .ant-table-wrapper { max-width: 100%; overflow-x: auto; }
+
+@media (max-width: 700px) {
+  .app-header { grid-template-columns: 30px minmax(0, 1fr) 34px; gap: 7px; padding: 10px 8px; }
+  .service-nav { justify-content: space-between; gap: 7px; overflow-x: auto; scrollbar-width: none; }
+  .service-nav::-webkit-scrollbar { display: none; }
+  .service-nav-item { font-size: 12px; }
+  .header-actions { gap: 0; }
+  .header-actions .icon-button:first-child { display: none; }
+  .home-page, .report-page { width: min(100% - 24px, 680px); }
+  .home-page { padding-top: 22px; }
+  .brand-mark-large { width: 154px; height: 154px; }
+  .health-action-card { padding: 18px 15px; }
+  .health-action-grid { gap: 10px; }
+  .health-action-tile { padding: 14px; }
+  .report-page { padding-top: 12px; }
+  .report-heading { gap: 4px; }
+  .report-heading .ant-btn { padding-inline: 5px; }
+  .report-page .ant-form-inline .ant-form-item { width: 100%; margin-inline-end: 0; }
+  .report-page .ant-form-inline .ant-form-item-control, .report-page .ant-form-inline .ant-form-item-control-input { width: 100%; }
+  .report-page .ant-form-inline .ant-input, .report-page .ant-form-inline .ant-select { width: 100% !important; }
+  .report-page .ant-card-extra { max-width: 46%; white-space: normal; text-align: right; }
+}
+
+@media (min-width: 701px) {
+  .home-page { padding-top: 58px; }
+  .home-hero { padding-top: 42px; }
+}
