@@ -47,8 +47,10 @@ def test_basic_auth_middleware_challenges_and_accepts(client):
     settings = get_settings()
     previous_user = settings.HEALTHFLOW_BASIC_USER
     previous_password = settings.HEALTHFLOW_BASIC_PASSWORD
+    previous_enabled = settings.HEALTHFLOW_BASIC_AUTH_ENABLED
     settings.HEALTHFLOW_BASIC_USER = "reviewer"
     settings.HEALTHFLOW_BASIC_PASSWORD = "secret"
+    settings.HEALTHFLOW_BASIC_AUTH_ENABLED = True
     try:
         denied = client.get("/")
         assert denied.status_code == 401
@@ -58,6 +60,7 @@ def test_basic_auth_middleware_challenges_and_accepts(client):
     finally:
         settings.HEALTHFLOW_BASIC_USER = previous_user
         settings.HEALTHFLOW_BASIC_PASSWORD = previous_password
+        settings.HEALTHFLOW_BASIC_AUTH_ENABLED = previous_enabled
 
 
 def test_ready_requires_a_full_evidence_api_key(client):
@@ -99,19 +102,22 @@ def test_ready_requires_a_full_evidence_api_key(client):
         settings.VLLM_MODEL = previous_model
 
 
-def test_production_without_owner_credentials_is_degraded_and_protected(client):
+def test_production_uses_account_auth_without_basic_challenge(client):
     settings = get_settings()
     previous_env = settings.APP_ENV
     previous_user = settings.HEALTHFLOW_BASIC_USER
     previous_password = settings.HEALTHFLOW_BASIC_PASSWORD
+    previous_enabled = settings.HEALTHFLOW_BASIC_AUTH_ENABLED
     settings.APP_ENV = "production"
     settings.HEALTHFLOW_BASIC_USER = "healthflow"
     settings.HEALTHFLOW_BASIC_PASSWORD = ""
+    settings.HEALTHFLOW_BASIC_AUTH_ENABLED = None
     try:
-        assert client.get("/").status_code == 401
-        assert client.get("/ready").json()["report_owner"] == "unconfigured"
+        assert client.get("/").status_code == 200
+        assert client.get("/ready").json()["report_owner"] == "account"
         assert client.get("/ready").json()["status"] == "degraded"
     finally:
         settings.APP_ENV = previous_env
         settings.HEALTHFLOW_BASIC_USER = previous_user
         settings.HEALTHFLOW_BASIC_PASSWORD = previous_password
+        settings.HEALTHFLOW_BASIC_AUTH_ENABLED = previous_enabled

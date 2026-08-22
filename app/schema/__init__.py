@@ -8,6 +8,13 @@ from app.schema.report import (
     MetricConfirmation,
     ReportConfirmationRequest,
 )
+from app.schema.auth import (
+    AccountResponse,
+    LoginRequest,
+    ProfileUpdateRequest,
+    RegisterRequest,
+    ReportHistoryItem,
+)
 from app.schema.chat import (
     ChatMessage,
     ChatRequest,
@@ -36,6 +43,11 @@ __all__ = [
     "MedicalReportResponse",
     "MetricConfirmation",
     "ReportConfirmationRequest",
+    "AccountResponse",
+    "LoginRequest",
+    "ProfileUpdateRequest",
+    "RegisterRequest",
+    "ReportHistoryItem",
     "ChatMessage",
     "ChatRequest",
     "ChatResponse",

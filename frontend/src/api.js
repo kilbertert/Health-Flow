@@ -14,7 +14,7 @@ export async function parseError(res) {
 }
 
 async function request(path, options = {}) {
-  const res = await fetch(`${BASE}${path}`, options);
+  const res = await fetch(`${BASE}${path}`, { credentials: 'include', ...options });
   if (!res.ok) throw new Error(await parseError(res));
   if (res.status === 204) return null;
   const contentType = res.headers.get('content-type') || '';
@@ -23,7 +23,7 @@ async function request(path, options = {}) {
 }
 
 function reportHeaders(token, headers = {}) {
-  return { ...headers, 'X-Report-Token': token };
+  return token ? { ...headers, 'X-Report-Token': token } : headers;
 }
 
 function reportJson(token, method, body) {
@@ -40,7 +40,7 @@ export function uploadReport(formData) {
 
 export const getMetricCatalog = () => request('/health/metric-catalog');
 
-export const getReport = (id, token) => request(`/health/report/${id}`, {
+export const getReport = (id, token = '') => request(`/health/report/${id}`, {
   headers: reportHeaders(token),
 });
 
@@ -57,8 +57,32 @@ export const assessReport = (id, token) => request(`/health/report/${id}/assess`
 export async function fetchReportPage(reportId, fileIndex, pageNumber, token) {
   const res = await fetch(
     `${BASE}/health/report/${reportId}/files/${fileIndex}/pages/${pageNumber}`,
-    { headers: reportHeaders(token) },
+    { credentials: 'include', headers: reportHeaders(token) },
   );
   if (!res.ok) throw new Error(await parseError(res));
   return res.blob();
 }
+
+export const registerAccount = (body) => request('/auth/register', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body),
+});
+
+export const loginAccount = (body) => request('/auth/login', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body),
+});
+
+export const getCurrentAccount = () => request('/auth/me');
+
+export const logoutAccount = () => request('/auth/logout', { method: 'POST' });
+
+export const updateProfile = (body) => request('/auth/profile', {
+  method: 'PATCH',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body),
+});
+
+export const getReportHistory = () => request('/auth/reports');
