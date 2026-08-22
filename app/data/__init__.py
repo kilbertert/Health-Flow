@@ -9,6 +9,8 @@ from app.data.models import (
     ReportAuditEvent,
     ReportExtractionJob,
     RoutingLog,
+    UserAccount,
+    UserSession,
 )
 from app.data.mysql_client import (
     MySQLClient,
@@ -26,6 +28,8 @@ __all__ = [
     "ReportAuditEvent",
     "ReportExtractionJob",
     "RoutingLog",
+    "UserAccount",
+    "UserSession",
     "get_db",
     "get_mysql_client",
 ]

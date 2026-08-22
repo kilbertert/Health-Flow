@@ -2,10 +2,61 @@
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Column, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
+
+
+class UserAccount(Base):
+    """A patient-facing account.  Credentials never live on a report row."""
+
+    __tablename__ = "user_accounts"
+
+    id = Column(String(36), primary_key=True)
+    email = Column(String(254), nullable=False, unique=True, index=True)
+    password_hash = Column(String(512), nullable=False)
+    display_name = Column(String(128), nullable=False, default="健康用户")
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=datetime.now,
+        onupdate=datetime.now,
+        nullable=False,
+    )
+
+    sessions = relationship(
+        "UserSession", back_populates="account", cascade="all, delete-orphan"
+    )
+
+
+class UserSession(Base):
+    """Server-side session; the browser only receives the random token."""
+
+    __tablename__ = "user_sessions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(
+        String(36), ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    token_hash = Column(String(64), nullable=False, unique=True, index=True)
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    last_seen_at = Column(DateTime, default=datetime.now, nullable=False)
+    revoked_at = Column(DateTime)
+
+    account = relationship("UserAccount", back_populates="sessions")
 
 
 class MedicalReport(Base):

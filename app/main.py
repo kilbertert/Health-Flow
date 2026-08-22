@@ -37,7 +37,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=get_settings().cors_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -67,12 +67,9 @@ async def basic_auth(request: Request, call_next):
         settings.HEALTHFLOW_BASIC_USER.strip()
         and settings.HEALTHFLOW_BASIC_PASSWORD.strip()
     )
-    request.state.owner_id = (
-        settings.HEALTHFLOW_BASIC_USER if auth_configured else "anonymous"
-    )
-    auth_required = (
-        settings.APP_ENV.casefold() in {"prod", "production"} or auth_configured
-    )
+    request.state.owner_id = "anonymous"
+    request.state.basic_authenticated = False
+    auth_required = bool(settings.basic_auth_enabled and auth_configured)
     if (
         request.url.path not in {"/health", "/ready"}
         and auth_required
@@ -87,6 +84,9 @@ async def basic_auth(request: Request, call_next):
             status_code=401,
             headers={"WWW-Authenticate": 'Basic realm="HealthFlow", charset="UTF-8"'},
         )
+    if auth_required:
+        request.state.owner_id = settings.HEALTHFLOW_BASIC_USER
+        request.state.basic_authenticated = True
     return await call_next(request)
 
 
@@ -122,28 +122,34 @@ async def readiness_check():
         and settings.llm_api_base.strip()
         and settings.VLLM_MODEL.strip()
     )
-    owner_configured = bool(
-        settings.HEALTHFLOW_BASIC_USER.strip()
+    basic_auth_configured = bool(
+        settings.basic_auth_enabled
+        and settings.HEALTHFLOW_BASIC_USER.strip()
         and settings.HEALTHFLOW_BASIC_PASSWORD.strip()
     )
-    owner_required = settings.APP_ENV.casefold() in {"prod", "production"}
+    report_owner = (
+        "account"
+        if settings.report_account_required
+        else "configured"
+        if basic_auth_configured
+        else "unconfigured"
+    )
     return {
         "status": "ready"
-        if db_ok
-        and evidence_configured
-        and provider_configured
-        and (owner_configured or not owner_required)
+        if db_ok and evidence_configured and provider_configured
         else "degraded",
         "database": "ok" if db_ok else "unavailable",
         "evidence_service": "configured" if evidence_configured else "unconfigured",
         "report_provider": "configured" if provider_configured else "unconfigured",
-        "report_owner": "configured" if owner_configured else "unconfigured",
+        "report_owner": report_owner,
+        "account_auth": "required" if settings.report_account_required else "optional",
         "report_model": settings.VLLM_MODEL if provider_configured else "unconfigured",
     }
 
 
-from app.api import report
+from app.api import auth, report
 
+app.include_router(auth.router, prefix="/api/auth", tags=["Account"])
 app.include_router(report.router, prefix="/api/health", tags=["Report"])
 
 settings = get_settings()

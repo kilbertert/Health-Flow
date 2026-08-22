@@ -101,7 +101,7 @@ function SourceEvidence({ reportId, reportToken, metric, file }) {
   const page = metric?.page_number || metric?.source_page || 1;
   const fileIndex = metric?.source_file_index;
   useEffect(() => {
-    if (!metric || !reportToken) return undefined;
+    if (!metric) return undefined;
     let active = true;
     let objectUrl = '';
     setSourceUrl('');
@@ -354,7 +354,7 @@ function initialDrafts(metrics) {
   ]));
 }
 
-export default function UploadPage() {
+export default function UploadPage({ account, initialReportId = null, onReportSaved }) {
   const [form] = Form.useForm();
   const [fileList, setFileList] = useState([]);
   const [uploading, setUploading] = useState(false);
@@ -381,6 +381,24 @@ export default function UploadPage() {
     return () => { active = false; };
   }, []);
 
+  useEffect(() => {
+    if (!initialReportId) return;
+    let active = true;
+    setError('');
+    getReport(initialReportId)
+      .then((data) => {
+        if (!active) return;
+        setResult(data);
+        setReportToken('');
+        setDrafts(initialDrafts(data.metrics || []));
+        setSubjectConsistency(data.subject_consistency === 'same' ? 'same' : '');
+      })
+      .catch((err) => {
+        if (active) setError(err.message);
+      });
+    return () => { active = false; };
+  }, [initialReportId]);
+
   const updateDraft = (id, field, value) => {
     setDrafts((current) => ({ ...current, [id]: { ...current[id], [field]: value } }));
   };
@@ -397,15 +415,14 @@ export default function UploadPage() {
     setResult(null);
     try {
       const formData = new FormData();
-      formData.append('patient_id', values.patient_id.trim());
       fileList.forEach((item) => formData.append('files', item.originFileObj || item));
       if (values.report_type) formData.append('report_type', values.report_type);
       if (values.department && values.department.trim()) formData.append('department', values.department.trim());
       let data = await uploadReport(formData);
-      if (!data.access_token) throw new Error('报告访问凭证未返回，请重新上传');
-      const accessToken = data.access_token;
+      const accessToken = data.access_token || '';
       setReportToken(accessToken);
       setResult(data);
+      onReportSaved?.();
       message.info('文件已上传，正在后台解析');
       for (let attempt = 0; data.status === 'processing' && attempt < 300; attempt += 1) {
         await new Promise((resolve) => window.setTimeout(resolve, 2000));
@@ -611,9 +628,6 @@ export default function UploadPage() {
           />
         )}
         <Form form={form} layout="inline" style={{ rowGap: 16 }}>
-          <Form.Item name="patient_id" label="患者编号" rules={[{ required: true, message: '请输入患者编号' }]}>
-            <Input placeholder="例如 P001" style={{ width: 200 }} />
-          </Form.Item>
           <Form.Item name="report_type" label="报告类型" initialValue="体检">
             <Select style={{ width: 120 }} options={REPORT_TYPES.map((t) => ({ label: t, value: t }))} />
           </Form.Item>
@@ -652,7 +666,7 @@ export default function UploadPage() {
       {result && (
         <Card title={<Space>解析结果 · 报告 #{result.id} {evidenceStatus(result.status)}</Space>}>
           <Descriptions column={4} size="small" bordered style={{ marginBottom: 16 }}>
-            <Descriptions.Item label="患者编号">{result.patient_id}</Descriptions.Item>
+            <Descriptions.Item label="账户">{result.patient_id === account?.id ? '当前账户' : result.patient_id}</Descriptions.Item>
             <Descriptions.Item label="报告类型">{result.report_type}</Descriptions.Item>
             <Descriptions.Item label="科室">{result.department || '—'}</Descriptions.Item>
             <Descriptions.Item label="文件主体一致性">

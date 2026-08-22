@@ -121,7 +121,7 @@ app/
 └── api/                      # FastAPI ルート
 frontend/                     # Vite + React Web UI
 scripts/                      # Milvus/Neo4j 初期化・データ生成
-tests/                        # pytest（118 passed）
+tests/                        # pytest（132 passed）
 ```
 
 ## 主な API
