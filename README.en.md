@@ -121,7 +121,7 @@ app/
 └── api/                      # FastAPI routes
 frontend/                     # Vite + React web UI
 scripts/                      # Milvus/Neo4j init, data generation
-tests/                        # pytest suite (118 passed)
+tests/                        # pytest suite (132 passed)
 ```
 
 ## Main API

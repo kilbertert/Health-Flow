@@ -121,7 +121,7 @@ app/
 └── api/                      # FastAPI 라우트
 frontend/                     # Vite + React 웹 UI
 scripts/                      # Milvus/Neo4j 초기화·데이터 생성
-tests/                        # pytest (118 passed)
+tests/                        # pytest (132 passed)
 ```
 
 ## 주요 API
