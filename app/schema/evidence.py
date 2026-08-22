@@ -151,7 +151,9 @@ class Unmatched(StrictModel):
 
     @model_validator(mode="after")
     def align_condition_names(self) -> "Unmatched":
-        if self.condition_names and len(self.condition_names) != len(self.condition_codes):
+        if self.condition_names and len(self.condition_names) != len(
+            self.condition_codes
+        ):
             raise ValueError("condition_names must align with condition_codes")
         return self
 
@@ -221,7 +223,11 @@ class EvidenceMatchResponse(StrictModel):
     def validate_version_shape(self) -> "EvidenceMatchResponse":
         if self.schema_version == "3":
             if any(not finding.evidence_items for finding in self.findings):
-                raise ValueError("schema v3 findings require metric-level evidence_items")
-            if any(not finding.evidence_items for finding in self.patient_reply.findings):
+                raise ValueError(
+                    "schema v3 findings require metric-level evidence_items"
+                )
+            if any(
+                not finding.evidence_items for finding in self.patient_reply.findings
+            ):
                 raise ValueError("schema v3 patient findings require evidence_items")
         return self
