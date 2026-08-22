@@ -826,11 +826,12 @@ async def _assess_report(report: ReportModel, db: Session) -> MedicalReportRespo
                 ]
             }
         )
-    if local_unmatched:
+    if typed_result.unmatched:
         finding_count = len(typed_result.findings)
         unmatched_count = len(typed_result.unmatched)
         summary = (
-            f"已匹配 {finding_count} 个正式知识卡；另有 {unmatched_count} 个异常指标暂无已审核内容。"
+            f"发现 {finding_count} 个可能相关健康问题；"
+            f"另有 {unmatched_count} 条指标与健康问题关联暂无已审核知识卡。"
             if finding_count
             else f"发现 {unmatched_count} 个异常指标，但暂无已审核内容。"
         )

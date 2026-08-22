@@ -166,6 +166,31 @@ function evidenceAlertType(hasFindings, hasUnmatched) {
   return 'info';
 }
 
+function evidenceItemsFor(finding, detail) {
+  const items = Array.isArray(finding.evidence_items) && finding.evidence_items.length
+    ? finding.evidence_items
+    : detail.evidence_items;
+  if (Array.isArray(items) && items.length) return items;
+  const card = detail.card || (finding.card_id ? {
+    id: finding.card_id,
+    version: finding.card_version,
+    evidence_profile_id: finding.evidence_profile_id,
+    patient_visible_body: finding.patient_visible_body,
+    sources: finding.sources || [],
+    grade: finding.evidence_strength,
+  } : null);
+  if (!card) return [];
+  const sourceObservations = finding.source_observations || detail.source_observations || [];
+  return [{
+    metric_code: sourceObservations[0]?.metric_code || '',
+    metric_label: sourceObservations[0]?.metric_label || sourceObservations[0]?.metric_code || '异常指标',
+    card,
+    evidence_strength: finding.evidence_strength || card.grade,
+    source_observation_ids: finding.source_observation_ids || detail.source_observation_ids || [],
+    source_observations: sourceObservations,
+  }];
+}
+
 function EvidenceResult({ result, onOpenSource }) {
   if (!result) return null;
   const findings = Array.isArray(result.findings) ? result.findings : [];
@@ -175,9 +200,10 @@ function EvidenceResult({ result, onOpenSource }) {
   const replyFindings = Array.isArray(patientReply?.findings) ? patientReply.findings : findings;
   const unmatched = Array.isArray(result.unmatched) ? result.unmatched : [];
   const skipped = Array.isArray(result.skipped) ? result.skipped : [];
-  const findingDetails = new Map(findings.map((finding) => [finding.card?.id || finding.condition_code, finding]));
+  const findingDetails = new Map(findings.map((finding) => [finding.condition_code, finding]));
   const urgencyLabels = { routine: '常规', soon: '近期', urgent: '紧急', emergency: '危急' };
   const urgencyColors = { routine: 'blue', soon: 'orange', urgent: 'red', emergency: 'magenta' };
+  const strengthLabels = { high: '高', moderate: '中等', low: '低', very_low: '极低', mixed: '各指标分别评级' };
   const summary = patientReply?.summary || result.message;
   return (
     <Card
@@ -196,22 +222,16 @@ function EvidenceResult({ result, onOpenSource }) {
         <List
           dataSource={replyFindings}
           renderItem={(finding) => {
-            const detail = findingDetails.get(finding.card_id) || findingDetails.get(finding.condition_code) || finding;
-            const card = detail.card || {};
-            const sources = Array.isArray(card.sources) ? card.sources : [];
-            const sourceObservations = Array.isArray(finding.source_observations)
-              ? finding.source_observations
-              : (Array.isArray(detail.source_observations) ? detail.source_observations : []);
-            const cardVersion = finding.card_version || card.version || '—';
-            const cardId = finding.card_id || card.id;
-            const body = finding.patient_visible_body || card.patient_visible_body;
+            const detail = findingDetails.get(finding.condition_code) || finding;
+            const evidenceItems = evidenceItemsFor(finding, detail);
+            const observationCount = new Set(evidenceItems.flatMap((item) => item.source_observation_ids || [])).size;
             return (
               <List.Item>
                 <div style={{ width: '100%' }}>
                   <Space wrap>
-                    <Typography.Text strong>{finding.condition_name || finding.condition_code}</Typography.Text>
-                    <Tag color="green">知识卡 {cardId ? `${cardId} · ` : ''}v{cardVersion}</Tag>
-                    <Tag>证据强度：{finding.evidence_strength || card.grade || '—'}</Tag>
+                    <Typography.Text strong>可能相关健康问题：{finding.condition_name || finding.condition_code}</Typography.Text>
+                    <Tag color="gold">{observationCount || evidenceItems.length} 个异常指标</Tag>
+                    <Tag>证据：{strengthLabels[finding.evidence_strength] || finding.evidence_strength || '—'}</Tag>
                     {finding.urgency && (
                       <Tag color={urgencyColors[finding.urgency] || 'blue'}>
                         紧急程度：{urgencyLabels[finding.urgency] || finding.urgency}
@@ -219,58 +239,78 @@ function EvidenceResult({ result, onOpenSource }) {
                     )}
                     <Tag>{finding.department || '建议就诊科室未记录'}</Tag>
                   </Space>
-                  {body && (
-                    <Typography.Paragraph style={{ margin: '8px 0' }}>
-                      {body}
+                  {finding.needs_recheck && (
+                    <Typography.Paragraph type="secondary" style={{ margin: '8px 0' }}>
+                      建议复查{finding.recheck_direction ? `：${finding.recheck_direction}` : ''}
                     </Typography.Paragraph>
                   )}
-                  <Typography.Text type="secondary">
-                    原始证据指标：{(finding.source_observation_ids || []).join('、') || '—'}
-                    {finding.needs_recheck ? `；建议复查${finding.recheck_direction ? `：${finding.recheck_direction}` : ''}` : ''}
-                  </Typography.Text>
-                  {sourceObservations.length > 0 && (
+                  {evidenceItems.length > 0 && (
                     <List
                       size="small"
-                      header="报告原文证据"
-                      dataSource={sourceObservations}
-                      renderItem={(source) => (
-                        <List.Item
-                          actions={[
-                            <Tooltip key="source" title="查看报告原文定位">
-                              <Button
-                                type="text"
-                                icon={<EyeOutlined />}
-                                aria-label={`查看${source.metric_code || '指标'}报告原文`}
-                                onClick={() => onOpenSource?.(source)}
-                              />
-                            </Tooltip>,
-                          ]}
-                        >
-                          <Typography.Text>
-                            文件 #{source.source_file_index} · 第 {source.source_page} 页 · {source.evidence_text || '未记录原文'}
-                            {source.bbox_normalized ? ` · BBox ${JSON.stringify(source.bbox_normalized)}` : ''}
-                          </Typography.Text>
-                        </List.Item>
-                      )}
-                    />
-                  )}
-                  {sources.length > 0 && (
-                    <List
-                      size="small"
-                      header="论文与 Claim 来源"
-                      dataSource={sources}
-                      renderItem={(source) => (
-                        <List.Item>
-                          <Typography.Text>
-                            {source.paper_title || source.paper_id || '未命名论文'}
-                            {source.doi && (
-                              <>（<Typography.Link href={`https://doi.org/${encodeURIComponent(source.doi)}`} target="_blank" rel="noreferrer">{source.doi}</Typography.Link>）</>
-                            )}
-                            {' · '}{source.claim_id || '未命名 Claim'}
-                            {source.locator ? ` · ${source.locator}` : ''}
-                          </Typography.Text>
-                        </List.Item>
-                      )}
+                      header={<Typography.Text strong>异常指标与审核证据</Typography.Text>}
+                      dataSource={evidenceItems}
+                      renderItem={(item) => {
+                        const card = item.card || {};
+                        const sourceObservations = Array.isArray(item.source_observations) ? item.source_observations : [];
+                        const sources = Array.isArray(card.sources) ? card.sources : [];
+                        return (
+                          <List.Item>
+                            <div style={{ width: '100%' }}>
+                              <Space wrap>
+                                <Typography.Text strong>{item.metric_label || item.metric_code}</Typography.Text>
+                                <Tag>证据强度：{strengthLabels[item.evidence_strength || card.grade] || item.evidence_strength || card.grade || '—'}</Tag>
+                                <Tag color="green">知识卡 {card.id ? `${card.id} · ` : ''}v{card.version || '—'}</Tag>
+                              </Space>
+                              {sourceObservations.map((source) => (
+                                <div key={source.observation_id} style={{ marginTop: 8 }}>
+                                  <Space align="start">
+                                    <Tooltip title="查看报告原文定位">
+                                      <Button
+                                        type="text"
+                                        icon={<EyeOutlined />}
+                                        aria-label={`查看${item.metric_label || item.metric_code || '指标'}报告原文`}
+                                        onClick={() => onOpenSource?.(source)}
+                                      />
+                                    </Tooltip>
+                                    <Typography.Text>
+                                      {source.value} {source.unit}
+                                      {source.reference_high !== null && source.reference_high !== undefined ? `（参考上限 ${source.reference_high}）` : ''}
+                                      {source.reference_low !== null && source.reference_low !== undefined ? `（参考下限 ${source.reference_low}）` : ''}
+                                      {` · 文件 #${source.source_file_index} · 第 ${source.source_page} 页`}
+                                      <br />
+                                      <Typography.Text type="secondary">{source.evidence_text || '未记录原文'}</Typography.Text>
+                                    </Typography.Text>
+                                  </Space>
+                                </div>
+                              ))}
+                              {card.patient_visible_body && (
+                                <Typography.Paragraph style={{ margin: '10px 0 4px' }}>
+                                  {card.patient_visible_body}
+                                </Typography.Paragraph>
+                              )}
+                              {sources.length > 0 && (
+                                <List
+                                  size="small"
+                                  header="论文与 Claim 来源"
+                                  dataSource={sources}
+                                  renderItem={(source) => (
+                                    <List.Item>
+                                      <Typography.Text>
+                                        {source.paper_title || source.paper_id || '未命名论文'}
+                                        {source.doi && (
+                                          <>（<Typography.Link href={`https://doi.org/${encodeURIComponent(source.doi)}`} target="_blank" rel="noreferrer">{source.doi}</Typography.Link>）</>
+                                        )}
+                                        {' · '}{source.claim_id || '未命名 Claim'}
+                                        {source.locator ? ` · ${source.locator}` : ''}
+                                      </Typography.Text>
+                                    </List.Item>
+                                  )}
+                                />
+                              )}
+                            </div>
+                          </List.Item>
+                        );
+                      }}
                     />
                   )}
                 </div>
@@ -284,8 +324,8 @@ function EvidenceResult({ result, onOpenSource }) {
           <Alert
             type="warning"
             showIcon
-            title={`有 ${unmatched.length} 个异常指标暂未匹配到已发布知识卡`}
-            description="这些指标保留了原始报告证据，但不会由模型补写结论。"
+            title={`有 ${unmatched.length} 条指标与健康问题关联暂未匹配到已发布知识卡`}
+            description="这些关联保留了原始报告证据，但不会由模型补写结论。"
           />
           <List
             size="small"
@@ -317,6 +357,9 @@ function EvidenceResult({ result, onOpenSource }) {
                       : ''}
                     {source?.reference_low !== null && source?.reference_low !== undefined
                       ? `（参考下限 ${source.reference_low}）`
+                      : ''}
+                    {Array.isArray(item.condition_names) && item.condition_names.length
+                      ? ` · 可能相关：${item.condition_names.join('、')}`
                       : ''}
                     {' · 暂无已审核内容'}
                   </Typography.Text>
