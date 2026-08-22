@@ -20,7 +20,12 @@ class MockLLMClient:
     def chat_with_json(self, messages, **kwargs):
         return {
             "metrics": [
-                {"metric_name": "空腹血糖", "metric_value": "6.5", "unit": "mmol/L", "reference_range": "3.9-6.1"}
+                {
+                    "metric_name": "空腹血糖",
+                    "metric_value": "6.5",
+                    "unit": "mmol/L",
+                    "reference_range": "3.9-6.1",
+                }
             ]
         }
 
@@ -28,8 +33,14 @@ class MockLLMClient:
 @pytest.fixture
 def mock_deps():
     """Mock dependencies."""
-    with patch('app.service.vision_encoder.get_vlm_client', return_value=MockVLMClient()), \
-         patch('app.service.vision_encoder.get_llm_client', return_value=MockLLMClient()):
+    with (
+        patch(
+            "app.service.vision_encoder.get_vlm_client", return_value=MockVLMClient()
+        ),
+        patch(
+            "app.service.vision_encoder.get_llm_client", return_value=MockLLMClient()
+        ),
+    ):
         yield
 
 
@@ -48,7 +59,7 @@ def test_parse_image_report(mock_deps):
     service = VisionEncoderService()
 
     # Create a small PNG image (1x1 pixel)
-    img_bytes = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82'
+    img_bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
 
     result = service.parse_image_report(img_bytes, "image/png")
 
@@ -92,7 +103,7 @@ def test_parsed_report_dataclass():
         raw_text="Test content",
         metrics=[],
         page_count=1,
-        success=True
+        success=True,
     )
 
     assert report.report_type == "text_pdf"
@@ -123,6 +134,49 @@ def test_metric_payload_uses_reference_range_over_provider_star(mock_deps):
     assert metric.abnormal_flag == "H"
 
 
+def test_empty_image_metrics_are_not_reported_as_success(mock_deps):
+    from app.service.vision_encoder import VisionEncoderService
+
+    service = VisionEncoderService()
+    service._vlm_client = SimpleNamespace(
+        chat_with_image=lambda messages, **kwargs: (
+            '{"text_summary":"仅标题","metrics":[]}'
+        ),
+        last_run_id="run-empty",
+        use_responses_api=False,
+    )
+
+    result = service.parse_image_report(b"not-an-image", "report.png")
+
+    assert result.success is False
+    assert result.metrics == []
+    assert "未提取到" in result.error
+
+
+def test_zero_or_invalid_bbox_is_not_presented_as_evidence(mock_deps):
+    from app.service.vision_encoder import VisionEncoderService
+
+    service = VisionEncoderService()
+    metric = service._metric_from_payload(
+        {
+            "metric_name": "空腹血糖",
+            "metric_value": "6.5",
+            "unit": "mmol/L",
+            "reference_range": "3.9-6.1",
+            "bbox": [0, 0, 0, 0],
+            "bbox_normalized": [0, 0, 1001, 1001],
+        },
+        page_number=1,
+        width=1000,
+        height=1000,
+        index=1,
+    )
+
+    assert metric is not None
+    assert metric.bbox is None
+    assert metric.bbox_normalized is None
+
+
 def test_parse_with_filename_jpg(mock_deps):
     """Test parsing JPEG file."""
     from app.service.vision_encoder import VisionEncoderService
@@ -130,7 +184,7 @@ def test_parse_with_filename_jpg(mock_deps):
     service = VisionEncoderService()
 
     # Minimal JPEG data
-    jpeg_data = b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00\xff\xdb\x00C\x00\x08\x06\x06\x07\x06\x05\x08\x07\x07\x07\t\t\x08\n\x0c\x14\r\x0c\x0b\x0b\x0c\x19\x12\x13\x0f\x14\x1d\x1a\x1f\x1e\x1d\x1a\x1c\x1c $.\x27 ,#\x1c\x1c(7teleservices5!=17==11teleservices1x;x8teleservices\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00\xff\xc4\x00\x1f\x00\x00\x01\x05\x01\x01\x01\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\xff\xc4\x00\xb5\x10\x00\x02\x01\x03\x01\x01\x01\x01\x01\x01\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\xff\xda\x00\x08\x01\x01\x00\x00?\x00\xfb\xd5v\xff\xd9'
+    jpeg_data = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00\xff\xdb\x00C\x00\x08\x06\x06\x07\x06\x05\x08\x07\x07\x07\t\t\x08\n\x0c\x14\r\x0c\x0b\x0b\x0c\x19\x12\x13\x0f\x14\x1d\x1a\x1f\x1e\x1d\x1a\x1c\x1c $.\x27 ,#\x1c\x1c(7teleservices5!=17==11teleservices1x;x8teleservices\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00\xff\xc4\x00\x1f\x00\x00\x01\x05\x01\x01\x01\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\xff\xc4\x00\xb5\x10\x00\x02\x01\x03\x01\x01\x01\x01\x01\x01\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\xff\xda\x00\x08\x01\x01\x00\x00?\x00\xfb\xd5v\xff\xd9"
 
     result = service.parse(jpeg_data, "test.jpg")
 
@@ -186,7 +240,9 @@ def test_text_pdf_keeps_successful_pages_when_one_provider_call_fails(monkeypatc
         def __exit__(self, *args):
             return False
 
-    monkeypatch.setitem(sys.modules, "pdfplumber", SimpleNamespace(open=lambda _: Document()))
+    monkeypatch.setitem(
+        sys.modules, "pdfplumber", SimpleNamespace(open=lambda _: Document())
+    )
     service = VisionEncoderService()
 
     def extract(page):

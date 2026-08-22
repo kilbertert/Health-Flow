@@ -220,8 +220,15 @@ def test_confirmed_unmapped_abnormal_is_reported_without_evidence_query():
         response = asyncio.run(_assess_report(report, session))
 
     assert match.call_args.args[0] == []
-    assert response.evidence_result.skipped[0].observation_id == "health-flow-metric-1"
-    assert response.evidence_result.skipped[0].reason == "unknown_metric_code"
+    assert (
+        response.evidence_result.unmatched[0].observation_id == "health-flow-metric-1"
+    )
+    assert response.evidence_result.unmatched[0].reason == "unknown_metric_code"
+    assert response.evidence_result.unmatched[0].metric_label == "Non-HDL"
+    assert (
+        response.evidence_result.unmatched[0].source_observation.evidence_text
+        == "Non-HDL 4.00 mmol/L (<3.40)"
+    )
     session.close()
 
 
@@ -269,8 +276,9 @@ def test_assessment_uses_confirmed_range_instead_of_model_flag():
     ) as match:
         response = asyncio.run(_assess_report(report, session))
 
-    assert match.call_args.args[0][0]["metric_code"] == "fasting_glucose"
+    assert match.call_args.args[0] == []
     assert response.evidence_result.unmatched == []
+    assert response.evidence_result.skipped[0].reason == "within_reference_range"
     session.close()
 
 
@@ -290,6 +298,63 @@ def test_assessment_keeps_confirmed_rows_without_source_evidence_visible_as_skip
 
     assert match.call_args.args[0] == []
     assert response.evidence_result.skipped[0].reason == "missing_source_evidence"
+    session.close()
+
+
+def test_model_only_abnormal_without_reference_range_never_crosses_evidence_boundary():
+    from app.api.report import _assess_report
+
+    session, report = _assessment_fixture(
+        reference_range=None,
+        evidence_text="空腹血糖 5.2 mmol/L",
+        abnormal_flag="H",
+    )
+    with patch(
+        "app.api.report.match_published_evidence",
+        return_value=_evidence_result(),
+    ) as match:
+        response = asyncio.run(_assess_report(report, session))
+
+    assert match.call_args.args[0] == []
+    assert response.evidence_result.skipped[0].reason == "missing_reference_range"
+    session.close()
+
+
+def test_report_metrics_are_returned_in_source_order():
+    from app.api.report import _ordered_metrics
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    report = ReportModel(patient_id="P-order", status="pending_confirmation")
+    session.add(report)
+    session.flush()
+    session.add_all(
+        [
+            MetricModel(
+                report_id=report.id, source_file_index=2, page_number=1, metric_name="C"
+            ),
+            MetricModel(
+                report_id=report.id, source_file_index=1, page_number=2, metric_name="B"
+            ),
+            MetricModel(
+                report_id=report.id, source_file_index=1, page_number=1, metric_name="A"
+            ),
+        ]
+    )
+    session.commit()
+
+    assert [
+        item.metric_name for item in _ordered_metrics(session, report.id).all()
+    ] == [
+        "A",
+        "B",
+        "C",
+    ]
     session.close()
 
 
@@ -498,12 +563,12 @@ def test_report_parse_keeps_successful_files_when_one_file_fails():
             return_value=SimpleNamespace(REPORT_PARSE_WORKERS=2),
         ),
     ):
-        _parse_report(report_id, accepted_files, session_factory)
+        assert _parse_report(report_id, accepted_files, session_factory) is False
 
     session = session_factory()
     saved = session.get(ReportModel, report_id)
     assert saved is not None
-    assert saved.status == "pending_confirmation"
+    assert saved.status == "processing"
     assert len(saved.metrics) == 1
     assert saved.metrics[0].source_file_index == 1
     assert saved.parsed_content["warnings"] == ["bad.png: provider timeout"]
