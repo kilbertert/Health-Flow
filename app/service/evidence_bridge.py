@@ -23,6 +23,7 @@ METRIC_ALIASES = {
     "甘油三酯": "triglycerides",
     "高密度脂蛋白胆固醇": "hdl_c",
     "低密度脂蛋白胆固醇": "ldl_c",
+    "低脂蛋白胆固醇": "ldl_c",
     "总胆固醇": "total_cholesterol",
     "Total Cholesterol": "total_cholesterol",
     "Total Chol": "total_cholesterol",

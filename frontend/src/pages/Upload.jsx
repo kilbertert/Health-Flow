@@ -674,13 +674,13 @@ export default function UploadPage() {
             {result.extraction_trace && (
               <>
                 <Descriptions.Item label="抽取模型">
-                  {result.extraction_trace.model || '—'}
+                  {result.extraction_trace.extraction_model || '—'}
                 </Descriptions.Item>
                 <Descriptions.Item label="抽取运行 ID">
-                  {result.extraction_trace.run_id || '—'}
+                  {result.extraction_trace.extraction_run_id || '—'}
                 </Descriptions.Item>
                 <Descriptions.Item label="Prompt 版本">
-                  {result.extraction_trace.prompt_version || '—'}
+                  {result.extraction_trace.extraction_prompt_version || '—'}
                 </Descriptions.Item>
               </>
             )}

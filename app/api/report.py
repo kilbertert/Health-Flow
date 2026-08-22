@@ -33,7 +33,12 @@ from app.data.models import MedicalReport as ReportModel
 from app.data.models import MetricRecord as MetricModel
 from app.data.models import ReportAuditEvent, ReportExtractionJob
 from app.data.models import ReportFile as ReportFileModel
-from app.schema.evidence import EvidenceMatchResponse, Skipped, Unmatched
+from app.schema.evidence import (
+    EvidenceMatchResponse,
+    Skipped,
+    SourceObservation,
+    Unmatched,
+)
 from app.schema.report import (
     MedicalReportResponse,
     MetricRecord,
@@ -749,6 +754,26 @@ async def _assess_report(report: ReportModel, db: Session) -> MedicalReportRespo
     typed_result = EvidenceMatchResponse.model_validate(
         await match_published_evidence(observations)
     )
+    source_by_id = {
+        observation["observation_id"]: SourceObservation.model_validate(
+            {key: value for key, value in observation.items() if key != "confirmation_status"}
+        )
+        for observation in observations
+    }
+    if typed_result.unmatched:
+        typed_result = typed_result.model_copy(
+            update={
+                "unmatched": [
+                    item.model_copy(
+                        update={
+                            "source_observation": item.source_observation
+                            or source_by_id.get(item.observation_id)
+                        }
+                    )
+                    for item in typed_result.unmatched
+                ]
+            }
+        )
     if local_unmatched:
         typed_result = typed_result.model_copy(
             update={

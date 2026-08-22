@@ -98,6 +98,7 @@ def test_metric_names_with_report_abbreviations_are_canonicalized():
         "Triglyceride": "triglycerides",
         "HDL-C": "hdl_c",
         "LDL-C": "ldl_c",
+        "低脂蛋白（坏）胆固醇（LDL-C）": "ldl_c",
     }
     assert {name: metric_code_for_name(name) for name in expected} == expected
 
@@ -229,6 +230,64 @@ def test_confirmed_unmapped_abnormal_is_reported_without_evidence_query():
         response.evidence_result.unmatched[0].source_observation.evidence_text
         == "Non-HDL 4.00 mmol/L (<3.40)"
     )
+    session.close()
+
+
+def test_unknown_abnormal_metric_remains_auditable_unmatched():
+    from app.service.evidence_bridge import build_observations_with_unmatched
+
+    metric = MetricModel(
+        id=1,
+        report_id=1,
+        metric_name="Non-HDL",
+        metric_value="4.00",
+        unit="mmol/L",
+        reference_range="<3.40",
+        abnormal_flag="H",
+        page_number=1,
+        evidence_text="Non-HDL 4.00 mmol/L (<3.40)",
+        source_file_index=1,
+        confirmation_status="confirmed",
+    )
+    observations, skipped, unmatched = build_observations_with_unmatched([metric])
+
+    assert observations == []
+    assert skipped == []
+    assert unmatched[0]["reason"] == "unknown_metric_code"
+
+
+def test_external_unmatched_keeps_report_source_observation():
+    from app.api.report import _assess_report
+
+    session, report = _assessment_fixture(
+        metric_code="total_cholesterol",
+        metric_name="总胆固醇",
+        metric_value="5.5",
+        reference_range="<5.2",
+        evidence_text="总胆固醇 5.5 mmol/L (<5.2)",
+        abnormal_flag="H",
+    )
+    with patch(
+        "app.api.report.match_published_evidence",
+        return_value=_evidence_result(
+            unmatched=[
+                {
+                    "observation_id": "health-flow-metric-1",
+                    "metric_code": "total_cholesterol",
+                    "metric_label": "总胆固醇",
+                    "condition_codes": ["COND_DYSLIPIDEMIA"],
+                    "reason": "no_published_knowledge_card",
+                    "source_observation": None,
+                }
+            ]
+        ),
+    ):
+        response = asyncio.run(_assess_report(report, session))
+
+    source = response.evidence_result.unmatched[0].source_observation
+    assert source is not None
+    assert source.evidence_text == "总胆固醇 5.5 mmol/L (<5.2)"
+    assert source.source_page == 1
     session.close()
 
 
