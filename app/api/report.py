@@ -33,7 +33,7 @@ from app.data.models import MedicalReport as ReportModel
 from app.data.models import MetricRecord as MetricModel
 from app.data.models import ReportAuditEvent, ReportExtractionJob
 from app.data.models import ReportFile as ReportFileModel
-from app.schema.evidence import EvidenceMatchResponse, Skipped
+from app.schema.evidence import EvidenceMatchResponse, Skipped, Unmatched
 from app.schema.report import (
     MedicalReportResponse,
     MetricRecord,
@@ -41,7 +41,7 @@ from app.schema.report import (
 )
 from app.service.evidence_bridge import (
     EvidenceBridgeError,
-    build_observations_with_skipped,
+    build_observations_with_unmatched,
     fetch_metric_catalog,
     match_published_evidence,
     metric_code_for_name,
@@ -51,6 +51,21 @@ from app.service.vision_encoder import ParsedReport, get_vision_encoder_service
 router = APIRouter()
 ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".gif", ".bmp"}
 logger = logging.getLogger(__name__)
+_TRANSIENT_ERROR_MARKERS = (
+    "timeout",
+    "timed out",
+    "temporarily",
+    "unavailable",
+    "connection",
+    "暂时",
+    "不可用",
+    "连接",
+    "429",
+    "502",
+    "503",
+    "504",
+    "json",
+)
 
 
 def _token_hash(token: str) -> str:
@@ -179,6 +194,27 @@ def _audit(
     )
 
 
+def _ordered_metrics(db: Session, report_id: int):
+    return (
+        db.query(MetricModel)
+        .filter(MetricModel.report_id == report_id)
+        .order_by(
+            MetricModel.source_file_index,
+            MetricModel.page_number,
+            MetricModel.id,
+        )
+    )
+
+
+def _processing_warnings(report: ReportModel) -> list[str]:
+    return list((report.parsed_content or {}).get("warnings") or [])
+
+
+def _retryable_error(text: str | None) -> bool:
+    value = (text or "").casefold()
+    return any(marker.casefold() in value for marker in _TRANSIENT_ERROR_MARKERS)
+
+
 @router.post("/report/upload", response_model=MedicalReportResponse, status_code=202)
 async def upload_report(
     request: Request,
@@ -303,6 +339,31 @@ def _parse_report(
             for file_index, _, parsed, error in successful_reports
             for metric_index, item in enumerate(parsed.metrics, start=1)
         ]
+        unique_metrics: dict[tuple[object, ...], MetricRecord] = {}
+        for item in parsed_metrics:
+            identity = " ".join(
+                (item.evidence_text or item.metric_name).split()
+            ).casefold()
+            key = (
+                item.source_file_index,
+                item.page_number,
+                identity,
+                item.metric_value,
+                item.unit,
+                item.reference_range,
+            )
+            unique_metrics.setdefault(key, item)
+        parsed_metrics = sorted(
+            unique_metrics.values(),
+            key=lambda item: (
+                item.source_file_index,
+                item.page_number or 0,
+                item.bbox_normalized[1] if item.bbox_normalized else 1001,
+                item.bbox_normalized[0] if item.bbox_normalized else 1001,
+                item.metric_name.casefold(),
+                item.metric_value,
+            ),
+        )
         if not parsed_metrics:
             errors = "; ".join(
                 f"{filename}: {error}"
@@ -346,6 +407,9 @@ def _parse_report(
             ]
             if warnings:
                 report.parsed_content["warnings"] = warnings
+                report.parsed_content["retryable"] = any(
+                    _retryable_error(warning) for warning in warnings
+                )
             first_trace = next(
                 (parsed for _, _, parsed, _ in parsed_reports if parsed.run_id),
                 parsed_reports[0][2],
@@ -358,15 +422,15 @@ def _parse_report(
             provider_runs = [
                 run_id
                 for _, _, parsed, _ in parsed_reports
-                    for run_id in (
-                        parsed.provider_run_ids
-                        or ((parsed.provider_run_id,) if parsed.provider_run_id else ())
-                    )
-                    if run_id
-                ]
+                for run_id in (
+                    parsed.provider_run_ids
+                    or ((parsed.provider_run_id,) if parsed.provider_run_id else ())
+                )
+                if run_id
+            ]
             report.provider_run_id = provider_runs[0] if provider_runs else None
             report.provider_run_ids = json.dumps(provider_runs, ensure_ascii=False)
-            report.status = "pending_confirmation"
+            report.status = "processing" if warnings else "pending_confirmation"
             for item in parsed_metrics:
                 db.add(
                     MetricModel(
@@ -390,7 +454,7 @@ def _parse_report(
             _audit(
                 db,
                 report,
-                "extraction_completed",
+                "extraction_partial" if warnings else "extraction_completed",
                 {
                     "metric_count": len(parsed_metrics),
                     "provider": report.extraction_provider,
@@ -404,7 +468,7 @@ def _parse_report(
                 actor="ai:report-extractor",
             )
             db.commit()
-        return True
+        return not warnings
     except Exception as exc:
         logger.exception("report parsing failed", extra={"report_id": report_id})
         with factory() as db:
@@ -415,6 +479,8 @@ def _parse_report(
             report.parsed_content = {
                 **(report.parsed_content or {}),
                 "error": "报告智能解读失败，请重新上传或稍后重试。",
+                "error_class": type(exc).__name__,
+                "retryable": _retryable_error(str(exc)),
             }
             _audit(
                 db,
@@ -511,7 +577,7 @@ async def get_report(
     report = _authorized_report(
         db, report_id, x_report_token, owner_id=_owner_id(request)
     )
-    metrics = db.query(MetricModel).filter(MetricModel.report_id == report_id).all()
+    metrics = _ordered_metrics(db, report_id).all()
     return _report_response(report, metrics)
 
 
@@ -528,12 +594,17 @@ async def confirm_report(
     )
     if report.status not in {"pending_confirmation", "confirmed"}:
         raise HTTPException(status_code=409, detail="报告当前状态不允许确认")
+    if _processing_warnings(report):
+        raise HTTPException(
+            status_code=409,
+            detail="报告仍有文件未完成解析，请重新上传或先修复失败文件",
+        )
     if (
         report.subject_consistency != "same"
         and confirmation.subject_consistency != "same"
     ):
         raise HTTPException(status_code=422, detail="请先确认所有文件属于同一主体")
-    metrics = db.query(MetricModel).filter(MetricModel.report_id == report_id).all()
+    metrics = _ordered_metrics(db, report_id).all()
     by_id = {metric.id: metric for metric in metrics}
     supplied = {item.metric_id: item for item in confirmation.observations}
     if len(supplied) != len(confirmation.observations) or not set(supplied) <= set(
@@ -657,6 +728,11 @@ async def assess_report(
     )
     if report.status not in {"confirmed", "assessed"}:
         raise HTTPException(status_code=409, detail="请先确认报告指标")
+    if _processing_warnings(report):
+        raise HTTPException(
+            status_code=409,
+            detail="报告仍有文件未完成解析，不能生成健康提示",
+        )
     try:
         return await _assess_report(report, db)
     except EvidenceBridgeError as exc:
@@ -664,11 +740,24 @@ async def assess_report(
 
 
 async def _assess_report(report: ReportModel, db: Session) -> MedicalReportResponse:
-    metrics = db.query(MetricModel).filter(MetricModel.report_id == report.id).all()
-    observations, local_skipped = build_observations_with_skipped(metrics)
+    if _processing_warnings(report):
+        raise EvidenceBridgeError("报告仍有文件未完成解析")
+    metrics = _ordered_metrics(db, report.id).all()
+    observations, local_skipped, local_unmatched = build_observations_with_unmatched(
+        metrics
+    )
     typed_result = EvidenceMatchResponse.model_validate(
         await match_published_evidence(observations)
     )
+    if local_unmatched:
+        typed_result = typed_result.model_copy(
+            update={
+                "unmatched": [
+                    *typed_result.unmatched,
+                    *(Unmatched.model_validate(item) for item in local_unmatched),
+                ]
+            }
+        )
     if local_skipped:
         typed_result = typed_result.model_copy(
             update={
@@ -676,6 +765,25 @@ async def _assess_report(report: ReportModel, db: Session) -> MedicalReportRespo
                     *typed_result.skipped,
                     *(Skipped.model_validate(item) for item in local_skipped),
                 ]
+            }
+        )
+    if local_unmatched:
+        finding_count = len(typed_result.findings)
+        unmatched_count = len(typed_result.unmatched)
+        summary = (
+            f"已匹配 {finding_count} 个正式知识卡；另有 {unmatched_count} 个异常指标暂无已审核内容。"
+            if finding_count
+            else f"发现 {unmatched_count} 个异常指标，但暂无已审核内容。"
+        )
+        typed_result = typed_result.model_copy(
+            update={
+                "message": summary,
+                "patient_reply": typed_result.patient_reply.model_copy(
+                    update={
+                        "summary": summary,
+                        "unmatched_count": unmatched_count,
+                    }
+                ),
             }
         )
     report.evidence_result = typed_result.model_dump(mode="json")
@@ -695,7 +803,7 @@ async def _assess_report(report: ReportModel, db: Session) -> MedicalReportRespo
     report.status = "assessed"
     db.commit()
     db.refresh(report)
-    metrics = db.query(MetricModel).filter(MetricModel.report_id == report.id).all()
+    metrics = _ordered_metrics(db, report.id).all()
     return _report_response(report, metrics)
 
 
@@ -708,10 +816,7 @@ async def get_report_metrics(
 ):
     _authorized_report(db, report_id, x_report_token, owner_id=_owner_id(request))
     return [
-        _metric_response(metric)
-        for metric in db.query(MetricModel)
-        .filter(MetricModel.report_id == report_id)
-        .all()
+        _metric_response(metric) for metric in _ordered_metrics(db, report_id).all()
     ]
 
 

@@ -6,6 +6,7 @@ import base64
 import hashlib
 import io
 import json
+import math
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
@@ -124,7 +125,9 @@ class VisionEncoderService:
                 futures = [
                     (
                         page_number,
-                        executor.submit(self._extract_text_page, (page_number, page_text)),
+                        executor.submit(
+                            self._extract_text_page, (page_number, page_text)
+                        ),
                     )
                     for page_number, page_text in indexed_pages
                 ]
@@ -158,7 +161,9 @@ class VisionEncoderService:
                     error=(
                         "; ".join(errors)
                         if errors
-                        else None if unique_metrics else "未提取到可确认的医学指标"
+                        else None
+                        if unique_metrics
+                        else "未提取到可确认的医学指标"
                     ),
                 ),
                 self.llm_client,
@@ -208,8 +213,14 @@ class VisionEncoderService:
                 raw_text="\n\n".join(texts),
                 metrics=metrics,
                 page_count=len(images),
-                success=bool(texts or metrics),
-                error="; ".join(errors) if errors else None,
+                success=bool(metrics),
+                error=(
+                    "; ".join(errors)
+                    if errors
+                    else None
+                    if metrics
+                    else "未提取到可确认的医学指标"
+                ),
             ),
             self.vlm_client,
         )
@@ -224,7 +235,14 @@ class VisionEncoderService:
     ) -> ParsedReport:
         text, metrics, error = self._parse_image_with_vlm(image_bytes, mime_type, 1)
         parsed = self._with_trace(
-            ParsedReport("image", text, metrics, 1, error is None, error),
+            ParsedReport(
+                "image",
+                text,
+                metrics,
+                1,
+                error is None and bool(metrics),
+                error or (None if metrics else "未提取到可确认的医学指标"),
+            ),
             self.vlm_client,
         )
         return replace(
@@ -289,14 +307,18 @@ class VisionEncoderService:
         try:
             response = self.vlm_client.chat_with_image(messages, temperature=0)
             payload = self._parse_json_response(response)
+            raw_metrics = payload.get("metrics", [])
+            if not isinstance(raw_metrics, list):
+                raise TypeError("VLM metrics 不是数组")
             metrics = [
                 self._metric_from_payload(item, page_number, width, height, index)
-                for index, item in enumerate(payload.get("metrics", []), start=1)
+                for index, item in enumerate(raw_metrics, start=1)
             ]
+            metrics = [item for item in metrics if item]
             return (
                 str(payload.get("text_summary", "")),
-                [item for item in metrics if item],
-                None,
+                metrics,
+                None if metrics else "未提取到可确认的医学指标",
             )
         except Exception as exc:
             return "", [], str(exc)
@@ -309,39 +331,50 @@ class VisionEncoderService:
         height: Optional[int],
         index: int,
     ) -> Optional[MetricRecord]:
+        if not isinstance(data, dict):
+            return None
         name = str(data.get("metric_name", "")).strip()
         value = str(data.get("metric_value", "")).strip()
         if not name or not value:
             return None
 
         bbox = self._clean_bbox(data.get("bbox"))
-        normalized = self._clean_bbox(data.get("bbox_normalized"))
+        normalized = self._clean_bbox(data.get("bbox_normalized"), upper=1000)
         if normalized is None and bbox and width and height:
             normalized = self.normalize_bbox(bbox, width, height)
         if bbox is None and normalized and width and height:
             bbox = self.denormalize_bbox(normalized, width, height)
 
+        reference_range = data.get("reference_range")
+        reference_range = str(reference_range).strip() if reference_range else None
         raw_flag = str(data.get("abnormal_flag") or "").strip()
-        abnormal_flag = infer_abnormal_flag(value, data.get("reference_range"))
+        abnormal_flag = infer_abnormal_flag(value, reference_range)
         if abnormal_flag is None:
             abnormal_flag = "A" if raw_flag == "*" else raw_flag or None
+
+        evidence_text = data.get("evidence_text")
+        evidence_text = str(evidence_text).strip() if evidence_text else None
+        unit = data.get("unit")
+        unit = str(unit).strip() if unit else None
 
         return MetricRecord(
             metric_name=name,
             metric_value=value,
-            unit=data.get("unit"),
-            reference_range=data.get("reference_range"),
+            unit=unit,
+            reference_range=reference_range,
             trend=data.get("trend"),
             abnormal_flag=abnormal_flag,
             bbox=bbox,
             bbox_normalized=normalized,
             page_number=page_number,
-            evidence_text=data.get("evidence_text"),
+            evidence_text=evidence_text,
             source_id=str(data.get("source_id") or f"p{page_number}-m{index}"),
         )
 
     @staticmethod
-    def _clean_bbox(value: Any) -> Optional[list[float]]:
+    def _clean_bbox(
+        value: Any, *, upper: Optional[float] = None
+    ) -> Optional[list[float]]:
         if not isinstance(value, (list, tuple)) or len(value) != 4:
             return None
         try:
@@ -349,7 +382,12 @@ class VisionEncoderService:
         except (TypeError, ValueError):
             return None
         x1, y1, x2, y2 = values
-        if x2 < x1 or y2 < y1:
+        if any(
+            not math.isfinite(item) or item < 0 or (upper is not None and item > upper)
+            for item in values
+        ):
+            return None
+        if x2 <= x1 or y2 <= y1:
             return None
         return values
 

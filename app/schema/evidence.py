@@ -18,7 +18,8 @@ class MetricCatalogItem(StrictModel):
 
 class SourceObservation(StrictModel):
     observation_id: str
-    metric_code: str
+    metric_code: str | None = None
+    metric_label: str | None = None
     value: float
     unit: str
     reference_low: float | None = None
@@ -106,10 +107,11 @@ class Finding(StrictModel):
 
 class Unmatched(StrictModel):
     observation_id: str
-    metric_code: str
+    metric_code: str | None = None
     metric_label: str
     condition_codes: list[str]
-    reason: Literal["no_published_knowledge_card"]
+    reason: Literal["no_published_knowledge_card", "unknown_metric_code"]
+    source_observation: SourceObservation | None = None
 
 
 class Skipped(StrictModel):
