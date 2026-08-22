@@ -175,7 +175,7 @@ function EvidenceResult({ result, onOpenSource }) {
   const replyFindings = Array.isArray(patientReply?.findings) ? patientReply.findings : findings;
   const unmatched = Array.isArray(result.unmatched) ? result.unmatched : [];
   const skipped = Array.isArray(result.skipped) ? result.skipped : [];
-  const findingDetails = new Map(findings.map((finding) => [finding.condition_code, finding]));
+  const findingDetails = new Map(findings.map((finding) => [finding.card?.id || finding.condition_code, finding]));
   const urgencyLabels = { routine: '常规', soon: '近期', urgent: '紧急', emergency: '危急' };
   const urgencyColors = { routine: 'blue', soon: 'orange', urgent: 'red', emergency: 'magenta' };
   const summary = patientReply?.summary || result.message;
@@ -196,7 +196,7 @@ function EvidenceResult({ result, onOpenSource }) {
         <List
           dataSource={replyFindings}
           renderItem={(finding) => {
-            const detail = findingDetails.get(finding.condition_code) || finding;
+            const detail = findingDetails.get(finding.card_id) || findingDetails.get(finding.condition_code) || finding;
             const card = detail.card || {};
             const sources = Array.isArray(card.sources) ? card.sources : [];
             const sourceObservations = Array.isArray(finding.source_observations)
