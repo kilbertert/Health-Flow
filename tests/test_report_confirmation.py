@@ -271,6 +271,35 @@ def test_non_hdl_metric_builds_auditable_observation():
     assert unmatched == []
 
 
+def test_json_encoded_bboxes_are_normalized_before_evidence_api_call():
+    from app.service.evidence_bridge import build_observations_with_unmatched
+
+    metric = MetricModel(
+        id=42,
+        report_id=7,
+        metric_name="LDL-C",
+        metric_value="3.63",
+        unit="mmol/L",
+        reference_range="<2.60",
+        abnormal_flag="H",
+        page_number=1,
+        evidence_text="LDL-C 3.63 mmol/L (<2.60)",
+        source_file_index=5,
+        source_id="file-5/p1-m4",
+        metric_code="ldl_c",
+        confirmation_status="confirmed",
+        bbox="[1196.0, 348.0, 1259.0, 383.0]",
+        bbox_normalized="[584.0, 283.0, 615.0, 312.0]",
+    )
+
+    observations, skipped, unmatched = build_observations_with_unmatched([metric])
+
+    assert skipped == []
+    assert unmatched == []
+    assert observations[0]["bbox"] == [1196.0, 348.0, 1259.0, 383.0]
+    assert observations[0]["bbox_normalized"] == [584.0, 283.0, 615.0, 312.0]
+
+
 def test_external_unmatched_keeps_report_source_observation():
     from app.api.report import _assess_report
 

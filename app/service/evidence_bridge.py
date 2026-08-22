@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import re
 import unicodedata
@@ -219,6 +220,8 @@ def build_observations_with_unmatched(
             )
             continue
         if not code:
+            bbox = _coordinate_list(getattr(metric, "bbox", None))
+            bbox_normalized = _coordinate_list(getattr(metric, "bbox_normalized", None))
             source_observation = {
                 "observation_id": f"health-flow-metric-{metric.id}",
                 "metric_code": None,
@@ -237,8 +240,8 @@ def build_observations_with_unmatched(
                     if metric.report_id is not None
                     else None
                 ),
-                "bbox": getattr(metric, "bbox", None),
-                "bbox_normalized": getattr(metric, "bbox_normalized", None),
+                "bbox": bbox,
+                "bbox_normalized": bbox_normalized,
             }
             unmatched.append(
                 {
@@ -270,8 +273,10 @@ def build_observations_with_unmatched(
                     if metric.report_id is not None and metric.page_number is not None
                     else None
                 ),
-                "bbox": getattr(metric, "bbox", None),
-                "bbox_normalized": getattr(metric, "bbox_normalized", None),
+                "bbox": _coordinate_list(getattr(metric, "bbox", None)),
+                "bbox_normalized": _coordinate_list(
+                    getattr(metric, "bbox_normalized", None)
+                ),
             }
         )
     return observations, skipped, unmatched
@@ -284,7 +289,7 @@ async def match_published_evidence(
 ) -> dict[str, object]:
     settings = settings or get_settings()
     headers = _service_headers(settings, correlate=True)
-    payload = {"schema_version": "2", "observations": observations}
+    payload = {"schema_version": "3", "observations": observations}
     try:
         async with httpx.AsyncClient(
             timeout=settings.GENESIS_EVIDENCE_TIMEOUT_SECONDS
@@ -371,3 +376,20 @@ def _evidence_contains_value(evidence: str, value: float) -> bool:
         if math.isclose(float(match), value, rel_tol=1e-9, abs_tol=1e-12):
             return True
     return False
+
+
+def _coordinate_list(value: object) -> list[float] | None:
+    """Normalize ORM JSON values before they cross the evidence API boundary."""
+
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            return None
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        return None
+    try:
+        coordinates = [float(item) for item in value]
+    except (TypeError, ValueError):
+        return None
+    return coordinates if all(math.isfinite(item) for item in coordinates) else None
