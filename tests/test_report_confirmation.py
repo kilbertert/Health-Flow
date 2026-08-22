@@ -95,6 +95,9 @@ def test_metric_names_with_report_abbreviations_are_canonicalized():
         "身体质量指数 / BMI": "bmi",
         "收缩压 / Systolic Blood Pressure": "systolic_blood_pressure",
         "Total Chol": "total_cholesterol",
+        "Non-HDL": "non_hdl_c",
+        "Non-HDL-C": "non_hdl_c",
+        "非高密度脂蛋白胆固醇": "non_hdl_c",
         "Triglyceride": "triglycerides",
         "HDL-C": "hdl_c",
         "LDL-C": "ldl_c",
@@ -181,7 +184,7 @@ def test_reference_range_deterministically_normalizes_abnormality():
     assert infer_abnormal_flag("<20", "<20") is None
 
 
-def test_confirmed_unmapped_abnormal_is_reported_without_evidence_query():
+def test_confirmed_non_hdl_abnormal_is_sent_to_evidence_service():
     from app.api.report import _assess_report
 
     engine = create_engine(
@@ -216,16 +219,27 @@ def test_confirmed_unmapped_abnormal_is_reported_without_evidence_query():
     session.commit()
     with patch(
         "app.api.report.match_published_evidence",
-        return_value=_evidence_result(),
+        return_value=_evidence_result(
+            unmatched=[
+                {
+                    "observation_id": "health-flow-metric-1",
+                    "metric_code": "non_hdl_c",
+                    "metric_label": "非高密度脂蛋白胆固醇",
+                    "condition_codes": ["COND_DYSLIPIDEMIA"],
+                    "reason": "no_published_knowledge_card",
+                    "source_observation": None,
+                }
+            ]
+        ),
     ) as match:
         response = asyncio.run(_assess_report(report, session))
 
-    assert match.call_args.args[0] == []
+    assert match.call_args.args[0][0]["metric_code"] == "non_hdl_c"
     assert (
         response.evidence_result.unmatched[0].observation_id == "health-flow-metric-1"
     )
-    assert response.evidence_result.unmatched[0].reason == "unknown_metric_code"
-    assert response.evidence_result.unmatched[0].metric_label == "Non-HDL"
+    assert response.evidence_result.unmatched[0].reason == "no_published_knowledge_card"
+    assert response.evidence_result.unmatched[0].metric_label == "非高密度脂蛋白胆固醇"
     assert (
         response.evidence_result.unmatched[0].source_observation.evidence_text
         == "Non-HDL 4.00 mmol/L (<3.40)"
@@ -233,7 +247,7 @@ def test_confirmed_unmapped_abnormal_is_reported_without_evidence_query():
     session.close()
 
 
-def test_unknown_abnormal_metric_remains_auditable_unmatched():
+def test_non_hdl_metric_builds_auditable_observation():
     from app.service.evidence_bridge import build_observations_with_unmatched
 
     metric = MetricModel(
@@ -251,9 +265,10 @@ def test_unknown_abnormal_metric_remains_auditable_unmatched():
     )
     observations, skipped, unmatched = build_observations_with_unmatched([metric])
 
-    assert observations == []
+    assert observations[0]["metric_code"] == "non_hdl_c"
+    assert observations[0]["evidence_text"] == "Non-HDL 4.00 mmol/L (<3.40)"
     assert skipped == []
-    assert unmatched[0]["reason"] == "unknown_metric_code"
+    assert unmatched == []
 
 
 def test_external_unmatched_keeps_report_source_observation():
