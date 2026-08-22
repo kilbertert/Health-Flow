@@ -134,6 +134,115 @@ def test_evidence_v2_capability_fields_are_parsed_in_nested_response():
     assert result.patient_reply.findings[0].product_status == "not_implemented"
 
 
+def test_evidence_v3_groups_metric_items_under_one_condition():
+    card = {
+        "id": "card-ldl",
+        "condition_code": "COND_DYSLIPIDEMIA",
+        "scope_key": "metric:ldl_c",
+        "version": "1.0.0",
+        "status": "published",
+        "grade": "moderate",
+        "published_at": "2026-08-19T00:00:00Z",
+        "evidence_profile_id": "profile-ldl",
+        "patient_visible_body": "正式知识卡内容",
+        "sources": [
+            {
+                "claim_id": "claim-ldl",
+                "paper_id": "paper-ldl",
+                "paper_title": "Test paper",
+                "doi": "10.1000/test-ldl",
+                "evidence": "Test evidence",
+                "locator": "Results, paragraph 1",
+            }
+        ],
+        "content_layer": "context_only",
+        "action_status": "not_available",
+        "action_message": "当前证据确定性尚未达到具体行动建议门槛。",
+        "product_status": "not_implemented",
+    }
+    source = {
+        "observation_id": "observation-ldl",
+        "metric_code": "ldl_c",
+        "value": 3.63,
+        "unit": "mmol/L",
+        "reference_low": None,
+        "reference_high": 2.6,
+        "evidence_text": "LDL-C 3.63 mmol/L (<2.60)",
+        "source_file_index": 5,
+        "source_page": 1,
+        "source_id": "file-5/p1-m4",
+        "source_url": "/api/health/report/1/files/5/pages/1",
+        "bbox": [1196, 348, 1259, 383],
+        "bbox_normalized": [584, 283, 615, 312],
+    }
+    evidence_item = {
+        "metric_code": "ldl_c",
+        "metric_label": "低密度脂蛋白胆固醇",
+        "card": card,
+        "evidence_strength": "moderate",
+        "source_observation_ids": ["observation-ldl"],
+        "source_observations": [source],
+    }
+    finding = {
+        "condition_code": "COND_DYSLIPIDEMIA",
+        "condition_name": "血脂异常",
+        "source_observation_ids": ["observation-ldl"],
+        "urgency": "routine",
+        "abnormality_severity": 1,
+        "evidence_strength": "moderate",
+        "needs_recheck": True,
+        "department": "心血管内科",
+        "recheck_direction": "空腹复查血脂组合",
+        "epidemiology_background": "",
+        "source_observations": [source],
+        "evidence_items": [evidence_item],
+        "sorting": {
+            "urgency": "routine",
+            "abnormality_severity": 1,
+            "evidence_strength": "moderate",
+            "needs_recheck": True,
+            "department": "心血管内科",
+            "epidemiology_background": "",
+        },
+        "content_layer": "context_only",
+        "action_status": "not_available",
+        "action_message": "当前证据确定性尚未达到具体行动建议门槛。",
+        "product_status": "not_implemented",
+    }
+    patient_finding = {
+        key: value
+        for key, value in finding.items()
+        if key
+        not in {
+            "sorting",
+            "epidemiology_background",
+        }
+    }
+    payload = {
+        "schema_version": "3",
+        "sorting_version": "published-card-reference-range-v1",
+        "correlation_id": "00000000-0000-0000-0000-000000000001",
+        "findings": [finding],
+        "unmatched": [],
+        "skipped": [],
+        "message": "",
+        "patient_reply": {
+            "title": "体检报告解读与健康风险提示",
+            "summary": "根据已确认的报告指标，发现 1 个可能相关健康问题，涉及 1 个异常指标。",
+            "findings": [patient_finding],
+            "unmatched_count": 0,
+            "disclaimer": "仅供健康信息参考。",
+        },
+    }
+
+    result = EvidenceMatchResponse.model_validate(payload)
+
+    assert result.schema_version == "3"
+    assert result.findings[0].card is None
+    assert result.findings[0].evidence_items[0].card.scope_key == "metric:ldl_c"
+    assert result.patient_reply.findings[0].evidence_items[0].metric_code == "ldl_c"
+
+
 def test_chat_request_validation():
     """Test ChatRequest validation."""
     request = ChatRequest(
