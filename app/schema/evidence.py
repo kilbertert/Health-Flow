@@ -1,4 +1,4 @@
-"""Validated Evidence API v1 response contract."""
+"""Validated published-evidence response contract."""
 
 import math
 from datetime import datetime
@@ -78,6 +78,12 @@ class PublishedCard(StrictModel):
     evidence_profile_id: str
     patient_visible_body: str
     sources: list[ClaimSource] = Field(min_length=1)
+    # Evidence API v2 exposes capability metadata for the next product layer.
+    # Defaults keep older test fixtures and cached responses readable.
+    content_layer: Literal["context_only"] = "context_only"
+    action_status: Literal["not_available"] = "not_available"
+    action_message: str = ""
+    product_status: Literal["not_implemented"] = "not_implemented"
 
 
 class Sorting(StrictModel):
@@ -103,6 +109,10 @@ class Finding(StrictModel):
     epidemiology_background: str
     source_observations: list[SourceObservation]
     sorting: Sorting
+    content_layer: Literal["context_only"] = "context_only"
+    action_status: Literal["not_available"] = "not_available"
+    action_message: str = ""
+    product_status: Literal["not_implemented"] = "not_implemented"
 
 
 class Unmatched(StrictModel):
@@ -143,6 +153,10 @@ class PatientFinding(StrictModel):
     sources: list[ClaimSource] = Field(min_length=1)
     source_observation_ids: list[str]
     source_observations: list[SourceObservation]
+    content_layer: Literal["context_only"] = "context_only"
+    action_status: Literal["not_available"] = "not_available"
+    action_message: str = ""
+    product_status: Literal["not_implemented"] = "not_implemented"
 
 
 class PatientReply(StrictModel):
