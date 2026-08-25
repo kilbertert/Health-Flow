@@ -124,3 +124,37 @@ test('报告原文与技术详情默认收起且可展开', async ({ page, seed 
   await expect(original).toHaveAttribute('aria-expanded', 'true');
   await expect(technical).toHaveAttribute('aria-expanded', 'false');
 });
+
+test('打印媒体下仅保留报告抬头、指标总览与健康提示', async ({ page, seed }) => {
+  const { account } = await seed({ reports: ['assessed'] });
+  await openReportFromHistory(page, account);
+  await expect(page.locator('.wechat-print-guide')).toHaveCount(0);
+
+  await page.emulateMedia({ media: 'print' });
+
+  await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible();
+  await expect(page.locator('.report-meta-card')).toBeVisible();
+  await expect(page.locator('.metric-overview-card')).toBeVisible();
+  await expect(page.locator('.evidence-result-card')).toBeVisible();
+
+  await expect(page.locator('.app-header')).toBeHidden();
+  await expect(page.locator('.bottom-nav')).toBeHidden();
+  await expect(page.locator('.report-original-collapse')).toBeHidden();
+  await expect(page.locator('.technical-details')).toBeHidden();
+  await expect(page.locator('.report-detail-page .ant-pagination')).toBeHidden();
+});
+
+test.describe('微信内置浏览器打印引导', () => {
+  test.use({
+    userAgent: 'Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36 MicroMessenger/8.0.49.2600(0x28003135) WeChat/8.0.49.2600',
+  });
+
+  test('报告详情显示"用系统浏览器打开"引导', async ({ page, seed }) => {
+    const { account } = await seed({ reports: ['assessed'] });
+    await openReportFromHistory(page, account);
+
+    const guide = page.locator('.wechat-print-guide');
+    await expect(guide).toBeVisible();
+    await expect(guide).toContainText('用系统浏览器打开');
+  });
+});

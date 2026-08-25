@@ -293,6 +293,51 @@ button { cursor: pointer; }
 .report-page .technical-details { margin-bottom: 16px; }
 .report-page .technical-details .ant-collapse-content-box { min-width: 0; overflow-wrap: break-word; }
 
+@media print {
+  .report-detail-print .app-header,
+  .report-detail-print .bottom-nav,
+  .report-detail-print .menu-sheet,
+  .report-detail-print .account-strip,
+  .ant-modal-root,
+  .ant-message-notice {
+    display: none !important;
+  }
+
+  .report-detail-print {
+    min-height: 0;
+    background: #fff;
+  }
+
+  .report-detail-print .report-detail-page {
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .report-detail-print .report-heading .ant-btn,
+  .report-detail-print .wechat-print-guide,
+  .report-detail-print .report-original-collapse,
+  .report-detail-print .technical-details,
+  .report-detail-print .ant-pagination,
+  .report-detail-print .report-detail-page .ant-btn {
+    display: none !important;
+  }
+
+  .report-detail-print .ant-card {
+    width: 100%;
+    border: 1px solid #ddd;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .report-meta-card,
+  .metric-overview-card,
+  .evidence-result-card {
+    break-inside: avoid;
+  }
+}
+
 @media (max-width: 700px) {
   .app-header { grid-template-columns: minmax(0, 1fr) auto; gap: 7px; padding: 10px 8px; }
   .app-header .menu-button { display: none; }

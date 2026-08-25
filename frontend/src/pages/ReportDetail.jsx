@@ -64,6 +64,10 @@ function formatDateTime(value) {
   return date.toLocaleString('zh-CN');
 }
 
+function isWeChatBrowser() {
+  return typeof navigator !== 'undefined' && /MicroMessenger/i.test(navigator.userAgent);
+}
+
 function metricColumns(onOpenSource) {
   return [
     { title: '项目', dataIndex: 'metric_name', width: 150 },
@@ -301,6 +305,7 @@ export default function ReportDetailPage({ account, reportId, onBack, onContinue
   }
 
   const completed = COMPLETED_STATUSES.has(result.status);
+  const wechatBrowser = isWeChatBrowser();
 
   return (
     <main className="report-detail-page">
@@ -312,6 +317,17 @@ export default function ReportDetailPage({ account, reportId, onBack, onContinue
         </div>
         <Tag color={statusColor(result.status)}>{statusLabel(result.status)}</Tag>
       </div>
+
+      {wechatBrowser && (
+        <Alert
+          className="wechat-print-guide"
+          type="info"
+          showIcon
+          icon={<WarningOutlined />}
+          title="请用系统浏览器打开报告页"
+          description="微信内置浏览器打印受限。点击右上角“…”选择“在浏览器打开”，用系统浏览器打开后再打印或另存为 PDF。"
+        />
+      )}
 
       {!completed ? (
         <ReportStatus result={result} onContinueConfirm={() => onContinueConfirm(result.id)} />

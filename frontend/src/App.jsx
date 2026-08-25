@@ -279,7 +279,10 @@ function HealthFlowApp({ account, onLogout, onAccountChange }) {
     else navigate(key);
   };
   const reportViewActive = view === 'report' || view === 'report-detail';
-  return <div className="health-flow-app"><AppHeader account={account} view={reportViewActive ? 'report' : undefined} onNavigate={(key) => navigate(key)} onMenu={() => setMenuOpen(true)} onProfile={() => navigate('profile')} />
+  const appClassName = view === 'report-detail'
+    ? 'health-flow-app report-detail-print'
+    : 'health-flow-app';
+  return <div className={appClassName}><AppHeader account={account} view={reportViewActive ? 'report' : undefined} onNavigate={(key) => navigate(key)} onMenu={() => setMenuOpen(true)} onProfile={() => navigate('profile')} />
     {view === 'home' && <HomePage onOpenReport={() => openReport()} onOpenProfile={() => navigate('profile')} />}
     {view === 'report' && <ReportPage account={account} reportId={reportId} onBack={() => navigate('home')} onReportSaved={() => {}} />}
     {view === 'report-detail' && reportId && <ReportDetail account={account} reportId={reportId} onBack={() => navigate('home')} onContinueConfirm={(id) => navigate('report', id)} />}

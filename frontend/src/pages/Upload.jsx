@@ -326,6 +326,7 @@ export function EvidenceResult({ result, onOpenSource }) {
   const summary = patientReply?.summary || result.message;
   return (
     <Card
+      className="evidence-result-card"
       title={patientReply?.title || '正式知识卡匹配结果'}
       style={{ marginTop: 16 }}
     >
