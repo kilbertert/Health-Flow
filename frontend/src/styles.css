@@ -216,6 +216,33 @@ button { cursor: pointer; }
 .report-page .ant-upload-wrapper .ant-upload-drag { border-color: #e6d5b8; background: #fffdf8; border-radius: 14px; }
 .report-page .ant-upload-wrapper .ant-upload-drag:hover { border-color: var(--gold); }
 .report-page .ant-table-wrapper { max-width: 100%; overflow-x: auto; }
+.report-page .metric-card-list { display: grid; gap: 10px; }
+.report-page .metric-card .ant-card-body { padding: 12px; }
+.metric-card-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.metric-card-toggle {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1;
+  gap: 8px;
+  padding: 0;
+  color: var(--ink);
+  text-align: left;
+  background: transparent;
+  border: 0;
+}
+.metric-card-toggle:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.metric-card-name {
+  min-width: 0;
+  flex: 1;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.metric-card-value { flex: 0 0 auto; }
+.metric-card-toggle .ant-tag { flex: 0 0 auto; margin-inline-end: 0; }
+.metric-card-details { display: grid; gap: 12px; margin-top: 12px; }
+.metric-card-field { display: grid; min-width: 0; gap: 6px; }
+.metric-card-field .ant-select, .metric-card-field .ant-input { width: 100%; }
 .report-page .technical-details { margin-bottom: 16px; }
 .report-page .technical-details .ant-collapse-content-box { min-width: 0; overflow-wrap: break-word; }
 

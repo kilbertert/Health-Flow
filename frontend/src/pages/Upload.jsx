@@ -96,6 +96,124 @@ function initialDecision(metric) {
   return flag === null && isAbnormal(metric?.abnormal_flag) ? 'pending' : 'excluded';
 }
 
+function useNarrowViewport() {
+  const [isNarrow, setIsNarrow] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 700px)').matches,
+  );
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const media = window.matchMedia('(max-width: 700px)');
+    const handleChange = (event) => setIsNarrow(event.matches);
+    setIsNarrow(media.matches);
+    media.addEventListener('change', handleChange);
+    return () => media.removeEventListener('change', handleChange);
+  }, []);
+  return isNarrow;
+}
+
+function MetricCard({ metric, draft, metricCatalog, disabled, onUpdateDraft, onOpenSource }) {
+  const [expanded, setExpanded] = useState(false);
+  const decision = draft?.decision || initialDecision(metric);
+  return (
+    <Card size="small" className="metric-card">
+      <div className="metric-card-header">
+        <button
+          type="button"
+          className="metric-card-toggle"
+          aria-label={`${metric.metric_name}指标卡片`}
+          aria-expanded={expanded}
+          onClick={() => setExpanded((open) => !open)}
+        >
+          <span className="metric-card-name">{metric.metric_name}</span>
+          <span className="metric-card-value">
+            {metric.metric_value}
+            {metric.unit ? ` ${metric.unit}` : ''}
+          </span>
+          {abnormalTag(displayFlag(metric))}
+        </button>
+        {metric.page_number ? (
+          <Tooltip title="查看原文定位">
+            <Button
+              type="text"
+              icon={<EyeOutlined />}
+              aria-label={`查看${metric.metric_name}原文`}
+              onClick={() => onOpenSource(metric)}
+            />
+          </Tooltip>
+        ) : null}
+      </div>
+      {expanded ? (
+        <div className="metric-card-details">
+          <div className="metric-card-field">
+            <Typography.Text type="secondary">标准指标</Typography.Text>
+            <Select
+              aria-label={`${metric.metric_name}标准指标编码`}
+              value={draft?.metric_code || undefined}
+              options={metricCatalog}
+              showSearch
+              optionFilterProp="label"
+              allowClear
+              disabled={disabled}
+              onChange={(value) => onUpdateDraft(metric.id, 'metric_code', value || '')}
+              placeholder="选择标准指标"
+            />
+          </div>
+          <div className="metric-card-field">
+            <Typography.Text type="secondary">处理</Typography.Text>
+            <Select
+              aria-label={`${metric.metric_name}处理方式`}
+              value={decision}
+              options={DECISIONS}
+              disabled={disabled}
+              onChange={(value) => onUpdateDraft(metric.id, 'decision', value)}
+            />
+          </div>
+          <div className="metric-card-field">
+            <Typography.Text type="secondary">修正值</Typography.Text>
+            <Input
+              aria-label={`${metric.metric_name}修正值`}
+              disabled={disabled || decision !== 'corrected'}
+              value={draft?.value || ''}
+              onChange={(event) => onUpdateDraft(metric.id, 'value', event.target.value)}
+              placeholder="数值"
+            />
+          </div>
+          <div className="metric-card-field">
+            <Typography.Text type="secondary">修正单位</Typography.Text>
+            <Input
+              aria-label={`${metric.metric_name}修正单位`}
+              disabled={disabled || decision !== 'corrected'}
+              value={draft?.unit || ''}
+              onChange={(event) => onUpdateDraft(metric.id, 'unit', event.target.value)}
+              placeholder="单位"
+            />
+          </div>
+          <div className="metric-card-field">
+            <Typography.Text type="secondary">修正范围</Typography.Text>
+            <Input
+              aria-label={`${metric.metric_name}修正参考范围`}
+              disabled={disabled || decision !== 'corrected'}
+              value={draft?.reference_range || ''}
+              onChange={(event) => onUpdateDraft(metric.id, 'reference_range', event.target.value)}
+              placeholder="如 3.9-6.1"
+            />
+          </div>
+          <div className="metric-card-field">
+            <Typography.Text type="secondary">修正原文证据</Typography.Text>
+            <Input
+              aria-label={`${metric.metric_name}修正原文证据`}
+              disabled={disabled || decision !== 'corrected'}
+              value={draft?.evidence_text || ''}
+              onChange={(event) => onUpdateDraft(metric.id, 'evidence_text', event.target.value)}
+              placeholder="必须包含修正值和参考范围"
+            />
+          </div>
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
 function SourceEvidence({ reportId, reportToken, metric, file }) {
   const [sourceUrl, setSourceUrl] = useState('');
   const [sourceError, setSourceError] = useState('');
@@ -448,6 +566,7 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
   const [metricCatalog, setMetricCatalog] = useState([]);
   const [metricCatalogError, setMetricCatalogError] = useState('');
   const [technicalDetailsOpen, setTechnicalDetailsOpen] = useState(false);
+  const isNarrow = useNarrowViewport();
 
   useEffect(() => {
     let active = true;
@@ -792,15 +911,35 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
               style={{ marginBottom: 16 }}
             />
           )}
-          <Table
-            rowKey="id"
-            columns={metricColumns}
-            dataSource={visibleMetrics}
-            pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 项` }}
-            size="small"
-            scroll={{ x: 1500 }}
-            locale={{ emptyText: result.status === 'processing' ? '正在解析' : '未解析出指标' }}
-          />
+          {isNarrow ? (
+            <div className="metric-card-list" aria-label="指标确认卡片列表">
+              {visibleMetrics.length === 0 ? (
+                <Typography.Text type="secondary">
+                  {result.status === 'processing' ? '正在解析' : '未解析出指标'}
+                </Typography.Text>
+              ) : visibleMetrics.map((metric) => (
+                <MetricCard
+                  key={metric.id}
+                  metric={metric}
+                  draft={drafts[metric.id]}
+                  metricCatalog={metricCatalog}
+                  disabled={result.status !== 'pending_confirmation'}
+                  onUpdateDraft={updateDraft}
+                  onOpenSource={setSourceMetric}
+                />
+              ))}
+            </div>
+          ) : (
+            <Table
+              rowKey="id"
+              columns={metricColumns}
+              dataSource={visibleMetrics}
+              pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 项` }}
+              size="small"
+              scroll={{ x: 1500 }}
+              locale={{ emptyText: result.status === 'processing' ? '正在解析' : '未解析出指标' }}
+            />
+          )}
           <Space style={{ marginTop: 16 }} wrap>
             <Switch checked={showAllMetrics} onChange={setShowAllMetrics} />
             <Typography.Text type="secondary">显示全部指标</Typography.Text>
