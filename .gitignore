@@ -87,3 +87,6 @@ dpo_debug.txt
 
 # 截图工具（本地临时，勿提交）
 .screenshot-tool/
+
+# AFK runner (package.json) dependencies
+node_modules/
