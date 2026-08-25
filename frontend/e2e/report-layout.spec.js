@@ -16,8 +16,8 @@ async function openAssessedReport(page, account) {
   await page.getByRole('button', { name: '个人中心', exact: true }).click();
   await expect(page.getByRole('heading', { name: '个人中心' })).toBeVisible();
   await page.getByRole('button', { name: '查看' }).click();
-  await expect(page.getByRole('heading', { name: '体检报告解读' })).toBeVisible();
-  await expect(page.getByText(/解析结果/)).toBeVisible();
+  await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible();
+  await expect(page.getByText('指标总览', { exact: true })).toBeVisible();
 }
 
 function horizontalExcess(page) {

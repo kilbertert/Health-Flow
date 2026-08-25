@@ -132,7 +132,7 @@ button { cursor: pointer; }
 .bottom-nav-item.is-active { color: var(--gold-strong); font-weight: 600; }
 .bottom-nav-item:hover, .bottom-nav-item:focus-visible { color: var(--gold-strong); }
 
-.home-page, .report-page {
+.home-page, .report-page, .report-detail-page {
   width: min(100% - 32px, 960px);
   margin: 0 auto;
 }
@@ -194,7 +194,7 @@ button { cursor: pointer; }
 .home-note svg { margin-top: 2px; color: var(--gold); }
 .home-note p { margin: 0; }
 
-.report-page { padding: 20px 0 calc(54px + env(safe-area-inset-bottom)); }
+.report-page, .report-detail-page { padding: 20px 0 calc(54px + env(safe-area-inset-bottom)); }
 .report-heading { display: flex; align-items: flex-start; gap: 12px; margin: 0 0 18px; }
 .report-heading .ant-btn { margin: -4px 0 0 -10px; color: var(--gold-strong); }
 .eyebrow { margin: 0 0 4px; color: var(--gold-strong); font-size: 12px; letter-spacing: 1px; }
@@ -238,6 +238,22 @@ button { cursor: pointer; }
 .sheet-status div { display: flex; flex-direction: column; }
 
 /* The report workflow keeps Ant Design's accessible controls, with a mobile-first surface. */
+
+.report-detail-loading { display: grid; min-height: 240px; place-items: center; }
+.report-detail-page .ant-card { min-width: 0; border-color: var(--line); border-radius: 16px; box-shadow: 0 8px 26px rgba(95, 73, 35, .05); }
+.report-heading > .ant-tag { align-self: center; margin-left: auto; }
+.report-meta-card { margin-bottom: 16px; }
+.metric-overview-card { margin-bottom: 16px; }
+.report-detail-page .ant-table-wrapper { max-width: 100%; overflow-x: auto; }
+.report-abnormal-summary { white-space: normal; }
+.report-row-abnormal > td { background: #fff1f0 !important; }
+.report-detail-page .report-original-collapse { margin-top: 16px; }
+.report-detail-page .technical-details { margin-top: 16px; }
+.original-report { min-width: 0; }
+.original-report-page { display: block; width: 100%; max-width: 900px; margin: 0 auto; background: #fff; border: 1px solid var(--line); border-radius: 12px; }
+.original-report-loading { display: grid; min-height: 160px; place-items: center; }
+.original-report-pagination { margin-top: 12px; text-align: center; }
+.report-status-card { max-width: 680px; }
 .report-page .page-stack { width: 100%; max-width: none; min-width: 0; gap: 14px; }
 .report-page .ant-card { min-width: 0; border-color: var(--line); border-radius: 16px; box-shadow: 0 8px 26px rgba(95, 73, 35, .05); }
 .report-page .ant-card-head { min-height: 56px; border-bottom-color: var(--line); }
@@ -284,14 +300,14 @@ button { cursor: pointer; }
   .header-actions { gap: 0; grid-column: 2; }
   .header-actions .icon-button:not(.account-button) { display: none; }
   .bottom-nav { display: grid; }
-  .home-page, .report-page { width: min(100% - 24px, 680px); }
-  .home-page, .report-page, .profile-page { padding-bottom: calc(84px + env(safe-area-inset-bottom)); }
+  .home-page, .report-page, .report-detail-page { width: min(100% - 24px, 680px); }
+  .home-page, .report-page, .report-detail-page, .profile-page { padding-bottom: calc(84px + env(safe-area-inset-bottom)); }
   .home-page { padding-top: 22px; }
   .brand-mark-large { width: 154px; height: 154px; }
   .health-action-card { padding: 18px 15px; }
   .health-action-grid { gap: 10px; }
   .health-action-tile { padding: 14px; }
-  .report-page { padding-top: 12px; }
+  .report-page, .report-detail-page { padding-top: 12px; }
   .report-heading { gap: 4px; }
   .report-heading .ant-btn { padding-inline: 5px; }
   .report-page .ant-form-inline .ant-form-item { width: 100%; margin-inline-end: 0; }
@@ -304,8 +320,8 @@ button { cursor: pointer; }
   .profile-heading h1 { font-size: 24px; }
   .profile-link { grid-template-columns: 25px 1fr 18px; }
   .profile-link small { display: none; }
-  .report-page .ant-card-body { padding: 16px 12px; }
-  .report-page .technical-details .ant-collapse-content-box { padding: 12px; }
+  .report-page .ant-card-body, .report-detail-page .ant-card-body { padding: 16px 12px; }
+  .report-page .technical-details .ant-collapse-content-box, .report-detail-page .technical-details .ant-collapse-content-box { padding: 12px; }
   .source-modal-wrap .ant-modal {
     top: 0;
     left: 0;

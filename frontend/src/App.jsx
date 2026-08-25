@@ -35,6 +35,7 @@ import {
   message,
 } from 'antd';
 import Upload from './pages/Upload.jsx';
+import ReportDetail from './pages/ReportDetail.jsx';
 import {
   getCurrentAccount,
   getReportHistory,
@@ -50,6 +51,12 @@ const NAV_ITEMS = [
   { key: 'report', label: '体检解读' },
   { key: 'body', label: '体脂检测' },
 ];
+
+function reportRouteFromHash() {
+  const match = window.location.hash.match(/^#\/report\/(\d+)/);
+  if (!match) return null;
+  return { view: 'report-detail', reportId: Number(match[1]) };
+}
 
 function BrandMark({ large = false }) {
   return <img className={`brand-mark ${large ? 'brand-mark-large' : ''}`} src="/hst-club-logo.png" alt="HST Club" />;
@@ -234,20 +241,51 @@ function ProfilePage({ account, onBack, onLogout, onOpenReport, onAccountChange 
 }
 
 function HealthFlowApp({ account, onLogout, onAccountChange }) {
-  const [view, setView] = useState('home');
+  const [view, setView] = useState(() => reportRouteFromHash()?.view || 'home');
+  const [reportId, setReportId] = useState(() => reportRouteFromHash()?.reportId || null);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [reportId, setReportId] = useState(null);
-  const openReport = (id = null) => { setReportId(id); setView('report'); };
-  const handleBottomNav = (key) => {
-    if (key === 'report') openReport();
-    else setView(key);
+
+  useEffect(() => {
+    const applyHash = () => {
+      const route = reportRouteFromHash();
+      setView(route?.view || 'home');
+      setReportId(route?.reportId || null);
+    };
+    applyHash();
+    window.addEventListener('hashchange', applyHash);
+    return () => window.removeEventListener('hashchange', applyHash);
+  }, []);
+
+  const navigate = (nextView, nextReportId = null) => {
+    if (nextView === 'report-detail' && nextReportId) {
+      setView(nextView);
+      setReportId(nextReportId);
+      window.location.hash = `#/report/${nextReportId}`;
+      return;
+    }
+    setView(nextView);
+    setReportId(nextReportId);
+    if (window.location.hash) {
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
   };
-  return <div className="health-flow-app"><AppHeader account={account} view={view === 'report' ? 'report' : undefined} onNavigate={setView} onMenu={() => setMenuOpen(true)} onProfile={() => setView('profile')} />
-    {view === 'home' && <HomePage onOpenReport={() => openReport()} onOpenProfile={() => setView('profile')} />}
-    {view === 'report' && <ReportPage account={account} reportId={reportId} onBack={() => { setReportId(null); setView('home'); }} onReportSaved={() => {}} />}
-    {view === 'profile' && <ProfilePage account={account} onBack={() => setView('home')} onLogout={onLogout} onAccountChange={onAccountChange} onOpenReport={(id) => openReport(id)} />}
-    <BottomNav view={view} onNavigate={handleBottomNav} />
-    <MenuSheet account={account} open={menuOpen} onClose={() => setMenuOpen(false)} onOpenReport={() => openReport()} onOpenProfile={() => setView('profile')} />
+
+  const openReport = (id = null) => {
+    if (id) navigate('report-detail', id);
+    else navigate('report');
+  };
+  const handleBottomNav = (key) => {
+    if (key === 'report') navigate('report');
+    else navigate(key);
+  };
+  const reportViewActive = view === 'report' || view === 'report-detail';
+  return <div className="health-flow-app"><AppHeader account={account} view={reportViewActive ? 'report' : undefined} onNavigate={(key) => navigate(key)} onMenu={() => setMenuOpen(true)} onProfile={() => navigate('profile')} />
+    {view === 'home' && <HomePage onOpenReport={() => openReport()} onOpenProfile={() => navigate('profile')} />}
+    {view === 'report' && <ReportPage account={account} reportId={reportId} onBack={() => navigate('home')} onReportSaved={() => {}} />}
+    {view === 'report-detail' && reportId && <ReportDetail account={account} reportId={reportId} onBack={() => navigate('home')} onContinueConfirm={(id) => navigate('report', id)} />}
+    {view === 'profile' && <ProfilePage account={account} onBack={() => navigate('home')} onLogout={onLogout} onAccountChange={onAccountChange} onOpenReport={(id) => openReport(id)} />}
+    <BottomNav view={view === 'report-detail' ? 'report' : view} onNavigate={handleBottomNav} />
+    <MenuSheet account={account} open={menuOpen} onClose={() => setMenuOpen(false)} onOpenReport={() => openReport()} onOpenProfile={() => navigate('profile')} />
   </div>;
 }
 
