@@ -5,12 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
-from app.data.models import MedicalReport, MetricRecord, UserAccount
+from app.data.models import MedicalReport, MetricRecord, ReportFile, UserAccount
 from app.schema.evidence import EvidenceMatchResponse
 from app.service.auth import verify_password
 from scripts.e2e_seed import SEED_REPORT_STATUSES, main, seed_database
@@ -111,6 +112,31 @@ def test_seed_creates_completed_and_pending_reports(database_url):
             assert metric.page_number == 1
             assert metric.bbox and metric.bbox_normalized
             assert metric.evidence_text
+
+
+def test_seed_creates_report_page_file_when_dir_provided(database_url, tmp_path):
+    report_files_dir = tmp_path / "report-files"
+    payload = seed_database(
+        database_url,
+        email="files@healthflow.test",
+        password="e2e-pass-123",
+        reports=["assessed"],
+        report_files_dir=str(report_files_dir),
+    )
+    assessed = next(
+        item for item in payload["reports"] if item["status"] == "assessed"
+    )
+
+    with _session(database_url) as session:
+        saved = session.scalar(
+            select(ReportFile).where(ReportFile.report_id == assessed["id"])
+        )
+
+    assert saved is not None
+    assert saved.file_index == 1
+    assert saved.media_type == "image/png"
+    assert saved.page_count == 1
+    assert Path(saved.stored_path).is_file()
 
 
 def test_seed_rejects_unknown_status(database_url):
