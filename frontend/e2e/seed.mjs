@@ -26,6 +26,7 @@ export async function seedTestData({
 } = {}) {
   const repoRoot = process.env.HEALTHFLOW_E2E_REPO_ROOT;
   const databaseUrl = process.env.HEALTHFLOW_E2E_DATABASE_URL;
+  const reportFilesDir = process.env.HEALTHFLOW_E2E_REPORT_FILES_DIR;
   if (!repoRoot || !databaseUrl) {
     throw new Error(
       '缺少 HEALTHFLOW_E2E_REPO_ROOT / HEALTHFLOW_E2E_DATABASE_URL;请通过 "npm run test:e2e" 运行(playwright.config.js 会注入)。',
@@ -39,22 +40,25 @@ export async function seedTestData({
   const { command, prefixArgs } = resolvePython(repoRoot);
   const email = `e2e-${randomUUID()}@healthflow.test`;
   const password = `e2e-${randomUUID().replaceAll('-', '')}`;
-  const { stdout } = await execFileAsync(
-    command,
-    [
-      ...prefixArgs,
-      path.join(repoRoot, 'scripts', 'e2e_seed.py'),
-      '--database',
-      databaseUrl,
-      '--email',
-      email,
-      '--password',
-      password,
-      '--display-name',
-      displayName,
-      ...reports.flatMap((status) => ['--report', status]),
-    ],
-    { cwd: repoRoot, maxBuffer: 8 * 1024 * 1024 },
-  );
+  const seedArgs = [
+    ...prefixArgs,
+    path.join(repoRoot, 'scripts', 'e2e_seed.py'),
+    '--database',
+    databaseUrl,
+    '--email',
+    email,
+    '--password',
+    password,
+    '--display-name',
+    displayName,
+    ...reports.flatMap((status) => ['--report', status]),
+  ];
+  if (reportFilesDir) {
+    seedArgs.push('--report-files', reportFilesDir);
+  }
+  const { stdout } = await execFileAsync(command, seedArgs, {
+    cwd: repoRoot,
+    maxBuffer: 8 * 1024 * 1024,
+  });
   return JSON.parse(stdout);
 }

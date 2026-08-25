@@ -3,6 +3,7 @@ import {
   Alert,
   Button,
   Card,
+  Collapse,
   Descriptions,
   Form,
   Input,
@@ -397,6 +398,41 @@ function initialDrafts(metrics) {
   ]));
 }
 
+function TechnicalDetails({ result, subjectConsistency, onSubjectConsistencyChange }) {
+  const trace = result.extraction_trace;
+  const subjectNeedsConfirmation = result.status === 'pending_confirmation'
+    && result.subject_consistency !== 'same';
+  return (
+    <Descriptions column={{ xs: 1, sm: 2, md: 2 }} size="small" bordered>
+      <Descriptions.Item label="文件主体一致性">
+        {subjectNeedsConfirmation ? (
+          <Select
+            aria-label="确认文件属于同一主体"
+            value={subjectConsistency || undefined}
+            placeholder="请选择"
+            options={[
+              { label: '同一主体，继续', value: 'same' },
+              { label: '不同主体，停止', value: 'different' },
+              { label: '无法确认，停止', value: 'uncertain' },
+            ]}
+            onChange={onSubjectConsistencyChange}
+            style={{ width: '100%', maxWidth: 220 }}
+          />
+        ) : (result.subject_consistency || '—')}
+      </Descriptions.Item>
+      <Descriptions.Item label="抽取模型">
+        {trace?.extraction_model || '—'}
+      </Descriptions.Item>
+      <Descriptions.Item label="抽取运行 ID">
+        {trace?.extraction_run_id || '—'}
+      </Descriptions.Item>
+      <Descriptions.Item label="Prompt 版本">
+        {trace?.extraction_prompt_version || '—'}
+      </Descriptions.Item>
+    </Descriptions>
+  );
+}
+
 export default function UploadPage({ account, initialReportId = null, onReportSaved }) {
   const [form] = Form.useForm();
   const [fileList, setFileList] = useState([]);
@@ -411,6 +447,7 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
   const [reportToken, setReportToken] = useState('');
   const [metricCatalog, setMetricCatalog] = useState([]);
   const [metricCatalogError, setMetricCatalogError] = useState('');
+  const [technicalDetailsOpen, setTechnicalDetailsOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -441,6 +478,12 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
       });
     return () => { active = false; };
   }, [initialReportId]);
+
+  const subjectGateOpen = result?.status === 'pending_confirmation'
+    && result?.subject_consistency !== 'same';
+  useEffect(() => {
+    if (subjectGateOpen) setTechnicalDetailsOpen(true);
+  }, [subjectGateOpen]);
 
   const updateDraft = (id, field, value) => {
     setDrafts((current) => ({ ...current, [id]: { ...current[id], [field]: value } }));
@@ -708,40 +751,27 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
 
       {result && (
         <Card title={<Space>解析结果 · 报告 #{result.id} {evidenceStatus(result.status)}</Space>}>
-          <Descriptions column={4} size="small" bordered style={{ marginBottom: 16 }}>
+          <Descriptions column={{ xs: 1, sm: 2, md: 4 }} size="small" bordered style={{ marginBottom: 16 }}>
             <Descriptions.Item label="账户">{result.patient_id === account?.id ? '当前账户' : result.patient_id}</Descriptions.Item>
             <Descriptions.Item label="报告类型">{result.report_type}</Descriptions.Item>
             <Descriptions.Item label="科室">{result.department || '—'}</Descriptions.Item>
-            <Descriptions.Item label="文件主体一致性">
-              {result.status === 'pending_confirmation' && result.subject_consistency !== 'same' ? (
-                <Select
-                  aria-label="确认文件属于同一主体"
-                  value={subjectConsistency || undefined}
-                  placeholder="请选择"
-                  options={[
-                    { label: '同一主体，继续', value: 'same' },
-                    { label: '不同主体，停止', value: 'different' },
-                    { label: '无法确认，停止', value: 'uncertain' },
-                  ]}
-                  onChange={setSubjectConsistency}
-                  style={{ width: 150 }}
-                />
-              ) : (result.subject_consistency || '—')}
-            </Descriptions.Item>
-            {result.extraction_trace && (
-              <>
-                <Descriptions.Item label="抽取模型">
-                  {result.extraction_trace.extraction_model || '—'}
-                </Descriptions.Item>
-                <Descriptions.Item label="抽取运行 ID">
-                  {result.extraction_trace.extraction_run_id || '—'}
-                </Descriptions.Item>
-                <Descriptions.Item label="Prompt 版本">
-                  {result.extraction_trace.extraction_prompt_version || '—'}
-                </Descriptions.Item>
-              </>
-            )}
           </Descriptions>
+          <Collapse
+            className="technical-details"
+            activeKey={technicalDetailsOpen ? ['technical-details'] : []}
+            onChange={(keys) => setTechnicalDetailsOpen(keys.includes('technical-details'))}
+            items={[{
+              key: 'technical-details',
+              label: '技术详情',
+              children: (
+                <TechnicalDetails
+                  result={result}
+                  subjectConsistency={subjectConsistency}
+                  onSubjectConsistencyChange={setSubjectConsistency}
+                />
+              ),
+            }]}
+          />
           {result.status === 'pending_confirmation' && (
             <Alert
               type="info"
@@ -799,6 +829,8 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
         open={Boolean(sourceMetric)}
         footer={null}
         width={960}
+        wrapClassName="source-modal-wrap"
+        className="source-modal"
         onCancel={() => setSourceMetric(null)}
         destroyOnHidden
       >
