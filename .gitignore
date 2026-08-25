@@ -77,6 +77,10 @@ frontend/node_modules/
 frontend/dist/
 frontend/.npm-cache/
 
+# Playwright E2E artifacts
+frontend/test-results/
+frontend/playwright-report/
+
 # Temporary files
 test*.txt
 test*.json
