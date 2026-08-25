@@ -101,6 +101,37 @@ button { cursor: pointer; }
 .header-actions { display: flex; gap: 2px; }
 .account-strip { display: none; }
 
+.bottom-nav {
+  position: fixed;
+  z-index: 30;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: none;
+  grid-template-columns: repeat(3, 1fr);
+  min-height: calc(56px + env(safe-area-inset-bottom));
+  padding: 6px 8px env(safe-area-inset-bottom);
+  background: rgba(255, 255, 255, .97);
+  border-top: 1px solid var(--line);
+  backdrop-filter: blur(14px);
+}
+.bottom-nav-item {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  font-size: 12px;
+}
+.bottom-nav-item > svg { font-size: 20px; }
+.bottom-nav-item.is-active { color: var(--gold-strong); font-weight: 600; }
+.bottom-nav-item:hover, .bottom-nav-item:focus-visible { color: var(--gold-strong); }
+
 .home-page, .report-page {
   width: min(100% - 32px, 960px);
   margin: 0 auto;
@@ -247,13 +278,14 @@ button { cursor: pointer; }
 .report-page .technical-details .ant-collapse-content-box { min-width: 0; overflow-wrap: break-word; }
 
 @media (max-width: 700px) {
-  .app-header { grid-template-columns: 30px minmax(0, 1fr) 34px; gap: 7px; padding: 10px 8px; }
-  .service-nav { justify-content: space-between; gap: 7px; overflow-x: auto; scrollbar-width: none; }
-  .service-nav::-webkit-scrollbar { display: none; }
-  .service-nav-item { font-size: 12px; }
-  .header-actions { gap: 0; }
+  .app-header { grid-template-columns: minmax(0, 1fr) auto; gap: 7px; padding: 10px 8px; }
+  .app-header .menu-button { display: none; }
+  .service-nav { display: none; }
+  .header-actions { gap: 0; grid-column: 2; }
   .header-actions .icon-button:not(.account-button) { display: none; }
+  .bottom-nav { display: grid; }
   .home-page, .report-page { width: min(100% - 24px, 680px); }
+  .home-page, .report-page, .profile-page { padding-bottom: calc(84px + env(safe-area-inset-bottom)); }
   .home-page { padding-top: 22px; }
   .brand-mark-large { width: 154px; height: 154px; }
   .health-action-card { padding: 18px 15px; }

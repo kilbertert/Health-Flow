@@ -7,6 +7,7 @@ import {
   FileSearchOutlined,
   FileTextOutlined,
   HistoryOutlined,
+  HomeOutlined,
   LockOutlined,
   LogoutOutlined,
   MailOutlined,
@@ -123,7 +124,7 @@ function AppHeader({ view, account, onNavigate, onMenu, onProfile }) {
     <>
       {contextHolder}
       <header className="app-header">
-        <Tooltip title="打开菜单"><button className="icon-button" type="button" aria-label="打开菜单" onClick={onMenu}><MenuOutlined /></button></Tooltip>
+        <Tooltip title="打开菜单"><button className="icon-button menu-button" type="button" aria-label="打开菜单" onClick={onMenu}><MenuOutlined /></button></Tooltip>
         <nav className="service-nav" aria-label="健康服务">
           {NAV_ITEMS.map((item) => <button className={`service-nav-item ${view === item.key ? 'is-active' : ''}`} key={item.key} type="button" aria-current={view === item.key ? 'page' : undefined} onClick={() => handleNav(item.key)}>{item.label}</button>)}
         </nav>
@@ -151,6 +152,31 @@ function HomePage({ onOpenReport, onOpenProfile }) {
       </section>
       <section className="home-note" aria-label="服务边界"><SafetyCertificateOutlined /><p>这里提供报告信息整理与健康风险提示，不替代医生诊断。</p></section>
     </main>
+  );
+}
+
+const BOTTOM_NAV_ITEMS = [
+  { key: 'home', label: '首页', icon: <HomeOutlined /> },
+  { key: 'report', label: '体检解读', icon: <FileSearchOutlined /> },
+  { key: 'profile', label: '我的', icon: <UserOutlined /> },
+];
+
+function BottomNav({ view, onNavigate }) {
+  return (
+    <nav className="bottom-nav" aria-label="移动端主导航">
+      {BOTTOM_NAV_ITEMS.map((item) => (
+        <button
+          className={`bottom-nav-item ${view === item.key ? 'is-active' : ''}`}
+          key={item.key}
+          type="button"
+          aria-current={view === item.key ? 'page' : undefined}
+          onClick={() => onNavigate(item.key)}
+        >
+          {item.icon}
+          <span>{item.label}</span>
+        </button>
+      ))}
+    </nav>
   );
 }
 
@@ -207,10 +233,15 @@ function HealthFlowApp({ account, onLogout, onAccountChange }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [reportId, setReportId] = useState(null);
   const openReport = (id = null) => { setReportId(id); setView('report'); };
+  const handleBottomNav = (key) => {
+    if (key === 'report') openReport();
+    else setView(key);
+  };
   return <div className="health-flow-app"><AppHeader account={account} view={view === 'report' ? 'report' : undefined} onNavigate={setView} onMenu={() => setMenuOpen(true)} onProfile={() => setView('profile')} />
     {view === 'home' && <HomePage onOpenReport={() => openReport()} onOpenProfile={() => setView('profile')} />}
     {view === 'report' && <ReportPage account={account} reportId={reportId} onBack={() => { setReportId(null); setView('home'); }} onReportSaved={() => {}} />}
     {view === 'profile' && <ProfilePage account={account} onBack={() => setView('home')} onLogout={onLogout} onAccountChange={onAccountChange} onOpenReport={(id) => openReport(id)} />}
+    <BottomNav view={view} onNavigate={handleBottomNav} />
     <MenuSheet account={account} open={menuOpen} onClose={() => setMenuOpen(false)} onOpenReport={() => openReport()} onOpenProfile={() => setView('profile')} />
   </div>;
 }
