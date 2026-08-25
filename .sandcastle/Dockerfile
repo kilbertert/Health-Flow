@@ -22,9 +22,17 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
   && apt-get install -y --no-install-recommends gh \
   && rm -rf /var/lib/apt/lists/*
 
+# Playwright chromium + its OS deps for the frontend E2E suite (frontend/e2e
+# uses @playwright/test ^1.62.1). Without these the AFK agent hits a Chromium
+# launch failure and resorts to hacky manual dep installs that codex blocks.
+# Keep the version in sync with frontend/package.json.
+RUN PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright npx --yes playwright@1.62.1 install --with-deps chromium \
+  && rm -rf /var/lib/apt/lists/*
+
 RUN groupmod -o -g ${AGENT_GID} node \
   && usermod -o -u ${AGENT_UID} -g ${AGENT_GID} -d /home/agent -m -l agent node \
-  && mkdir -p /home/agent/.codex && chown -R ${AGENT_UID}:${AGENT_GID} /home/agent/.codex
+  && mkdir -p /home/agent/.codex && chown -R ${AGENT_UID}:${AGENT_GID} /home/agent/.codex \
+  && mkdir -p /opt/ms-playwright && chown -R ${AGENT_UID}:${AGENT_GID} /opt/ms-playwright
 
 RUN npm install --global @anthropic-ai/claude-code \
   && npm install --global @openai/codex@0.146.1 \
@@ -41,5 +49,6 @@ RUN npm install --global @anthropic-ai/claude-code \
   && npm cache clean --force
 
 USER ${AGENT_UID}:${AGENT_GID}
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 WORKDIR /home/agent
 ENTRYPOINT ["sleep", "infinity"]
