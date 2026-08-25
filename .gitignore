@@ -54,6 +54,7 @@ data/*.sqlite
 data/*.sqlite3
 data/augmented_*.json
 data/report-files/
+data/backups/
 
 # Logs
 *.log
