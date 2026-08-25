@@ -207,8 +207,8 @@ button { cursor: pointer; }
 .sheet-status div { display: flex; flex-direction: column; }
 
 /* The report workflow keeps Ant Design's accessible controls, with a mobile-first surface. */
-.report-page .page-stack { max-width: none; gap: 14px; }
-.report-page .ant-card { border-color: var(--line); border-radius: 16px; box-shadow: 0 8px 26px rgba(95, 73, 35, .05); }
+.report-page .page-stack { width: 100%; max-width: none; min-width: 0; gap: 14px; }
+.report-page .ant-card { min-width: 0; border-color: var(--line); border-radius: 16px; box-shadow: 0 8px 26px rgba(95, 73, 35, .05); }
 .report-page .ant-card-head { min-height: 56px; border-bottom-color: var(--line); }
 .report-page .ant-card-head-title { color: #3d3326; }
 .report-page .ant-btn-primary { background: var(--gold); border-color: var(--gold); box-shadow: none; }
@@ -216,6 +216,8 @@ button { cursor: pointer; }
 .report-page .ant-upload-wrapper .ant-upload-drag { border-color: #e6d5b8; background: #fffdf8; border-radius: 14px; }
 .report-page .ant-upload-wrapper .ant-upload-drag:hover { border-color: var(--gold); }
 .report-page .ant-table-wrapper { max-width: 100%; overflow-x: auto; }
+.report-page .technical-details { margin-bottom: 16px; }
+.report-page .technical-details .ant-collapse-content-box { min-width: 0; overflow-wrap: break-word; }
 
 @media (max-width: 700px) {
   .app-header { grid-template-columns: 30px minmax(0, 1fr) 34px; gap: 7px; padding: 10px 8px; }
@@ -243,6 +245,32 @@ button { cursor: pointer; }
   .profile-heading h1 { font-size: 24px; }
   .profile-link { grid-template-columns: 25px 1fr 18px; }
   .profile-link small { display: none; }
+  .report-page .ant-card-body { padding: 16px 12px; }
+  .report-page .technical-details .ant-collapse-content-box { padding: 12px; }
+  .source-modal-wrap .ant-modal {
+    top: 0;
+    left: 0;
+    width: 100vw;
+    max-width: 100vw;
+    margin: 0;
+    padding: 0;
+  }
+  .source-modal-wrap .ant-modal-container {
+    display: flex;
+    height: 100dvh;
+    min-height: 0;
+    flex-direction: column;
+    padding: 0;
+    border-radius: 0;
+  }
+  .source-modal-wrap .ant-modal-header { flex: 0 0 auto; }
+  .source-modal-wrap .ant-modal-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+    overflow-y: auto;
+    padding: 12px;
+  }
   .auth-page { width: min(100% - 24px, 440px); padding-top: 34px; }
 }
 

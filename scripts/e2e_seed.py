@@ -23,6 +23,7 @@ import secrets
 import sys
 import uuid
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import create_engine
@@ -30,7 +31,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.data.models import Base, MedicalReport, MetricRecord
+from app.data.models import Base, MedicalReport, MetricRecord, ReportFile
 from app.schema.evidence import EvidenceMatchResponse
 from app.service.auth import new_account
 
@@ -119,6 +120,17 @@ def _report_access_token() -> tuple[str, str]:
     return token, hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _write_seed_report_page(report_files_dir: str, report_id: int) -> tuple[str, str, str]:
+    """Create a white seed page image so the source viewer has a real file to render."""
+    from PIL import Image
+
+    directory = Path(report_files_dir).expanduser().resolve()
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / f"seed-report-{report_id}-page-1.png"
+    Image.new("RGB", (900, 1200), "white").save(target, "PNG")
+    return str(target), "image/png", "e2e-seed-report.png"
+
+
 def _assessed_evidence_result() -> dict[str, Any]:
     """Build a contract-valid evidence result with no published-card matches."""
     summary = "E2E 种子报告:暂无匹配的已发布知识卡。"
@@ -175,9 +187,13 @@ def _seed_metric(
     return record
 
 
-def _seed_report(session: Session, account_id: str, status: str) -> tuple[
-    MedicalReport, str
-]:
+def _seed_report(
+    session: Session,
+    account_id: str,
+    status: str,
+    *,
+    report_files_dir: str | None = None,
+) -> tuple[MedicalReport, str]:
     """Create one owned report in ``status``; return the row and access token."""
     confirmed = status == "assessed"
     specs = _ASSESSED_METRICS if confirmed else _PENDING_METRICS
@@ -203,6 +219,20 @@ def _seed_report(session: Session, account_id: str, status: str) -> tuple[
     )
     session.add(report)
     session.flush()
+    if report_files_dir:
+        stored_path, media_type, original_filename = _write_seed_report_page(
+            report_files_dir, report.id
+        )
+        session.add(
+            ReportFile(
+                report_id=report.id,
+                file_index=1,
+                original_filename=original_filename,
+                media_type=media_type,
+                stored_path=stored_path,
+                page_count=1,
+            )
+        )
     for index, spec in enumerate(specs, start=1):
         session.add(_seed_metric(report.id, spec, index, confirmed=confirmed))
     return report, token
@@ -215,6 +245,7 @@ def seed_database(
     password: str,
     display_name: str | None = None,
     reports: Sequence[str] = SEED_REPORT_STATUSES,
+    report_files_dir: str | None = None,
 ) -> dict[str, Any]:
     """Seed one login account plus the requested reports into ``database_url``."""
     for status in reports:
@@ -227,7 +258,13 @@ def seed_database(
             account = new_account(email, password, display_name)
             session.add(account)
             seeded: list[tuple[MedicalReport, str]] = [
-                _seed_report(session, account.id, status) for status in reports
+                _seed_report(
+                    session,
+                    account.id,
+                    status,
+                    report_files_dir=report_files_dir,
+                )
+                for status in reports
             ]
             session.commit()
             payload = {
@@ -267,6 +304,11 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         dest="reports",
         help="要创建的报告状态,可重复;缺省同时创建已完成与待确认报告",
     )
+    parser.add_argument(
+        "--report-files",
+        default=None,
+        help="报告原文页落盘目录;提供时为每个报告生成一页白色样本图片",
+    )
     return parser.parse_args(argv)
 
 
@@ -280,6 +322,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             password=args.password,
             display_name=args.display_name,
             reports=args.reports or SEED_REPORT_STATUSES,
+            report_files_dir=args.report_files,
         )
     except IntegrityError as exc:
         print(f"e2e_seed: 账户已存在({args.email}): {exc.orig}", file=sys.stderr)
