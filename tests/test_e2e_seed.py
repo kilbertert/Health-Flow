@@ -52,6 +52,20 @@ def test_seed_creates_login_account(database_url):
     assert saved.password_hash != account["password"]
 
 
+def test_seed_creates_sqlite_database_directory(tmp_path):
+    database_dir = tmp_path / "missing" / "nested"
+    database_url = f"sqlite:///{database_dir / 'seed.db'}"
+    payload = seed_database(
+        database_url,
+        email="nested@healthflow.test",
+        password="e2e-pass-123",
+    )
+
+    assert database_dir.is_dir()
+    assert (database_dir / "seed.db").is_file()
+    assert payload["account"]["email"] == "nested@healthflow.test"
+
+
 def test_seed_creates_completed_and_pending_reports(database_url):
     payload = seed_database(
         database_url, email="owner@healthflow.test", password="e2e-pass-123"

@@ -7,7 +7,7 @@ async function login(page, account) {
   await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
   await page.getByLabel('邮箱').fill(account.email);
   await page.getByLabel('密码').fill(account.password);
-  await page.getByRole('button', { name: '登录', exact: true }).click();
+  await page.getByRole('button', { name: /^登\s*录$/ }).click();
   await expect(page.getByRole('heading', { name: '呵护您的健康' })).toBeVisible();
 }
 
@@ -34,8 +34,8 @@ function horizontalExcess(page) {
       const { account } = await seed({ reports: ['assessed'] });
       await openAssessedReport(page, account);
 
-      expect(await horizontalExcess(page)).toBeLessThanOrEqual(0);
-      const knowledgeTitle = page.getByText('正式知识卡匹配结果');
+      await expect.poll(() => horizontalExcess(page)).toBeLessThanOrEqual(0);
+      const knowledgeTitle = page.locator('.evidence-result-card .ant-card-head');
       await expect(knowledgeTitle).toBeVisible();
       expect(await knowledgeTitle.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(0);
 
@@ -59,6 +59,18 @@ function horizontalExcess(page) {
       const modal = page.locator('.source-modal-wrap .ant-modal');
       await expect(modal).toBeVisible();
       await expect(page.getByAltText(/报告原文第 1 页/)).toBeVisible();
+      await expect
+        .poll(async () => {
+          const box = await modal.boundingBox();
+          return Boolean(
+            box &&
+            box.x <= 0 &&
+            box.y <= 0 &&
+            box.x + box.width >= width - 1 &&
+            box.y + box.height >= 667 - 1,
+          );
+        })
+        .toBe(true);
 
       const box = await modal.boundingBox();
       expect(box).not.toBeNull();
@@ -84,13 +96,20 @@ test.describe('桌面端报告解读流', () => {
     const { account } = await seed({ reports: ['assessed'] });
     await openAssessedReport(page, account);
 
-    expect(await horizontalExcess(page)).toBeLessThanOrEqual(0);
+    await expect.poll(() => horizontalExcess(page)).toBeLessThanOrEqual(0);
     const technicalDetails = page.getByRole('button', { name: '技术详情' });
     await expect(technicalDetails).toHaveAttribute('aria-expanded', 'false');
 
     await page.getByRole('button', { name: '查看空腹血糖原文' }).click();
     const modal = page.locator('.source-modal-wrap .ant-modal');
     await expect(modal).toBeVisible();
+    await expect(page.getByAltText(/报告原文第 1 页/)).toBeVisible();
+    await expect
+      .poll(async () => {
+        const box = await modal.boundingBox();
+        return Boolean(box && box.width >= 955 && box.width <= 961);
+      })
+      .toBe(true);
     const box = await modal.boundingBox();
     expect(box).not.toBeNull();
     expect(box.width).toBeLessThanOrEqual(961);

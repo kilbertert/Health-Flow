@@ -15,7 +15,7 @@ test('375px 视口:登录后首页渲染出内容', async ({ page, seed }) => {
   await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
   await page.getByLabel('邮箱').fill(account.email);
   await page.getByLabel('密码').fill(account.password);
-  await page.getByRole('button', { name: '登录', exact: true }).click();
+  await page.getByRole('button', { name: /^登\s*录$/ }).click();
 
   // 登录成功后首页渲染出内容。
   await expect(page.getByRole('heading', { name: '呵护您的健康' })).toBeVisible();
