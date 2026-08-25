@@ -9,15 +9,22 @@ const repoRoot = path.resolve(frontendDir, '..');
 
 // 一次运行一个一次性沙箱:测试数据库与报告文件都落在系统临时目录,
 // 绝不触碰仓库内的 data/healthflow.db。目录本身由 server.mjs / seed.mjs 按需创建。
-const runDir = path.join(
-  os.tmpdir(),
-  `healthflow-e2e-${process.pid}-${Date.now()}`,
-);
+// Playwright 的 worker 进程会重新求值本配置模块,因此这里必须保持幂等:
+// 主进程首次求值时把 runDir 等写入 process.env,worker 经进程环境继承后不再重算,
+// 否则 webServer(主进程)与 seed/fixture(worker)会各自派生不同的沙箱目录。
+const runDir =
+  process.env.HEALTHFLOW_E2E_RUN_DIR ||
+  path.join(os.tmpdir(), `healthflow-e2e-${process.pid}-${Date.now()}`);
 const port = Number(process.env.HEALTHFLOW_E2E_PORT || 8137);
 const baseURL = `http://127.0.0.1:${port}`;
-const databaseUrl = `sqlite:///${path.join(runDir, 'healthflow-e2e.db')}`;
-const reportFilesDir = path.join(runDir, 'report-files');
-const frontendDist = path.join(frontendDir, 'dist');
+const databaseUrl =
+  process.env.HEALTHFLOW_E2E_DATABASE_URL ||
+  `sqlite:///${path.join(runDir, 'healthflow-e2e.db')}`;
+const reportFilesDir =
+  process.env.HEALTHFLOW_E2E_REPORT_FILES_DIR ||
+  path.join(runDir, 'report-files');
+const frontendDist =
+  process.env.HEALTHFLOW_E2E_FRONTEND_DIST || path.join(frontendDir, 'dist');
 
 // 运行期上下文:通过环境变量传给服务器启动器、种子工具、测试 worker 与收尾。
 const e2eEnv = {
@@ -28,7 +35,9 @@ const e2eEnv = {
   HEALTHFLOW_E2E_DATABASE_URL: databaseUrl,
   HEALTHFLOW_E2E_REPORT_FILES_DIR: reportFilesDir,
 };
-Object.assign(process.env, e2eEnv);
+for (const [key, value] of Object.entries(e2eEnv)) {
+  process.env[key] ??= value;
+}
 
 // 显式覆盖关键开关,让本地 .env 的同名配置失效,保证 E2E 环境确定。
 const serverEnv = {
