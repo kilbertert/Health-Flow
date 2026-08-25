@@ -58,3 +58,4 @@ class ReportHistoryItem(BaseModel):
     created_at: datetime
     metric_count: int = 0
     finding_count: int = 0
+    abnormal_count: int = 0

@@ -10,7 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.data.models import Base, MedicalReport
+from app.data.models import Base, MedicalReport, MetricRecord
 from app.main import app
 
 
@@ -120,6 +120,74 @@ def test_report_history_is_account_scoped(account_client):
     assert history.status_code == 200
     assert len(history.json()) == 1
     assert history.json()[0]["status"] == "assessed"
+
+
+def test_report_history_includes_abnormal_count(account_client):
+    client, SessionLocal = account_client
+    account = client.post(
+        "/api/auth/register",
+        json={"email": "owner@example.com", "password": "password-123"},
+    ).json()
+    with SessionLocal() as db:
+        owned = MedicalReport(
+            patient_id=account["id"],
+            owner_id=account["id"],
+            status="assessed",
+        )
+        other = MedicalReport(
+            patient_id="other",
+            owner_id="another-account",
+            status="assessed",
+        )
+        db.add_all([owned, other])
+        db.flush()
+        db.add_all(
+            [
+                MetricRecord(
+                    report_id=owned.id,
+                    metric_name="偏高",
+                    metric_value="1",
+                    abnormal_flag="H",
+                ),
+                MetricRecord(
+                    report_id=owned.id,
+                    metric_name="偏低",
+                    metric_value="1",
+                    abnormal_flag="L",
+                ),
+                MetricRecord(
+                    report_id=owned.id,
+                    metric_name="异常未分类",
+                    metric_value="1",
+                    abnormal_flag="A",
+                ),
+                MetricRecord(
+                    report_id=owned.id,
+                    metric_name="正常",
+                    metric_value="1",
+                    abnormal_flag="N",
+                ),
+                MetricRecord(
+                    report_id=owned.id,
+                    metric_name="未标记",
+                    metric_value="1",
+                ),
+                MetricRecord(
+                    report_id=other.id,
+                    metric_name="另一账户异常",
+                    metric_value="1",
+                    abnormal_flag="H",
+                ),
+            ]
+        )
+        db.commit()
+
+    history = client.get("/api/auth/reports")
+    assert history.status_code == 200
+    items = history.json()
+    assert len(items) == 1
+    assert items[0]["metric_count"] == 5
+    assert items[0]["abnormal_count"] == 3
 
 
 def test_report_endpoints_require_account_when_enabled(account_client):

@@ -29,6 +29,15 @@ from app.service.auth import (
 )
 
 router = APIRouter()
+_ABNORMAL_FLAGS = frozenset({"H", "L", "A", "*", "HIGH", "LOW", "高", "低"})
+
+
+def _is_abnormal_flag(flag: str | None) -> bool:
+    return str(flag or "").strip().upper() in _ABNORMAL_FLAGS
+
+
+def _abnormal_metric_count(report: MedicalReport) -> int:
+    return sum(1 for metric in report.metrics if _is_abnormal_flag(metric.abnormal_flag))
 
 
 def _account_response(account: UserAccount) -> AccountResponse:
@@ -162,6 +171,7 @@ async def report_history(request: Request, db: Session = Depends(db_dependency))
             exam_date=report.exam_date,
             created_at=report.created_at,
             metric_count=len(report.metrics),
+            abnormal_count=_abnormal_metric_count(report),
             finding_count=(
                 len(report.evidence_result.get("findings") or [])
                 if isinstance(report.evidence_result, dict)
