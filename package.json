@@ -3,7 +3,8 @@
   "type": "module",
   "scripts": {
     "afk": "tsx .sandcastle/main.ts",
-    "prd:to-issues": "tsx .sandcastle/to-issues-prd/to-issues-prd.ts"
+    "prd:to-issues": "tsx .sandcastle/to-issues-prd/to-issues-prd.ts",
+    "ralph": "tsx .sandcastle/planner.ts"
   },
   "dependencies": {
     "tsx": "^4.20.0"
