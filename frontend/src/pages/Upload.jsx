@@ -48,7 +48,7 @@ export function abnormalTag(flag) {
   return <Tag>{String(flag)}</Tag>;
 }
 
-function isAbnormal(flag) {
+export function isAbnormal(flag) {
   return ['H', 'HIGH', '高', 'L', 'LOW', '低', 'A', '*'].includes(String(flag || '').toUpperCase());
 }
 
@@ -85,7 +85,7 @@ function needsReview(metric) {
   return flag === 'H' || flag === 'L' || (flag === null && isAbnormal(metric?.abnormal_flag));
 }
 
-function displayFlag(metric) {
+export function displayFlag(metric) {
   return deterministicFlag(metric) || (isAbnormal(metric?.abnormal_flag) ? '待核对' : metric?.abnormal_flag);
 }
 
@@ -214,7 +214,7 @@ function MetricCard({ metric, draft, metricCatalog, disabled, onUpdateDraft, onO
   );
 }
 
-function SourceEvidence({ reportId, reportToken, metric, file }) {
+export function SourceEvidence({ reportId, reportToken, metric, file }) {
   const [sourceUrl, setSourceUrl] = useState('');
   const [sourceError, setSourceError] = useState('');
   const page = metric?.page_number || metric?.source_page || 1;
@@ -310,7 +310,7 @@ function evidenceItemsFor(finding, detail) {
   }];
 }
 
-function EvidenceResult({ result, onOpenSource }) {
+export function EvidenceResult({ result, onOpenSource }) {
   if (!result) return null;
   const findings = Array.isArray(result.findings) ? result.findings : [];
   const patientReply = result.patient_reply && typeof result.patient_reply === 'object'
@@ -516,7 +516,7 @@ function initialDrafts(metrics) {
   ]));
 }
 
-function TechnicalDetails({ result, subjectConsistency, onSubjectConsistencyChange }) {
+export function TechnicalDetails({ result, subjectConsistency, onSubjectConsistencyChange }) {
   const trace = result.extraction_trace;
   const subjectNeedsConfirmation = result.status === 'pending_confirmation'
     && result.subject_consistency !== 'same';
