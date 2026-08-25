@@ -69,7 +69,10 @@ export function claudeProfile(profile = process.env.AFK_PROFILE, env?: Record<st
       env: profile ? { AFK_PROFILE: profile } : undefined,
     }),
     sandbox: docker({
-      imageName: process.env.AFK_IMAGE ?? "auto-test-sandcastle:local",
+      // Use this repo's own image (sandcastle:<repo>), not a tag borrowed from
+      // the Auto-Test project. A shared custom tag means the wrong image is
+      // run and rebuilds target a different name.
+      imageName: process.env.AFK_IMAGE ?? "sandcastle:health-flow",
       env: {
         ...env,
         ...(usePsydo ? { OPENAI_API_KEY: readFileSync(psydoKey, "utf8").trim() } : {}),
