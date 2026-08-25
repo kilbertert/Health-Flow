@@ -8,7 +8,7 @@ async function login(page, account) {
   await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
   await page.getByLabel('邮箱').fill(account.email);
   await page.getByLabel('密码').fill(account.password);
-  await page.getByRole('button', { name: '登录', exact: true }).click();
+  await page.getByRole('button', { name: /^登\s*录$/ }).click();
   await expect(page.getByRole('heading', { name: '呵护您的健康' })).toBeVisible();
 }
 
@@ -119,8 +119,11 @@ test.describe('指标确认表格桌面端', () => {
     const { account } = await seed({ reports: ['pending_confirmation'] });
     await openPendingReport(page, account);
 
-    await expect(page.getByRole('table')).toBeVisible();
-    await expect(page.getByRole('columnheader', { name: '指标' })).toBeVisible();
+    const confirmationTable = page.getByRole('table').filter({
+      has: page.getByRole('columnheader', { name: '指标' }),
+    });
+    await expect(confirmationTable).toBeVisible();
+    await expect(confirmationTable.getByRole('columnheader', { name: '指标', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: '甘油三酯指标卡片' })).toHaveCount(0);
     await expect(page.locator('.metric-card-list')).toHaveCount(0);
   });

@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import create_engine
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -112,6 +112,19 @@ def _engine_for(database_url: str) -> Engine:
         # 与 E2E 服务器共用同一个文件时留足忙等待时间。
         return create_engine(database_url, connect_args={"timeout": 30})
     return create_engine(database_url)
+
+
+def _ensure_sqlite_database_directory(database_url: str) -> None:
+    """Create the parent directory of a file-backed SQLite database, if any."""
+    url = make_url(database_url)
+    if url.get_backend_name() != "sqlite":
+        return
+    database = url.database
+    if not database or database == ":memory:":
+        return
+    parent = Path(database).parent
+    if str(parent) not in ("", "."):
+        parent.mkdir(parents=True, exist_ok=True)
 
 
 def _report_access_token() -> tuple[str, str]:
@@ -251,6 +264,7 @@ def seed_database(
     for status in reports:
         if status not in SEED_REPORT_STATUSES:
             raise ValueError(f"不支持的种子报告状态: {status}")
+    _ensure_sqlite_database_directory(database_url)
     engine = _engine_for(database_url)
     try:
         Base.metadata.create_all(engine)
@@ -332,4 +346,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    repo_root = Path(__file__).resolve().parent.parent
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
     raise SystemExit(main())

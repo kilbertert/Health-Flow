@@ -6,7 +6,7 @@ async function login(page, account) {
   await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
   await page.getByLabel('邮箱').fill(account.email);
   await page.getByLabel('密码').fill(account.password);
-  await page.getByRole('button', { name: '登录', exact: true }).click();
+  await page.getByRole('button', { name: /^登\s*录$/ }).click();
   await expect(page.getByRole('heading', { name: '呵护您的健康' })).toBeVisible();
 }
 
