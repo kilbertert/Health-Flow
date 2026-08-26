@@ -262,6 +262,27 @@ button { cursor: pointer; }
 .report-page .ant-btn-primary:hover { background: var(--gold-strong) !important; border-color: var(--gold-strong) !important; }
 .report-page .ant-upload-wrapper .ant-upload-drag { border-color: #e6d5b8; background: #fffdf8; border-radius: 14px; }
 .report-page .ant-upload-wrapper .ant-upload-drag:hover { border-color: var(--gold); }
+.report-paste-zone { position: relative; }
+.report-paste-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 32px; margin-top: 8px; }
+.report-paste-guide { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.report-paste-editable {
+  position: fixed;
+  top: -200%;
+  left: -200%;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  outline: none;
+  opacity: 0;
+  white-space: pre;
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-text-fill-color: transparent;
+}
+.report-paste-editable:focus { outline: none; }
 .report-page .ant-table-wrapper { max-width: 100%; overflow-x: auto; }
 .report-page .metric-card-list { display: grid; gap: 10px; }
 .report-page .metric-card .ant-card-body { padding: 12px; }

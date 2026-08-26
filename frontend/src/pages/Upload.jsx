@@ -19,7 +19,7 @@ import {
   Typography,
   Upload,
 } from 'antd';
-import { CheckCircleOutlined, EyeOutlined, InboxOutlined, ReloadOutlined } from '@ant-design/icons';
+import { CheckCircleOutlined, EyeOutlined, InboxOutlined, PictureOutlined, ReloadOutlined } from '@ant-design/icons';
 import {
   assessReport,
   confirmReport,
@@ -49,6 +49,9 @@ const UNSUPPORTED_PASTE_IMAGE_TYPES = new Set([
   'image/heif',
 ]);
 const DATA_IMAGE_RE = /data:image\/([a-z0-9.+-]+);base64,([a-z0-9+/=]+)/gi;
+const PASTE_LONG_PRESS_MS = 600;
+const PASTE_LONG_PRESS_MOVE_TOLERANCE = 10;
+const PASTE_EDITABLE_PLACEHOLDER = '\u200B';
 
 function normalizePasteMime(value) {
   return String(value || '').split(';', 1)[0].trim().toLowerCase();
@@ -702,8 +705,13 @@ export function TechnicalDetails({ result, subjectConsistency, onSubjectConsiste
 export default function UploadPage({ account, initialReportId = null, onReportSaved }) {
   const [form] = Form.useForm();
   const uploadZoneRef = useRef(null);
+  const pasteEditableRef = useRef(null);
   const pasteSequenceRef = useRef(0);
+  const longPressTimerRef = useRef(null);
+  const longPressStartRef = useRef(null);
+  const longPressTriggeredRef = useRef(false);
   const [fileList, setFileList] = useState([]);
+  const [pasteGuideVisible, setPasteGuideVisible] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [result, setResult] = useState(null);
@@ -763,6 +771,74 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
     if (input) input.click();
   };
 
+  const focusPasteEditable = () => {
+    const editable = pasteEditableRef.current;
+    if (!editable) return;
+    if (!editable.textContent) {
+      editable.textContent = PASTE_EDITABLE_PLACEHOLDER;
+    }
+    try {
+      editable.focus({ preventScroll: true });
+    } catch {
+      editable.focus();
+    }
+    const selection = window.getSelection();
+    if (selection) {
+      const range = document.createRange();
+      range.selectNodeContents(editable);
+      range.collapse(false);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+    setPasteGuideVisible(true);
+  };
+
+  const clearLongPressTimer = () => {
+    if (longPressTimerRef.current) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
+  const beginLongPress = (event) => {
+    if (typeof event.button === 'number' && event.button !== 0) return;
+    longPressTriggeredRef.current = false;
+    longPressStartRef.current = { x: event.clientX, y: event.clientY };
+    clearLongPressTimer();
+    longPressTimerRef.current = window.setTimeout(() => {
+      longPressTriggeredRef.current = true;
+      longPressStartRef.current = null;
+      focusPasteEditable();
+    }, PASTE_LONG_PRESS_MS);
+  };
+
+  const cancelLongPress = () => {
+    clearLongPressTimer();
+    longPressStartRef.current = null;
+  };
+
+  const moveLongPress = (event) => {
+    if (!longPressStartRef.current) return;
+    const { x, y } = longPressStartRef.current;
+    const moved = Math.hypot(event.clientX - x, event.clientY - y);
+    if (moved > PASTE_LONG_PRESS_MOVE_TOLERANCE) {
+      cancelLongPress();
+    }
+  };
+
+  const guardLongPressClick = (event) => {
+    if (!longPressTriggeredRef.current) return;
+    longPressTriggeredRef.current = false;
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  const handleContextMenu = (event) => {
+    clearLongPressTimer();
+    longPressTriggeredRef.current = true;
+    focusPasteEditable();
+  };
+
   const appendPastedImages = (pastedImages) => {
     const remaining = Math.max(0, 20 - fileList.length);
     if (remaining === 0) {
@@ -790,11 +866,19 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
 
   const handlePaste = (event) => {
     const target = event.target;
+    const isPasteEditable = target === pasteEditableRef.current;
     if (
       target instanceof HTMLElement
+      && !isPasteEditable
       && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
     ) {
       return;
+    }
+    if (isPasteEditable) {
+      event.preventDefault();
+      if (pasteEditableRef.current) {
+        pasteEditableRef.current.textContent = PASTE_EDITABLE_PLACEHOLDER;
+      }
     }
     const pasted = readPastedImages(event);
     if (pasted.status === 'unsupported') {
@@ -1050,6 +1134,13 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
           ref={uploadZoneRef}
           className="report-paste-zone"
           onPaste={handlePaste}
+          onPointerDown={beginLongPress}
+          onPointerMove={moveLongPress}
+          onPointerUp={cancelLongPress}
+          onPointerCancel={cancelLongPress}
+          onPointerLeave={cancelLongPress}
+          onContextMenu={handleContextMenu}
+          onClickCapture={guardLongPressClick}
         >
           <Upload.Dragger
             style={{ marginTop: 16 }}
@@ -1064,6 +1155,26 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
             <p className="ant-upload-text">点击或拖拽多张报告文件到此区域</p>
             <p className="ant-upload-hint">文件顺序会保留；每个文件不超过 20MB</p>
           </Upload.Dragger>
+          <div className="report-paste-actions">
+            <Button icon={<PictureOutlined />} onClick={focusPasteEditable}>
+              粘贴图片
+            </Button>
+            {pasteGuideVisible && (
+              <Typography.Text className="report-paste-guide" aria-live="polite">
+                长按屏幕 → 粘贴
+              </Typography.Text>
+            )}
+          </div>
+          <div
+            ref={pasteEditableRef}
+            className="report-paste-editable"
+            contentEditable
+            suppressContentEditableWarning
+            tabIndex={-1}
+            aria-label="图片粘贴区域"
+          >
+            {PASTE_EDITABLE_PLACEHOLDER}
+          </div>
         </div>
 
         <Button

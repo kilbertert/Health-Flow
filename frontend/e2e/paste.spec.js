@@ -1,6 +1,6 @@
-// 图片粘贴核心(E2E):
+// 图片粘贴(E2E):
 // 桌面端通过合成粘贴事件把剪贴板图片注入待上传列表,
-// 并验证命名、非图片忽略、text/html data:image、不支持的格式与输入框防劫持。
+// 移动端验证粘贴按钮/长按聚焦隐藏可编辑区、不滚动聚焦与进列表。
 import { test, expect } from './fixtures.js';
 
 const TINY_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC';
@@ -189,5 +189,100 @@ test.describe('报告图片粘贴', () => {
       element.dispatchEvent(new Event('paste', { bubbles: true, cancelable: true }));
     });
     await expect(page.getByText('当前环境不支持粘贴，请选择文件')).toBeVisible();
+  });
+});
+
+test.describe('移动端粘贴入口', () => {
+  test.use({ viewport: { width: 375, height: 667 } });
+
+  test('粘贴图片按钮聚焦隐藏可编辑区且不滚动页面', async ({ page, seed }) => {
+    const { account } = await seed({ reports: [] });
+    await openUploadPage(page, account);
+
+    const pasteButton = page.getByRole('button', { name: '粘贴图片' });
+    await pasteButton.scrollIntoViewIfNeeded();
+    const before = await page.evaluate(() => ({ x: window.scrollX, y: window.scrollY }));
+
+    await pasteButton.click();
+    await expect(page.getByText('长按屏幕 → 粘贴')).toBeVisible();
+
+    const focusState = await page.evaluate(() => ({
+      className: document.activeElement?.className || '',
+      contentEditable: document.activeElement?.contentEditable,
+      x: window.scrollX,
+      y: window.scrollY,
+    }));
+    expect(focusState.className).toContain('report-paste-editable');
+    expect(focusState.contentEditable).toBe('true');
+    expect(focusState.x).toBe(before.x);
+    expect(focusState.y).toBe(before.y);
+
+    const editableBox = await page.locator('.report-paste-editable').boundingBox();
+    expect(editableBox).not.toBeNull();
+    expect(editableBox.x < 0 || editableBox.y < 0).toBeTruthy();
+  });
+
+  test('长按上传区聚焦隐藏可编辑区并显示引导', async ({ page, seed }) => {
+    const { account } = await seed({ reports: [] });
+    await openUploadPage(page, account);
+
+    const zone = page.locator('.report-paste-zone');
+    await zone.scrollIntoViewIfNeeded();
+    const before = await page.evaluate(() => ({ x: window.scrollX, y: window.scrollY }));
+
+    await zone.evaluate((element) => {
+      const event = new PointerEvent('pointerdown', {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        pointerId: 1,
+        pointerType: 'touch',
+        isPrimary: true,
+        button: 0,
+        clientX: 120,
+        clientY: 180,
+      });
+      element.dispatchEvent(event);
+    });
+    await page.waitForTimeout(700);
+
+    await expect(page.getByText('长按屏幕 → 粘贴')).toBeVisible();
+    const focusState = await page.evaluate(() => ({
+      className: document.activeElement?.className || '',
+      contentEditable: document.activeElement?.contentEditable,
+      x: window.scrollX,
+      y: window.scrollY,
+    }));
+    expect(focusState.className).toContain('report-paste-editable');
+    expect(focusState.contentEditable).toBe('true');
+    expect(focusState.x).toBe(before.x);
+    expect(focusState.y).toBe(before.y);
+
+    await zone.evaluate((element) => {
+      element.dispatchEvent(new PointerEvent('pointerup', {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        pointerId: 1,
+        pointerType: 'touch',
+        isPrimary: true,
+        button: 0,
+        clientX: 120,
+        clientY: 180,
+      }));
+    });
+  });
+
+  test('聚焦后的移动粘贴区接收图片并进入待上传列表', async ({ page, seed }) => {
+    const { account } = await seed({ reports: [] });
+    await openUploadPage(page, account);
+
+    await page.getByRole('button', { name: '粘贴图片' }).click();
+    await expect(page.getByText('长按屏幕 → 粘贴')).toBeVisible();
+
+    await dispatchPaste(page.locator('.report-paste-editable'), {
+      files: [{ name: 'copied.png', type: 'image/png', base64: TINY_PNG_BASE64 }],
+    });
+    await expect(page.getByText(/粘贴-\d+\.png/)).toBeVisible();
   });
 });
