@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Button,
@@ -36,6 +36,153 @@ const DECISIONS = [
   { label: '修正', value: 'corrected' },
   { label: '排除', value: 'excluded' },
 ];
+const PASTE_IMAGE_EXTENSIONS = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/jpg': 'jpg',
+  'image/gif': 'gif',
+  'image/bmp': 'bmp',
+};
+const UNSUPPORTED_PASTE_IMAGE_TYPES = new Set([
+  'image/webp',
+  'image/heic',
+  'image/heif',
+]);
+const DATA_IMAGE_RE = /data:image\/([a-z0-9.+-]+);base64,([a-z0-9+/=]+)/gi;
+
+function normalizePasteMime(value) {
+  return String(value || '').split(';', 1)[0].trim().toLowerCase();
+}
+
+function pasteExtensionForMime(mime) {
+  const normalized = normalizePasteMime(mime);
+  if (Object.prototype.hasOwnProperty.call(PASTE_IMAGE_EXTENSIONS, normalized)) {
+    return PASTE_IMAGE_EXTENSIONS[normalized];
+  }
+  return 'png';
+}
+
+function pasteFileMimeForExtension(extension) {
+  if (extension === 'jpg') return 'image/jpeg';
+  return `image/${extension}`;
+}
+
+function pasteMimeFromFileName(name) {
+  const extension = String(name || '').split('.').pop().toLowerCase();
+  if (['png', 'jpg', 'jpeg', 'gif', 'bmp'].includes(extension)) {
+    const normalized = extension === 'jpeg' ? 'jpg' : extension;
+    return { mime: pasteFileMimeForExtension(normalized), extension: normalized };
+  }
+  if (['webp', 'heic', 'heif'].includes(extension)) {
+    return { mime: `image/${extension}`, extension };
+  }
+  return null;
+}
+
+function pasteImageFromBase64(mime, base64) {
+  try {
+    const bytes = Uint8Array.from(atob(base64.replace(/\s/g, '')), (char) => char.charCodeAt(0));
+    return new File([bytes], '', { type: normalizePasteMime(mime) });
+  } catch {
+    return null;
+  }
+}
+
+function readPastedImages(event) {
+  const clipboardData = event?.clipboardData || event?.nativeEvent?.clipboardData;
+  const images = [];
+  let sawUnsupportedImage = false;
+  let sawPastePayload = false;
+
+  const items = clipboardData?.items ? Array.from(clipboardData.items) : [];
+  if (items.length > 0) {
+    sawPastePayload = items.length > 0;
+    for (const item of items) {
+      if (item.kind !== 'file') continue;
+      const type = normalizePasteMime(item.type);
+      if (type.startsWith('image/')) {
+        if (UNSUPPORTED_PASTE_IMAGE_TYPES.has(type)) {
+          sawUnsupportedImage = true;
+          continue;
+        }
+        const file = item.getAsFile?.();
+        if (file) {
+          images.push({
+            file,
+            mime: type || file.type || `image/${pasteExtensionForMime(type)}`,
+            extension: pasteExtensionForMime(type),
+          });
+        } else {
+          sawUnsupportedImage = sawUnsupportedImage || UNSUPPORTED_PASTE_IMAGE_TYPES.has(type);
+        }
+      }
+    }
+  } else {
+    const files = clipboardData?.files ? Array.from(clipboardData.files) : [];
+    sawPastePayload = files.length > 0;
+    for (const file of files) {
+      const type = normalizePasteMime(file.type);
+      if (type.startsWith('image/')) {
+        if (UNSUPPORTED_PASTE_IMAGE_TYPES.has(type)) {
+          sawUnsupportedImage = true;
+          continue;
+        }
+        images.push({
+          file,
+          mime: type || pasteFileMimeForExtension(pasteExtensionForMime(type)),
+          extension: pasteExtensionForMime(type),
+        });
+      } else {
+        const byName = pasteMimeFromFileName(file.name);
+        if (byName) {
+          if (UNSUPPORTED_PASTE_IMAGE_TYPES.has(byName.mime)) {
+            sawUnsupportedImage = true;
+          } else {
+            images.push({ file, mime: byName.mime, extension: byName.extension });
+          }
+        }
+      }
+    }
+  }
+
+  const html = typeof clipboardData?.getData === 'function'
+    ? clipboardData.getData('text/html') || ''
+    : '';
+  if (html) {
+    sawPastePayload = true;
+    for (const match of html.matchAll(DATA_IMAGE_RE)) {
+      const mime = normalizePasteMime(match[1]);
+      if (UNSUPPORTED_PASTE_IMAGE_TYPES.has(mime)) {
+        sawUnsupportedImage = true;
+        continue;
+      }
+      const file = pasteImageFromBase64(mime, match[2]);
+      if (!file) continue;
+      images.push({
+        file,
+        mime: file.type || pasteFileMimeForExtension(pasteExtensionForMime(mime)),
+        extension: pasteExtensionForMime(mime),
+      });
+    }
+  }
+  const plainText = typeof clipboardData?.getData === 'function' && !html
+    ? clipboardData.getData('text/plain') || ''
+    : '';
+  if (plainText) {
+    sawPastePayload = true;
+  }
+
+  if (images.length > 0) {
+    return { images, status: 'ok' };
+  }
+  if (sawUnsupportedImage) {
+    return { status: 'unsupported' };
+  }
+  if (sawPastePayload) {
+    return { status: 'empty' };
+  }
+  return { status: 'unavailable' };
+}
 // 异常标记：H=偏高(红) L=偏低(橙) N=正常(绿)
 export function abnormalTag(flag) {
   if (!flag) return <Tag>—</Tag>;
@@ -554,6 +701,8 @@ export function TechnicalDetails({ result, subjectConsistency, onSubjectConsiste
 
 export default function UploadPage({ account, initialReportId = null, onReportSaved }) {
   const [form] = Form.useForm();
+  const uploadZoneRef = useRef(null);
+  const pasteSequenceRef = useRef(0);
   const [fileList, setFileList] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -607,6 +756,61 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
 
   const updateDraft = (id, field, value) => {
     setDrafts((current) => ({ ...current, [id]: { ...current[id], [field]: value } }));
+  };
+
+  const openUploadSelector = () => {
+    const input = uploadZoneRef.current?.querySelector?.('input[type="file"]');
+    if (input) input.click();
+  };
+
+  const appendPastedImages = (pastedImages) => {
+    const remaining = Math.max(0, 20 - fileList.length);
+    if (remaining === 0) {
+      message.warning('最多上传 20 个文件');
+      return;
+    }
+    const nextFiles = pastedImages.slice(0, remaining).map(({ file, mime, extension }) => {
+      pasteSequenceRef.current += 1;
+      const name = `粘贴-${Date.now()}.${extension}`;
+      const renamed = new File([file], name, { type: mime || file.type });
+      return {
+        uid: `paste-${Date.now()}-${pasteSequenceRef.current}`,
+        name,
+        type: renamed.type,
+        size: renamed.size,
+        status: 'done',
+        originFileObj: renamed,
+      };
+    });
+    if (pastedImages.length > remaining) {
+      message.warning('最多上传 20 个文件');
+    }
+    setFileList((current) => [...current, ...nextFiles]);
+  };
+
+  const handlePaste = (event) => {
+    const target = event.target;
+    if (
+      target instanceof HTMLElement
+      && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+    ) {
+      return;
+    }
+    const pasted = readPastedImages(event);
+    if (pasted.status === 'unsupported') {
+      message.warning('暂不支持');
+      return;
+    }
+    if (pasted.status === 'unavailable') {
+      message.warning('当前环境不支持粘贴，请选择文件');
+      openUploadSelector();
+      return;
+    }
+    if (pasted.status === 'empty' || pasted.images.length === 0) {
+      message.info('剪贴板中没有可粘贴的图片');
+      return;
+    }
+    appendPastedImages(pasted.images);
   };
 
   const handleUpload = async () => {
@@ -842,19 +1046,25 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
           </Form.Item>
         </Form>
 
-        <Upload.Dragger
-          style={{ marginTop: 16 }}
-          accept=".pdf,.jpg,.jpeg,.png,.gif,.bmp"
-          multiple
-          maxCount={20}
-          fileList={fileList}
-          beforeUpload={() => false}
-          onChange={({ fileList: next }) => setFileList(next)}
+        <div
+          ref={uploadZoneRef}
+          className="report-paste-zone"
+          onPaste={handlePaste}
         >
-          <p className="ant-upload-drag-icon"><InboxOutlined /></p>
-          <p className="ant-upload-text">点击或拖拽多张报告文件到此区域</p>
-          <p className="ant-upload-hint">文件顺序会保留；每个文件不超过 20MB</p>
-        </Upload.Dragger>
+          <Upload.Dragger
+            style={{ marginTop: 16 }}
+            accept=".pdf,.jpg,.jpeg,.png,.gif,.bmp"
+            multiple
+            maxCount={20}
+            fileList={fileList}
+            beforeUpload={() => false}
+            onChange={({ fileList: next }) => setFileList(next)}
+          >
+            <p className="ant-upload-drag-icon"><InboxOutlined /></p>
+            <p className="ant-upload-text">点击或拖拽多张报告文件到此区域</p>
+            <p className="ant-upload-hint">文件顺序会保留；每个文件不超过 20MB</p>
+          </Upload.Dragger>
+        </div>
 
         <Button
           type="primary"
