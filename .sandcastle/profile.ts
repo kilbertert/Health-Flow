@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { claudeCode, codex } from "@ai-hero/sandcastle";
+import { claudeCode, codex, type AgentProvider, type SandboxProvider } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 
 const profiles = {
@@ -51,7 +51,10 @@ function ensureAliyunSettings(baseUrl: string): void {
   writeFileSync(aliyunSettings, content, { mode: 0o600 });
 }
 
-export function claudeProfile(profile = process.env.AFK_PROFILE, env?: Record<string, string>) {
+export function claudeProfile(
+  profile = process.env.AFK_PROFILE,
+  env?: Record<string, string>,
+): { agent: AgentProvider; sandbox: SandboxProvider } {
   if (profile && !(profile in profiles)) throw new Error("Unsupported profile; use claude, claude-ark, psydo, or aliyun-deepseek.");
   const settingsPath = profile ? profiles[profile as keyof typeof profiles] : undefined;
   if (settingsPath && !existsSync(settingsPath)) throw new Error(`Profile settings not found: ${settingsPath}`);
@@ -65,25 +68,30 @@ export function claudeProfile(profile = process.env.AFK_PROFILE, env?: Record<st
   return {
     agent: useCodex
       ? codex(process.env.AFK_MODEL ?? (useAliyun ? "deepseek-v4-pro-0813" : "gpt-5.6-sol"), { env: { CODEX_HOME: "/home/agent/.codex" } })
-      : claudeCode(process.env.AFK_MODEL ?? "claude-sonnet-4-6", {
-      env: profile ? { AFK_PROFILE: profile } : undefined,
-    }),
+      : claudeCode(process.env.AFK_MODEL ?? "claude-sonnet-4-6"),
     sandbox: docker({
-      // Use this repo's own image (sandcastle:<repo>), not a tag borrowed from
-      // the Auto-Test project. A shared custom tag means the wrong image is
-      // run and rebuilds target a different name.
+      // Use the same image name that `npx sandcastle docker build-image`
+      // produces (defaultImageName = sandcastle:<repo>). A hardcoded custom
+      // name here means rebuilds target a different tag and the sandbox keeps
+      // running a stale image — the cause of repeated false BLOCKEDs.
       imageName: process.env.AFK_IMAGE ?? "sandcastle:health-flow",
       env: {
         ...env,
+        // AFK_PROFILE lives in the sandbox env (not the agent env) so that
+        // both run() and createSandbox() containers see it — createSandbox
+        // does not re-inject agent env into an already-started container, and
+        // the Dockerfile claude wrapper dispatches on it.
+        ...(profile ? { AFK_PROFILE: profile } : {}),
+        ...(process.env.GH_TOKEN ? { GH_TOKEN: process.env.GH_TOKEN } : {}),
         ...(usePsydo ? { OPENAI_API_KEY: readFileSync(psydoKey, "utf8").trim() } : {}),
         ...(aliyun ? { DASHSCOPE_API_KEY: aliyun.apiKey } : {}),
       },
-      network: profile === "claude-ark" || useCodex ? "host" : undefined,
-      mounts: useCodex
-        ? [{ hostPath: useAliyun ? aliyunSettings : codexSettings, sandboxPath: "/home/agent/.codex/config.toml", readonly: true }]
+      ...(profile === "claude-ark" || useCodex ? { network: "host" as const } : {}),
+      ...(useCodex
+        ? { mounts: [{ hostPath: useAliyun ? aliyunSettings : codexSettings, sandboxPath: "/home/agent/.codex/config.toml", readonly: true }] }
         : settingsPath
-          ? [{ hostPath: settingsPath, sandboxPath: "/home/agent/.afk-profile-settings.json", readonly: true }]
-          : undefined,
+          ? { mounts: [{ hostPath: settingsPath, sandboxPath: "/home/agent/.afk-profile-settings.json", readonly: true }] }
+          : {}),
     }),
   };
 }
