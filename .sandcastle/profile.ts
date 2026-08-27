@@ -45,6 +45,12 @@ function ensureAliyunSettings(baseUrl: string): void {
     'wire_api = "responses"',
     'env_key = "DASHSCOPE_API_KEY"',
     "requires_openai_auth = false",
+    // Model-stability guardrail: bound slow/hung upstream responses so a
+    // stalled codex request fails fast instead of hanging the whole session.
+    // request_timeout (s) caps a single upstream request; request_max_retries
+    // limits re-attempts. Tune via AFK_REQUEST_TIMEOUT / AFK_REQUEST_RETRIES.
+    `request_timeout = ${process.env.AFK_REQUEST_TIMEOUT ?? 120}`,
+    `request_max_retries = ${process.env.AFK_REQUEST_RETRIES ?? 2}`,
     "",
   ].join("\n");
   mkdirSync(dirname(aliyunSettings), { recursive: true, mode: 0o700 });
@@ -77,9 +83,6 @@ export function claudeProfile(
       imageName: process.env.AFK_IMAGE ?? "sandcastle:health-flow",
       env: {
         ...env,
-        // 每个 worktree 使用自己的项目环境,避免 uv 复写 host 共享的 canonical
-        // .venv(editable install 会指向即将退役的 worktree 路径)。
-        UV_PROJECT_ENVIRONMENT: ".venv",
         // AFK_PROFILE lives in the sandbox env (not the agent env) so that
         // both run() and createSandbox() containers see it — createSandbox
         // does not re-inject agent env into an already-started container, and
