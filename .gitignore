@@ -95,3 +95,7 @@ dpo_debug.txt
 
 # AFK runner (package.json) dependencies
 node_modules/
+
+# pnpm lockfiles (repo uses npm)
+pnpm-lock.yaml
+pnpm-workspace.yaml
