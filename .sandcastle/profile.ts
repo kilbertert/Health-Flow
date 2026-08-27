@@ -77,6 +77,9 @@ export function claudeProfile(
       imageName: process.env.AFK_IMAGE ?? "sandcastle:health-flow",
       env: {
         ...env,
+        // 每个 worktree 使用自己的项目环境,避免 uv 复写 host 共享的 canonical
+        // .venv(editable install 会指向即将退役的 worktree 路径)。
+        UV_PROJECT_ENVIRONMENT: ".venv",
         // AFK_PROFILE lives in the sandbox env (not the agent env) so that
         // both run() and createSandbox() containers see it — createSandbox
         // does not re-inject agent env into an already-started container, and
