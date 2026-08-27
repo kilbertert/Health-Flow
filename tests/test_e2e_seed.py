@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import subprocess
+import sys
+import sysconfig
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -181,6 +185,29 @@ def test_main_prints_json_payload(database_url, capsys):
         "assessed",
         "pending_confirmation",
     }
+
+
+def test_script_help_runs_without_editable_install(tmp_path):
+    """脚本模式在 editable install 失效时仍能自举导入 ``app``。"""
+    repo_root = Path(__file__).resolve().parents[1]
+    site_packages = Path(sysconfig.get_paths()["purelib"])
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(site_packages),
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+
+    completed = subprocess.run(
+        [sys.executable, "-S", str(repo_root / "scripts" / "e2e_seed.py"), "--help"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "--database" in completed.stdout
 
 
 def test_main_rejects_duplicate_account(database_url, capsys):
