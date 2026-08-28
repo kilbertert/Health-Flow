@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, TypedDict
 
 from langgraph.graph import END, StateGraph
 
@@ -15,27 +15,27 @@ from app.config import get_settings
 
 class MedicalGraphState(TypedDict):
     user_query: str
-    patient_id: Optional[str]
-    session_id: Optional[str]
-    conversation_history: List[Dict[str, str]]
-    pre_routed: Optional[Dict[str, Any]]
+    patient_id: str | None
+    session_id: str | None
+    conversation_history: list[dict[str, str]]
+    pre_routed: dict[str, Any] | None
     routed_department: str
-    intent_distribution: Dict[str, float]
+    intent_distribution: dict[str, float]
     reasoning: str
     confidence: float
     low_confidence: bool
     human_review_required: bool
     risk_level: str
-    retrieved_docs: List[Dict[str, Any]]
+    retrieved_docs: list[dict[str, Any]]
     rag_context: str
     response: str
     refined_response: str
     feedback_applied: bool
     recursion_depth: int
-    evidence_score: Optional[float]
-    contradictions: List[str]
+    evidence_score: float | None
+    contradictions: list[str]
     agent_used: str
-    error: Optional[str]
+    error: str | None
 
 
 def create_medical_graph():
@@ -152,11 +152,11 @@ def validation_node(state: MedicalGraphState) -> MedicalGraphState:
 
 async def run_medical_query(
     user_query: str,
-    patient_id: Optional[str] = None,
-    session_id: Optional[str] = None,
-    conversation_history: Optional[List[Dict[str, str]]] = None,
-    pre_routed: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    patient_id: str | None = None,
+    session_id: str | None = None,
+    conversation_history: list[dict[str, str]] | None = None,
+    pre_routed: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     initial_state: MedicalGraphState = {
         "user_query": user_query,
         "patient_id": patient_id,

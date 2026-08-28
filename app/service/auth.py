@@ -32,7 +32,8 @@ def hash_password(password: str) -> str:
     digest = hashlib.pbkdf2_hmac(
         "sha256", password.encode("utf-8"), salt, PASSWORD_ITERATIONS
     )
-    encode = lambda value: base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+    def encode(value: bytes) -> str:
+        return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
     return f"pbkdf2_sha256${PASSWORD_ITERATIONS}${encode(salt)}${encode(digest)}"
 
 
@@ -41,7 +42,8 @@ def verify_password(password: str, encoded: str) -> bool:
         scheme, iterations, salt_text, digest_text = encoded.split("$", 3)
         if scheme != "pbkdf2_sha256":
             return False
-        padding = lambda value: value + "=" * (-len(value) % 4)
+        def padding(value: str) -> str:
+            return value + "=" * (-len(value) % 4)
         salt = base64.urlsafe_b64decode(padding(salt_text))
         expected = base64.urlsafe_b64decode(padding(digest_text))
         actual = hashlib.pbkdf2_hmac(

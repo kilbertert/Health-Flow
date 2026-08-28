@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from app.config import get_settings
 
@@ -10,9 +10,9 @@ from app.config import get_settings
 class Neo4jClient:
     def __init__(
         self,
-        uri: Optional[str] = None,
-        user: Optional[str] = None,
-        password: Optional[str] = None,
+        uri: str | None = None,
+        user: str | None = None,
+        password: str | None = None,
         database: str = "neo4j",
     ) -> None:
         settings = get_settings()
@@ -21,7 +21,7 @@ class Neo4jClient:
         self.password = password or settings.NEO4J_PASSWORD
         self.database = database
         self._driver = None
-        self.last_error: Optional[str] = None
+        self.last_error: str | None = None
 
     @property
     def driver(self):
@@ -49,7 +49,7 @@ class Neo4jClient:
             self.last_error = str(exc)
             return False
 
-    def get_related_symptoms(self, disease: str) -> List[Dict[str, Any]]:
+    def get_related_symptoms(self, disease: str) -> list[dict[str, Any]]:
         return self._query_named(
             """
             MATCH (d:Disease {name: $name})-[:HAS_SYMPTOM]->(s:Symptom)
@@ -59,7 +59,7 @@ class Neo4jClient:
             {"name": disease, "limit": 20},
         )
 
-    def get_related_drugs(self, disease: str) -> List[Dict[str, Any]]:
+    def get_related_drugs(self, disease: str) -> list[dict[str, Any]]:
         return self._query_named(
             """
             MATCH (d:Disease {name: $name})-[:TREATED_BY]->(dr:Drug)
@@ -69,7 +69,7 @@ class Neo4jClient:
             {"name": disease, "limit": 20},
         )
 
-    def get_related_examinations(self, disease: str) -> List[Dict[str, Any]]:
+    def get_related_examinations(self, disease: str) -> list[dict[str, Any]]:
         return self._query_named(
             """
             MATCH (d:Disease {name: $name})-[:DIAGNOSED_BY]->(e:Examination)
@@ -79,7 +79,7 @@ class Neo4jClient:
             {"name": disease, "limit": 20},
         )
 
-    def get_department(self, symptom: str) -> Optional[str]:
+    def get_department(self, symptom: str) -> str | None:
         rows = self._query_named(
             """
             MATCH (s:Symptom {name: $name})-[:BELONGS_TO]->(d:Department)
@@ -89,7 +89,7 @@ class Neo4jClient:
         )
         return rows[0].get("name") if rows else None
 
-    def query_by_entity(self, entity: str, limit: int = 10) -> List[Dict[str, Any]]:
+    def query_by_entity(self, entity: str, limit: int = 10) -> list[dict[str, Any]]:
         if not self.driver:
             return []
         query = """
@@ -103,7 +103,7 @@ class Neo4jClient:
         """
         return self._query_named(query, {"entity": entity, "limit": max(1, min(limit, 100))})
 
-    def find_diagnosis_path(self, symptoms: List[str]) -> List[Dict[str, Any]]:
+    def find_diagnosis_path(self, symptoms: list[str]) -> list[dict[str, Any]]:
         if not self.driver or not symptoms:
             return []
         query = """

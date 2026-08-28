@@ -10,7 +10,7 @@ import math
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
-from typing import Any, List, Optional, Tuple
+from typing import Any
 
 from app.config import get_settings
 from app.model.llm import get_llm_client, get_vlm_client
@@ -22,10 +22,10 @@ from app.service.evidence_bridge import infer_abnormal_flag
 class ParsedReport:
     report_type: str
     raw_text: str
-    metrics: List[MetricRecord]
+    metrics: list[MetricRecord]
     page_count: int
     success: bool
-    error: Optional[str] = None
+    error: str | None = None
     provider: str = ""
     model: str = ""
     run_id: str = ""
@@ -77,7 +77,7 @@ class VisionEncoderService:
             self._llm_client = get_llm_client()
         return self._llm_client
 
-    def detect_pdf_type(self, pdf_bytes: bytes) -> Tuple[str, int]:
+    def detect_pdf_type(self, pdf_bytes: bytes) -> tuple[str, int]:
         try:
             import pdfplumber
 
@@ -288,7 +288,7 @@ class VisionEncoderService:
 
     def _parse_image_with_vlm(
         self, image_bytes: bytes, mime_type: str, page_number: int
-    ) -> tuple[str, list[MetricRecord], Optional[str]]:
+    ) -> tuple[str, list[MetricRecord], str | None]:
         image_base64 = base64.b64encode(image_bytes).decode("ascii")
         width, height = self._image_size(image_bytes)
         prompt = IMAGE_EXTRACTION_PROMPT
@@ -327,10 +327,10 @@ class VisionEncoderService:
         self,
         data: dict[str, Any],
         page_number: int,
-        width: Optional[int],
-        height: Optional[int],
+        width: int | None,
+        height: int | None,
         index: int,
-    ) -> Optional[MetricRecord]:
+    ) -> MetricRecord | None:
         if not isinstance(data, dict):
             return None
         name = str(data.get("metric_name", "")).strip()
@@ -373,8 +373,8 @@ class VisionEncoderService:
 
     @staticmethod
     def _clean_bbox(
-        value: Any, *, upper: Optional[float] = None
-    ) -> Optional[list[float]]:
+        value: Any, *, upper: float | None = None
+    ) -> list[float] | None:
         if not isinstance(value, (list, tuple)) or len(value) != 4:
             return None
         try:
@@ -427,7 +427,7 @@ class VisionEncoderService:
         return payload
 
     @staticmethod
-    def _image_size(image_bytes: bytes) -> tuple[Optional[int], Optional[int]]:
+    def _image_size(image_bytes: bytes) -> tuple[int | None, int | None]:
         try:
             from PIL import Image
 
@@ -436,7 +436,7 @@ class VisionEncoderService:
         except Exception:
             return None, None
 
-    def _render_pdf_to_images(self, pdf_bytes: bytes, dpi: int = 144) -> List[bytes]:
+    def _render_pdf_to_images(self, pdf_bytes: bytes, dpi: int = 144) -> list[bytes]:
         try:
             import fitz
 
@@ -472,13 +472,13 @@ class VisionEncoderService:
 
     def _extract_metrics_from_text(
         self, text: str, page_number: int = 1
-    ) -> List[MetricRecord]:
+    ) -> list[MetricRecord]:
         metrics, _ = self._extract_text_page((page_number, text))
         return metrics
 
     def _extract_text_page(
         self, page: tuple[int, str]
-    ) -> tuple[List[MetricRecord], str]:
+    ) -> tuple[list[MetricRecord], str]:
         page_number, text = page
         if not text.strip():
             return [], ""

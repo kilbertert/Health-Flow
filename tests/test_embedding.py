@@ -1,6 +1,5 @@
 """Tests for Embedding client."""
 
-import pytest
 from app.model.embedding import EmbeddingClient, get_embedding_client
 
 
