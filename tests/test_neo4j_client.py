@@ -1,6 +1,5 @@
 """Tests for Neo4j client."""
 
-import pytest
 from app.data.neo4j_client import Neo4jClient, get_neo4j_client
 
 

@@ -4,11 +4,11 @@
 """
 
 import json
-import re
-from typing import List, Dict, Any, Optional, Callable, TYPE_CHECKING
-from dataclasses import dataclass, field
-from datetime import datetime
 import random
+import re
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from app.service.llm_expander import ExpansionResult
@@ -20,7 +20,7 @@ class AugmentConfig:
 
     target_size: int = 8000
     source: str = "llm"  # template=模板生成, llm=LLM扩展生成
-    categories: List[str] = field(default_factory=lambda: [
+    categories: list[str] = field(default_factory=lambda: [
         "体检报告解读",
         "指标异常问询",
         "科室分诊建议",
@@ -39,9 +39,9 @@ class InstructionPair:
     output: str
     category: str
     source: str
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式。"""
         return {
             "instruction": self.instruction,
@@ -53,7 +53,7 @@ class InstructionPair:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "InstructionPair":
+    def from_dict(cls, data: dict[str, Any]) -> "InstructionPair":
         """从字典创建。"""
         return cls(
             instruction=data.get("instruction", ""),
@@ -82,7 +82,7 @@ class DataAugmentationPipeline:
     - 医疗安全问答类: ~1500条（含DPO负样本）
     """
 
-    def __init__(self, config: Optional[AugmentConfig] = None):
+    def __init__(self, config: AugmentConfig | None = None):
         """
         初始化数据增强Pipeline。
 
@@ -91,8 +91,8 @@ class DataAugmentationPipeline:
         """
         self.config = config or AugmentConfig()
         self._llm_client = None
-        self._pairs: List[InstructionPair] = []
-        self._progress_callback: Optional[Callable] = None
+        self._pairs: list[InstructionPair] = []
+        self._progress_callback: Callable | None = None
 
     @property
     def llm_client(self):
@@ -118,7 +118,7 @@ class DataAugmentationPipeline:
 
     # ========== 模板数据增强 ==========
 
-    def generate_from_template(self, template_type: str, count: int) -> List[InstructionPair]:
+    def generate_from_template(self, template_type: str, count: int) -> list[InstructionPair]:
         """
         从模板生成数据。
 
@@ -142,7 +142,7 @@ class DataAugmentationPipeline:
 
         return pairs
 
-    def _generate_examination_templates(self, count: int) -> List[InstructionPair]:
+    def _generate_examination_templates(self, count: int) -> list[InstructionPair]:
         """生成体检报告解读类数据。"""
         templates = [
             {
@@ -191,7 +191,7 @@ class DataAugmentationPipeline:
 
         return pairs
 
-    def _generate_metric_templates(self, count: int) -> List[InstructionPair]:
+    def _generate_metric_templates(self, count: int) -> list[InstructionPair]:
         """生成指标异常问询类数据。"""
         templates = [
             {
@@ -255,7 +255,7 @@ class DataAugmentationPipeline:
 
         return pairs
 
-    def _generate_triage_templates(self, count: int) -> List[InstructionPair]:
+    def _generate_triage_templates(self, count: int) -> list[InstructionPair]:
         """生成科室分诊建议类数据。"""
         templates = [
             {
@@ -303,7 +303,7 @@ class DataAugmentationPipeline:
 
         return pairs
 
-    def _generate_safety_templates(self, count: int) -> List[InstructionPair]:
+    def _generate_safety_templates(self, count: int) -> list[InstructionPair]:
         """生成医疗安全问答类数据（含DPO负样本）。"""
         templates = [
             {
@@ -352,14 +352,14 @@ class DataAugmentationPipeline:
 
         # Fill to requested count
         pairs = []
-        for i in range(count):
+        for _ in range(count):
             pairs.append(random.choice(safety_data))
 
         return pairs
 
     # ========== 数据处理 ==========
 
-    def filter_by_safety(self, pairs: List[InstructionPair]) -> List[InstructionPair]:
+    def filter_by_safety(self, pairs: list[InstructionPair]) -> list[InstructionPair]:
         """
         安全过滤。
 
@@ -401,7 +401,7 @@ class DataAugmentationPipeline:
 
         return filtered
 
-    def deduplicate(self, pairs: List[InstructionPair]) -> List[InstructionPair]:
+    def deduplicate(self, pairs: list[InstructionPair]) -> list[InstructionPair]:
         """
         去重。
 
@@ -428,9 +428,9 @@ class DataAugmentationPipeline:
 
     def add_diversity_variants(
         self,
-        pairs: List[InstructionPair],
+        pairs: list[InstructionPair],
         variants_per_sample: int = 2
-    ) -> List[InstructionPair]:
+    ) -> list[InstructionPair]:
         """
         添加多样性变体。
 
@@ -485,7 +485,7 @@ class DataAugmentationPipeline:
 
     # ========== 主流程 ==========
 
-    def run(self) -> List[InstructionPair]:
+    def run(self) -> list[InstructionPair]:
         """
         运行完整的数据增强流程。
 
@@ -528,7 +528,7 @@ class DataAugmentationPipeline:
         self._pairs = all_pairs
         return all_pairs
 
-    def _run_llm_expansion(self, per_category: int, expander) -> List[InstructionPair]:
+    def _run_llm_expansion(self, per_category: int, expander) -> list[InstructionPair]:
         """
         使用 LLM 扩展生成数据。
 
@@ -650,7 +650,7 @@ class DataAugmentationPipeline:
             metadata=exp.metadata,
         )
 
-    def save(self, path: Optional[str] = None) -> str:
+    def save(self, path: str | None = None) -> str:
         """
         保存数据集到文件。
 
@@ -674,7 +674,7 @@ class DataAugmentationPipeline:
 
         return save_path
 
-    def load(self, path: str) -> List[InstructionPair]:
+    def load(self, path: str) -> list[InstructionPair]:
         """
         从文件加载数据集（支持 JSONL 和 JSON 数组格式）。
 
@@ -684,7 +684,7 @@ class DataAugmentationPipeline:
         Returns:
             加载的数据集
         """
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(path, encoding='utf-8') as f:
             content = f.read().strip()
             if not content:
                 self._pairs = []
@@ -705,7 +705,7 @@ class DataAugmentationPipeline:
         self._pairs = [InstructionPair.from_dict(d) for d in data]
         return self._pairs
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """
         获取数据集统计信息。
 

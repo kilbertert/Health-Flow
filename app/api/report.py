@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import json
@@ -11,7 +12,6 @@ import secrets
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 from fastapi import (
     APIRouter,
@@ -232,10 +232,10 @@ def _retryable_error(text: str | None) -> bool:
 async def upload_report(
     request: Request,
     patient_id: str | None = Form(None, description="兼容旧客户端的患者 ID"),
-    report_type: Optional[str] = Form(None),
-    department: Optional[str] = Form(None),
-    file: Optional[UploadFile] = File(None),
-    files: Optional[list[UploadFile]] = File(None),
+    report_type: str | None = Form(None),
+    department: str | None = Form(None),
+    file: UploadFile | None = File(None),
+    files: list[UploadFile] | None = File(None),
     db: Session = Depends(db_dependency),
     account=Depends(report_account_dependency),
 ):
@@ -353,7 +353,10 @@ def _parse_report(
                 update={
                     "source_file_index": file_index,
                     "metric_code": metric_code_for_name(item.metric_name),
-                    "source_id": f"file-{file_index}/{item.source_id or ('p' + str(item.page_number or 1) + '-m' + str(metric_index))}",
+                    "source_id": (
+                        f"file-{file_index}/"
+                        f"{item.source_id or ('p' + str(item.page_number or 1) + '-m' + str(metric_index))}"
+                    ),
                 }
             )
             for file_index, _, parsed, error in successful_reports
@@ -964,8 +967,6 @@ async def delete_report(
     for path in stored_paths:
         path.unlink(missing_ok=True)
     if stored_paths:
-        try:
+        with contextlib.suppress(OSError):
             stored_paths[0].parent.rmdir()
-        except OSError:
-            pass
     return {"message": "报告已删除", "report_id": report_id}

@@ -2,7 +2,7 @@
 
 import json
 from contextvars import ContextVar
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -14,11 +14,11 @@ from app.config import get_settings
 class LLMClient:
     """LLM客户端基类."""
 
-    def __init__(self, model: Optional[str] = None):
+    def __init__(self, model: str | None = None):
         self.settings = get_settings()
         self.model = model or self.settings.VLLM_MODEL
 
-    def chat(self, messages: List[Dict[str, str]], **kwargs) -> str:
+    def chat(self, messages: list[dict[str, str]], **kwargs) -> str:
         """
         聊天接口.
 
@@ -37,8 +37,8 @@ class vLLMClient(LLMClient):
 
     def __init__(
         self,
-        model: Optional[str] = None,
-        api_base: Optional[str] = None,
+        model: str | None = None,
+        api_base: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 2048,
     ):
@@ -77,7 +77,7 @@ class vLLMClient(LLMClient):
             timeout=self.request_timeout,
         )
 
-    def chat(self, messages: List[Dict[str, str]], **kwargs) -> str:
+    def chat(self, messages: list[dict[str, str]], **kwargs) -> str:
         """
         聊天接口.
 
@@ -160,10 +160,10 @@ class vLLMClient(LLMClient):
 
     def chat_with_json(
         self,
-        messages: List[Dict[str, str]],
-        json_schema: Optional[Dict[str, Any]] = None,
+        messages: list[dict[str, str]],
+        json_schema: dict[str, Any] | None = None,
         temperature: float | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         带JSON结构化输出的聊天接口.
 
@@ -221,8 +221,8 @@ class VLMClient(vLLMClient):
 
     def __init__(
         self,
-        model: Optional[str] = None,
-        api_base: Optional[str] = None,
+        model: str | None = None,
+        api_base: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 2048,
     ):
@@ -237,7 +237,7 @@ class VLMClient(vLLMClient):
         """
         super().__init__(model, api_base, temperature, max_tokens)
 
-    def chat_with_image(self, messages: List[Dict[str, Any]], **kwargs) -> str:
+    def chat_with_image(self, messages: list[dict[str, Any]], **kwargs) -> str:
         """
         带图像的聊天接口.
 
@@ -323,8 +323,8 @@ class MiniMaxClient(LLMClient):
 
     def __init__(
         self,
-        model: Optional[str] = None,
-        api_key: Optional[str] = None,
+        model: str | None = None,
+        api_key: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 2048,
     ):
@@ -352,7 +352,7 @@ class MiniMaxClient(LLMClient):
             max_tokens=max_tokens,
         )
 
-    def chat(self, messages: List[Dict[str, str]], **kwargs) -> str:
+    def chat(self, messages: list[dict[str, str]], **kwargs) -> str:
         """
         聊天接口.
 
@@ -380,9 +380,9 @@ class MiniMaxClient(LLMClient):
 
     def chat_with_json(
         self,
-        messages: List[Dict[str, str]],
-        json_schema: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        messages: list[dict[str, str]],
+        json_schema: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         带JSON结构化输出的聊天接口.
 

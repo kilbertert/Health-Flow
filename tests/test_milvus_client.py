@@ -1,7 +1,5 @@
 """Tests for Milvus client."""
 
-import pytest
-from unittest.mock import MagicMock, patch
 from app.data.milvus_client import MilvusClient, get_milvus_client
 
 

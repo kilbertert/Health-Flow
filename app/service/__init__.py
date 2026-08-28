@@ -5,9 +5,9 @@ from app.service.medical_rag import (
     get_medical_rag_service,
 )
 from app.service.vision_encoder import (
+    ParsedReport,
     VisionEncoderService,
     get_vision_encoder_service,
-    ParsedReport,
 )
 
 __all__ = [

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -24,7 +24,6 @@ from app.schema.chat import (
     SafetyCheckResult,
 )
 from app.service.safety_guard import check_response, enforce_boundary
-
 
 router = APIRouter()
 
@@ -150,7 +149,8 @@ async def chat_stream(request: ChatRequest, db: Session = Depends(db_dependency)
                 try:
                     int(raw_id)
                 except ValueError:
-                    yield f"data: {json.dumps({'type': 'error', 'message': 'session_id 格式错误'}, ensure_ascii=False)}\n\n"
+                    payload = {"type": "error", "message": "session_id 格式错误"}
+                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
                     return
             routing = await asyncio.to_thread(router_route, request.message, request.patient_id)
             department = routing["routed_department"]
@@ -196,9 +196,18 @@ async def chat_stream(request: ChatRequest, db: Session = Depends(db_dependency)
             )
             db.commit()
 
-            for chunk in (safe_reply[index : index + 80] for index in range(0, len(safe_reply), 80)):
+            for chunk in (
+                safe_reply[index : index + 80] for index in range(0, len(safe_reply), 80)
+            ):
                 yield f"data: {json.dumps({'type': 'delta', 'content': chunk}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'type': 'done', 'session_id': session_id, 'department': result['department'], 'agent_used': result['agent_used'], 'safety_check': safety.model_dump(by_alias=True)}, ensure_ascii=False)}\n\n"
+            payload = {
+                "type": "done",
+                "session_id": session_id,
+                "department": result["department"],
+                "agent_used": result["agent_used"],
+                "safety_check": safety.model_dump(by_alias=True),
+            }
+            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
         except Exception as exc:
             # 中途异常必须显式发 error 事件，避免连接无声断开
             yield f"data: {json.dumps({'type': 'error', 'message': f'生成回答失败：{exc}'}, ensure_ascii=False)}\n\n"

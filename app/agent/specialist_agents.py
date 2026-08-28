@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
-
 from app.model.llm import get_llm_client
-
 
 SPECIALIST_PROMPTS = {
     "内分泌科": "重点关注血糖、糖化血红蛋白、甲状腺和代谢指标，必须结合参考范围和既往趋势。",
@@ -20,7 +17,7 @@ def run_specialist_agent(
     query: str,
     department: str,
     rag_context: str,
-    history: List[Dict[str, str]],
+    history: list[dict[str, str]],
     *,
     human_review_required: bool = False,
 ) -> str:

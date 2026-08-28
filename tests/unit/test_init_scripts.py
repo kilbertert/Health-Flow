@@ -57,9 +57,6 @@ class TestInitMilvus:
     def test_init_milvus_calls_all_create_functions(self) -> None:
         """Test that init_milvus creates all three collections."""
         from scripts.init_milvus import (
-            create_medical_entities_collection,
-            create_medical_kb_collection,
-            create_reports_collection,
             init_milvus,
         )
 

@@ -2,7 +2,7 @@
 
 import math
 from datetime import datetime
-from typing import Any, List, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -10,28 +10,28 @@ from app.schema.evidence import EvidenceMatchResponse
 
 
 class MetricRecord(BaseModel):
-    id: Optional[int] = None
-    report_id: Optional[int] = None
+    id: int | None = None
+    report_id: int | None = None
     metric_name: str = Field(..., min_length=1)
     metric_value: str
-    unit: Optional[str] = None
-    reference_range: Optional[str] = None
-    trend: Optional[str] = None
-    abnormal_flag: Optional[str] = None
-    bbox: Optional[List[float]] = Field(None, min_length=4, max_length=4)
-    bbox_normalized: Optional[List[float]] = Field(None, min_length=4, max_length=4)
+    unit: str | None = None
+    reference_range: str | None = None
+    trend: str | None = None
+    abnormal_flag: str | None = None
+    bbox: list[float] | None = Field(None, min_length=4, max_length=4)
+    bbox_normalized: list[float] | None = Field(None, min_length=4, max_length=4)
     source_file_index: int = Field(default=1, ge=1)
-    page_number: Optional[int] = Field(None, ge=1)
-    evidence_text: Optional[str] = None
-    source_id: Optional[str] = None
-    metric_code: Optional[str] = None
+    page_number: int | None = Field(None, ge=1)
+    evidence_text: str | None = None
+    source_id: str | None = None
+    metric_code: str | None = None
     confirmation_status: Literal["pending", "confirmed", "corrected", "excluded"] = (
         "pending"
     )
-    confirmed_value: Optional[str] = None
-    confirmed_unit: Optional[str] = None
-    confirmed_reference_range: Optional[str] = None
-    confirmed_evidence_text: Optional[str] = None
+    confirmed_value: str | None = None
+    confirmed_unit: str | None = None
+    confirmed_reference_range: str | None = None
+    confirmed_evidence_text: str | None = None
 
     @model_validator(mode="after")
     def validate_bboxes(self) -> "MetricRecord":
@@ -56,12 +56,12 @@ class MetricRecord(BaseModel):
 
 class MedicalReportCreate(BaseModel):
     patient_id: str
-    report_type: Optional[str] = None
-    file_url: Optional[str] = None
-    parsed_content: Optional[dict] = None
-    exam_date: Optional[datetime] = None
-    department: Optional[str] = None
-    metrics: List[MetricRecord] = Field(default_factory=list)
+    report_type: str | None = None
+    file_url: str | None = None
+    parsed_content: dict | None = None
+    exam_date: datetime | None = None
+    department: str | None = None
+    metrics: list[MetricRecord] = Field(default_factory=list)
 
 
 class MedicalReport(MedicalReportCreate):
@@ -84,31 +84,31 @@ class ReportExtractionJobResponse(BaseModel):
 
     status: Literal["queued", "running", "completed", "failed"]
     attempt_count: int = Field(..., ge=0)
-    error_class: Optional[str] = None
-    created_at: Optional[datetime] = None
-    started_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
+    error_class: str | None = None
+    created_at: datetime | None = None
+    started_at: datetime | None = None
+    updated_at: datetime | None = None
+    completed_at: datetime | None = None
 
 
 class MedicalReportResponse(BaseModel):
     id: int
     patient_id: str
-    report_type: Optional[str] = None
-    exam_date: Optional[datetime] = None
-    department: Optional[str] = None
-    metrics: List[MetricRecord]
-    files: List[ReportFileRecord] = Field(default_factory=list)
+    report_type: str | None = None
+    exam_date: datetime | None = None
+    department: str | None = None
+    metrics: list[MetricRecord]
+    files: list[ReportFileRecord] = Field(default_factory=list)
     created_at: datetime
     status: str = "pending_confirmation"
-    subject_consistency: Optional[str] = None
-    evidence_result: Optional[EvidenceMatchResponse] = None
-    processing_error: Optional[str] = None
-    processing_warnings: List[str] = Field(default_factory=list)
-    extraction_job: Optional[ReportExtractionJobResponse] = None
-    access_token: Optional[str] = None
-    extraction_trace: Optional[dict[str, Any]] = None
-    audit_events: List[dict[str, Any]] = Field(default_factory=list)
+    subject_consistency: str | None = None
+    evidence_result: EvidenceMatchResponse | None = None
+    processing_error: str | None = None
+    processing_warnings: list[str] = Field(default_factory=list)
+    extraction_job: ReportExtractionJobResponse | None = None
+    access_token: str | None = None
+    extraction_trace: dict[str, Any] | None = None
+    audit_events: list[dict[str, Any]] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 
@@ -116,13 +116,13 @@ class MedicalReportResponse(BaseModel):
 class MetricConfirmation(BaseModel):
     metric_id: int = Field(..., ge=1)
     decision: Literal["confirmed", "corrected", "excluded"]
-    metric_code: Optional[str] = None
-    value: Optional[str] = None
-    unit: Optional[str] = None
-    reference_range: Optional[str] = None
-    evidence_text: Optional[str] = None
+    metric_code: str | None = None
+    value: str | None = None
+    unit: str | None = None
+    reference_range: str | None = None
+    evidence_text: str | None = None
 
 
 class ReportConfirmationRequest(BaseModel):
-    observations: List[MetricConfirmation] = Field(default_factory=list)
+    observations: list[MetricConfirmation] = Field(default_factory=list)
     subject_consistency: Literal["same", "different", "uncertain"] | None = None

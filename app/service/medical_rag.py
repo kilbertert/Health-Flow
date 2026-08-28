@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from app.data.milvus_client import get_milvus_client
 from app.data.neo4j_client import get_neo4j_client
 from app.model.embedding import get_embedding_client
 from app.model.llm import get_llm_client
-
 
 MEDICAL_ENTITY_TERMS = (
     "血糖", "糖尿病", "糖化血红蛋白", "血压", "血脂", "尿酸", "甲状腺", "心脏",
@@ -55,8 +54,8 @@ class MedicalRAGService:
         return self._llm_client
 
     def vector_search(
-        self, query: str, top_k: Optional[int] = None, department: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+        self, query: str, top_k: int | None = None, department: str | None = None
+    ) -> list[dict[str, Any]]:
         try:
             embedding = self.embedding_client.embed(query)
             values = self.milvus_client.search(embedding, top_k or self.top_k, department)
@@ -72,7 +71,7 @@ class MedicalRAGService:
             results.append(item)
         return results
 
-    def kg_search(self, query: str, top_k: Optional[int] = None) -> List[Dict[str, Any]]:
+    def kg_search(self, query: str, top_k: int | None = None) -> list[dict[str, Any]]:
         entities = self._extract_medical_entities(query)
         results: list[dict[str, Any]] = []
         for entity in entities[:5]:
@@ -120,8 +119,8 @@ class MedicalRAGService:
         return self._deduplicate(results)[: top_k or self.top_k]
 
     def hybrid_search(
-        self, query: str, top_k: Optional[int] = None, department: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+        self, query: str, top_k: int | None = None, department: str | None = None
+    ) -> list[dict[str, Any]]:
         k = top_k or self.top_k
         vector_results = self.vector_search(query, k * 2, department)
         graph_results = self.kg_search(query, k * 2)
@@ -129,14 +128,13 @@ class MedicalRAGService:
 
     def _fuse_results(
         self,
-        vector_results: List[Dict[str, Any]],
-        graph_results: List[Dict[str, Any]],
-        query: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        vector_results: list[dict[str, Any]],
+        graph_results: list[dict[str, Any]],
+        query: str | None = None,
+    ) -> list[dict[str, Any]]:
         fused: dict[str, dict[str, Any]] = {}
 
         def add(items: list[dict[str, Any]], weight: float, prefix: str) -> None:
-            size = max(1, len(items))
             for rank, item in enumerate(items, start=1):
                 key = str(item.get("source_id") or item.get("id") or item.get("content", "")[:120])
                 key = f"{prefix}:{key}"
@@ -192,15 +190,15 @@ class MedicalRAGService:
         return unique
 
     def retrieve_and_build_context(
-        self, query: str, department: Optional[str] = None
-    ) -> Tuple[List[Dict[str, Any]], str]:
+        self, query: str, department: str | None = None
+    ) -> tuple[list[dict[str, Any]], str]:
         results = self.hybrid_search(query, department=department)
         return results, self.build_context_from_results(results)
 
-    def build_context(self, query: str, department: Optional[str] = None) -> str:
+    def build_context(self, query: str, department: str | None = None) -> str:
         return self.retrieve_and_build_context(query, department)[1]
 
-    def build_context_from_results(self, results: List[Dict[str, Any]]) -> str:
+    def build_context_from_results(self, results: list[dict[str, Any]]) -> str:
         if not results:
             return ""
         # 证据来自用户上传的报告或外部知识库，属于不可信数据。

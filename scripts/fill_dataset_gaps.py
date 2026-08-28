@@ -19,8 +19,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
 logger = logging.getLogger(__name__)
 
-from app.service.llm_expander import LLMExpander, LLMExpanderConfig
 from app.config import get_settings
+from app.service.llm_expander import LLMExpander, LLMExpanderConfig
 
 # ===== 模板定义 =====
 
@@ -137,7 +137,7 @@ def load_existing_counts(category: str) -> int:
                 try:
                     r = json.loads(line)
                     counts[r.get('category', '')] += 1
-                except:
+                except (AttributeError, TypeError, ValueError):
                     pass
     if os.path.exists(safety_file):
         with open(safety_file, encoding='utf-8') as f:
@@ -146,7 +146,7 @@ def load_existing_counts(category: str) -> int:
                     r = json.loads(line)
                     if r.get('category') == '医疗安全问答':
                         counts['医疗安全问答'] += 1
-                except:
+                except (AttributeError, TypeError, ValueError):
                     pass
 
     return counts.get(category, 0)
@@ -259,7 +259,7 @@ def main():
                 try:
                     r = json.loads(line)
                     existing[r.get('category', '')] += 1
-                except:
+                except (AttributeError, TypeError, ValueError):
                     pass
 
     categories_to_generate = []
@@ -304,7 +304,7 @@ def main():
                     f.write(json.dumps(record, ensure_ascii=False) + '\n')
             logger.info(f'已保存到 {output_file}')
 
-        logger.info(f'等待2秒后继续...')
+        logger.info('等待2秒后继续...')
         time.sleep(2)
 
     logger.info('全部完成!')

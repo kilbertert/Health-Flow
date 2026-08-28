@@ -1,6 +1,6 @@
 """Training related schemas."""
 
-from typing import Optional, List
+
 from pydantic import BaseModel, Field
 
 
@@ -9,7 +9,7 @@ class DataAugmentRequest(BaseModel):
 
     source: str = Field(..., description="数据来源，pmc/literature/template")
     target_size: int = Field(8000, gt=0, description="目标数据集大小")
-    categories: Optional[List[str]] = Field(None, description="类别过滤")
+    categories: list[str] | None = Field(None, description="类别过滤")
 
 
 class DataAugmentResponse(BaseModel):
@@ -18,7 +18,7 @@ class DataAugmentResponse(BaseModel):
     task_id: str = Field(..., description="任务ID")
     status: str = Field(..., description="任务状态")
     progress: float = Field(0, ge=0, le=1)
-    output_path: Optional[str] = Field(None, description="输出路径")
+    output_path: str | None = Field(None, description="输出路径")
 
 
 class FinetuneRequest(BaseModel):
@@ -41,7 +41,7 @@ class FinetuneResponse(BaseModel):
     task_id: str
     status: str
     progress: float
-    model_path: Optional[str] = None
+    model_path: str | None = None
 
 
 class DPORequest(BaseModel):
@@ -61,4 +61,4 @@ class DPOResponse(BaseModel):
     task_id: str
     status: str
     progress: float
-    model_path: Optional[str] = None
+    model_path: str | None = None

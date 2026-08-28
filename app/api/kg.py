@@ -3,8 +3,8 @@
 提供知识图谱查询接口。
 """
 
-from typing import List
-from fastapi import APIRouter, HTTPException, Query, Path
+
+from fastapi import APIRouter, HTTPException, Path, Query
 
 router = APIRouter()
 
@@ -42,8 +42,8 @@ def query_knowledge_graph(
             "results": results,
             "count": len(results)
         }
-    except Exception as e:
-        raise HTTPException(status_code=503, detail="知识图谱服务不可用，请稍后重试")
+    except Exception:
+        raise HTTPException(status_code=503, detail="知识图谱服务不可用，请稍后重试") from None
 
 
 @router.get("/kg/symptoms/{disease}")
@@ -68,8 +68,8 @@ def get_disease_symptoms(
             "symptoms": symptoms,
             "count": len(symptoms)
         }
-    except Exception as e:
-        raise HTTPException(status_code=503, detail="知识图谱服务不可用，请稍后重试")
+    except Exception:
+        raise HTTPException(status_code=503, detail="知识图谱服务不可用，请稍后重试") from None
 
 
 @router.get("/kg/drugs/{disease}")
@@ -94,8 +94,8 @@ def get_disease_drugs(
             "drugs": drugs,
             "count": len(drugs)
         }
-    except Exception as e:
-        raise HTTPException(status_code=503, detail="知识图谱服务不可用，请稍后重试")
+    except Exception:
+        raise HTTPException(status_code=503, detail="知识图谱服务不可用，请稍后重试") from None
 
 
 @router.get("/kg/examinations/{disease}")
@@ -120,8 +120,8 @@ def get_disease_examinations(
             "examinations": examinations,
             "count": len(examinations)
         }
-    except Exception as e:
-        raise HTTPException(status_code=503, detail="知识图谱服务不可用，请稍后重试")
+    except Exception:
+        raise HTTPException(status_code=503, detail="知识图谱服务不可用，请稍后重试") from None
 
 
 @router.get("/kg/department/{symptom}")
@@ -146,13 +146,13 @@ def get_symptom_department(
             "department": department,
             "source": "knowledge_graph"
         }
-    except Exception as e:
-        raise HTTPException(status_code=503, detail="知识图谱服务不可用，请稍后重试")
+    except Exception:
+        raise HTTPException(status_code=503, detail="知识图谱服务不可用，请稍后重试") from None
 
 
 @router.post("/kg/diagnosis")
 def find_diagnosis(
-    symptoms: List[str] = Query(..., description="症状列表")
+    symptoms: list[str] = Query(..., description="症状列表")
 ):
     """
     根据症状查找可能的疾病。
@@ -178,8 +178,8 @@ def find_diagnosis(
             "possible_diagnoses": diagnosis_paths,
             "count": len(diagnosis_paths)
         }
-    except Exception as e:
-        raise HTTPException(status_code=503, detail="知识图谱服务不可用，请稍后重试")
+    except Exception:
+        raise HTTPException(status_code=503, detail="知识图谱服务不可用，请稍后重试") from None
 
 
 @router.get("/kg/health")
@@ -199,7 +199,7 @@ def kg_health_check():
             "service": "neo4j",
             "uri": neo4j_client.uri
         }
-    except Exception as e:
+    except Exception:
         return {
             "status": "error",
             "service": "neo4j",

@@ -1,10 +1,11 @@
 """LLMExpander - 使用 LLM 批量生成多样化的 SFT 指令-响应对."""
 
 import json
-import re
 import logging
-from typing import List, Dict, Any, Optional, Callable
+import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from app.model.llm import get_minimax_client
 
@@ -19,9 +20,9 @@ class ExpansionResult:
     input: str
     output: str
     category: str
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "instruction": self.instruction,
             "input": self.input,
@@ -143,7 +144,7 @@ Safe回答：
 请直接输出JSON，格式：{{"instruction": "...", "input": "...", "unsafe_output": "..."}}，不要包含其他内容。""",
     }
 
-    def __init__(self, config: Optional[LLMExpanderConfig] = None):
+    def __init__(self, config: LLMExpanderConfig | None = None):
         self.config = config or LLMExpanderConfig()
         self._client = None
 
@@ -163,7 +164,7 @@ Safe回答：
         else:
             logger.info(f"[{progress:.0%}] {status}")
 
-    def _call_llm(self, messages: List[Dict[str, str]], retries: int = 0) -> str:
+    def _call_llm(self, messages: list[dict[str, str]], retries: int = 0) -> str:
         """调用 LLM，返回文本内容。"""
         import time
         try:
@@ -177,7 +178,7 @@ Safe回答：
             logger.error(f"LLM调用最终失败: {e}")
             return ""
 
-    def _parse_json_array(self, text: str, category: str) -> List[Dict[str, Any]]:
+    def _parse_json_array(self, text: str, category: str) -> list[dict[str, Any]]:
         """解析 LLM 返回的 JSON 数组。"""
         # 去除 <think>...</think> 标签（MiniMax 模型可能返回推理过程）
         text = re.sub(r"<think>[\s\S]*?</think>", "", text)
@@ -209,14 +210,14 @@ Safe回答：
                     return data
                 elif isinstance(data, dict):
                     return [data]
-            except:
+            except json.JSONDecodeError:
                 pass
         except Exception as e:
             logger.warning(f"JSON解析异常: {e}")
 
         return []
 
-    def _parse_json_object(self, text: str) -> Dict[str, Any]:
+    def _parse_json_object(self, text: str) -> dict[str, Any]:
         """解析 LLM 返回的 JSON 对象。"""
         # 去除 <think>...</think> 标签
         text = re.sub(r"<think>[\s\S]*?</think>", "", text)
@@ -236,7 +237,9 @@ Safe回答：
             logger.warning(f"JSON对象解析失败: {e}")
             return {}
 
-    def expand_examination(self, template: str, placeholders: Dict[str, List[str]], count: int) -> List[ExpansionResult]:
+    def expand_examination(
+        self, template: str, placeholders: dict[str, list[str]], count: int
+    ) -> list[ExpansionResult]:
         """
         扩展体检报告解读类数据。
 
@@ -286,7 +289,9 @@ Safe回答：
 
         return results
 
-    def expand_metric_query(self, template: str, placeholders: Dict[str, List[str]], count: int) -> List[ExpansionResult]:
+    def expand_metric_query(
+        self, template: str, placeholders: dict[str, list[str]], count: int
+    ) -> list[ExpansionResult]:
         """扩展指标异常问询类数据。"""
         results = []
         batches = (count + self.config.batch_size - 1) // self.config.batch_size
@@ -326,7 +331,7 @@ Safe回答：
 
         return results
 
-    def expand_triage(self, template: str, symptoms: List[str], count: int) -> List[ExpansionResult]:
+    def expand_triage(self, template: str, symptoms: list[str], count: int) -> list[ExpansionResult]:
         """扩展科室分诊建议类数据。"""
         results = []
         batches = (count + self.config.batch_size - 1) // self.config.batch_size
@@ -366,7 +371,7 @@ Safe回答：
 
         return results
 
-    def expand_safety_pair(self, safe_outputs: List[str], count: int) -> List[ExpansionResult]:
+    def expand_safety_pair(self, safe_outputs: list[str], count: int) -> list[ExpansionResult]:
         """
         扩展医疗安全问答类数据（生成 safe/unsafe 对）。
 
@@ -421,10 +426,10 @@ Safe回答：
 
 def expand_category(
     category: str,
-    templates: List[Dict[str, Any]],
+    templates: list[dict[str, Any]],
     total_count: int,
-    expander: Optional[LLMExpander] = None,
-) -> List[ExpansionResult]:
+    expander: LLMExpander | None = None,
+) -> list[ExpansionResult]:
     """
     通用扩展函数，根据类别调用对应扩展方法。
 

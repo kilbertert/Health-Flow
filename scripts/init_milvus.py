@@ -12,7 +12,6 @@ from typing import Any
 
 from app.config import get_settings
 
-
 EMBEDDING_DIM = 1024
 
 

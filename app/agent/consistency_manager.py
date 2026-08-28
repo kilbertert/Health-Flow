@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -13,8 +12,8 @@ from app.model.llm import get_llm_client
 class MedicalEntity(BaseModel):
     name: str
     type: str
-    value: Optional[str] = None
-    unit: Optional[str] = None
+    value: str | None = None
+    unit: str | None = None
     first_mentioned_at: int = 0
     last_mentioned_at: int = 0
 
@@ -22,9 +21,9 @@ class MedicalEntity(BaseModel):
 class SessionContext(BaseModel):
     session_id: str
     patient_id: str
-    current_department: Optional[str] = None
-    entities: Dict[str, MedicalEntity] = Field(default_factory=dict)
-    messages: List[Dict[str, str]] = Field(default_factory=list)
+    current_department: str | None = None
+    entities: dict[str, MedicalEntity] = Field(default_factory=dict)
+    messages: list[dict[str, str]] = Field(default_factory=list)
     message_count: int = 0
     created_at: datetime = Field(default_factory=datetime.now)
     last_updated_at: datetime = Field(default_factory=datetime.now)
@@ -33,7 +32,7 @@ class SessionContext(BaseModel):
 class ConsistencyManager:
     def __init__(self, max_context_messages: int = 10) -> None:
         self.max_context_messages = max_context_messages
-        self._sessions: Dict[str, SessionContext] = {}
+        self._sessions: dict[str, SessionContext] = {}
         self._llm_client = None
 
     @property
@@ -54,8 +53,8 @@ class ConsistencyManager:
         session_id: str,
         role: str,
         content: str,
-        referenced_metrics: Optional[List[str]] = None,
-        patient_id: Optional[str] = None,
+        referenced_metrics: list[str] | None = None,
+        patient_id: str | None = None,
     ) -> SessionContext:
         session = self.get_or_create_session(session_id, patient_id or "unknown")
         session.message_count += 1
@@ -66,7 +65,7 @@ class ConsistencyManager:
         self._extract_entities(session, content)
         return session
 
-    def _add_explicit_entities(self, session: SessionContext, names: List[str]) -> None:
+    def _add_explicit_entities(self, session: SessionContext, names: list[str]) -> None:
         for name in names:
             if not name:
                 continue
@@ -95,7 +94,13 @@ class ConsistencyManager:
                 ],
                 json_schema={"type": "array"},
             )
-            values = result if isinstance(result, list) else result.get("entities", []) if isinstance(result, dict) else []
+            values = (
+                result
+                if isinstance(result, list)
+                else result.get("entities", [])
+                if isinstance(result, dict)
+                else []
+            )
         except Exception:
             values = []
         for value in values:
@@ -117,7 +122,7 @@ class ConsistencyManager:
                     last_mentioned_at=session.message_count,
                 )
 
-    def get_history(self, session_id: str, limit: Optional[int] = None) -> List[Dict[str, str]]:
+    def get_history(self, session_id: str, limit: int | None = None) -> list[dict[str, str]]:
         session = self._sessions.get(session_id)
         if not session:
             return []
@@ -142,7 +147,7 @@ class ConsistencyManager:
             ))
         return "\n".join(lines)
 
-    def get_active_entities(self, session_id: str, lookback: int = 3) -> List[MedicalEntity]:
+    def get_active_entities(self, session_id: str, lookback: int = 3) -> list[MedicalEntity]:
         session = self._sessions.get(session_id)
         if not session:
             return []
@@ -161,7 +166,7 @@ class ConsistencyManager:
     def clear_session(self, session_id: str) -> None:
         self._sessions.pop(session_id, None)
 
-    def get_session(self, session_id: str) -> Optional[SessionContext]:
+    def get_session(self, session_id: str) -> SessionContext | None:
         return self._sessions.get(session_id)
 
 

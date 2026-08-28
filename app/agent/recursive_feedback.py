@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, TypedDict
 
 from langgraph.graph import END, StateGraph
 
@@ -12,20 +12,24 @@ from app.model.llm import get_llm_client
 
 class FeedbackState(TypedDict):
     original_response: str
-    conversation_history: List[Dict[str, str]]
+    conversation_history: list[dict[str, str]]
     current_response: str
-    contradictions: List[str]
+    contradictions: list[str]
     recursion_depth: int
     max_recursion: int
     is_consistent: bool
     refined_response: str
-    evidence: List[Dict[str, Any]]
-    evidence_score: Optional[float]
+    evidence: list[dict[str, Any]]
+    evidence_score: float | None
 
 
 CONSISTENCY_RULES = [
     {"type": "value_contradiction", "description": "同一指标前后数值不一致", "example": "血糖 6.5 与血糖 5.2"},
-    {"type": "range_contradiction", "description": "指标数值与异常判断不一致", "example": "同一指标同时被判断正常和偏高"},
+    {
+        "type": "range_contradiction",
+        "description": "指标数值与异常判断不一致",
+        "example": "同一指标同时被判断正常和偏高",
+    },
     {"type": "logic_contradiction", "description": "结论或条件前后冲突", "example": "同时建议无需就医和立即就医"},
 ]
 
@@ -55,7 +59,7 @@ def _numeric_claims(text: str) -> dict[str, str]:
     return claims
 
 
-def _evidence_score(response: str, evidence: List[Dict[str, Any]]) -> Optional[float]:
+def _evidence_score(response: str, evidence: list[dict[str, Any]]) -> float | None:
     if not evidence:
         return None
     source_ids = [str(item.get("source_id", "")) for item in evidence if item.get("source_id")]
@@ -197,10 +201,10 @@ def get_feedback_graph():
 
 def validate_and_refine(
     response: str,
-    conversation_history: List[Dict[str, str]],
+    conversation_history: list[dict[str, str]],
     max_recursion: int = 3,
-    evidence: Optional[List[Dict[str, Any]]] = None,
-) -> Dict[str, Any]:
+    evidence: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Run bounded validation/refinement and return evidence metadata."""
 
     state: FeedbackState = {

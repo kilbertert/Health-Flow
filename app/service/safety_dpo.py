@@ -6,7 +6,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ class DPOConfig:
     ref_model: str = "Qwen/Qwen2-VL-2B-Instruct"
     dataset_path: str = "data/sft/safety_qa.jsonl"
     output_dir: str = "outputs/dpo"
-    general_dataset_path: Optional[str] = None
+    general_dataset_path: str | None = None
     general_mix_ratio: float = 0.15
     num_train_epochs: int = 3
     per_device_train_batch_size: int = 2
@@ -207,7 +207,8 @@ class SafetyDPOTrainer:
 
     def train(self) -> DPOStats:
         from transformers import set_seed
-        from trl.trainer.dpo_trainer import DPOConfig as TRLDPOConfig, DPOTrainer
+        from trl.trainer.dpo_trainer import DPOConfig as TRLDPOConfig
+        from trl.trainer.dpo_trainer import DPOTrainer
 
         set_seed(self.config.seed)
         self._setup_model()

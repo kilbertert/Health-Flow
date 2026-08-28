@@ -3,16 +3,14 @@
 提供指标查询、趋势分析等接口。
 """
 
-from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+import contextlib
 from datetime import datetime, timedelta
-import json
 
+from fastapi import APIRouter, Query
+
+from app.data.models import MedicalReport as ReportModel
+from app.data.models import MetricRecord as MetricModel
 from app.data.mysql_client import get_mysql_client
-from app.data.models import MedicalReport as ReportModel, MetricRecord as MetricModel
-from app.schema.report import MetricRecord
-
 
 router = APIRouter()
 
@@ -98,10 +96,8 @@ def get_metric_trend(
         # 计算统计信息
         values = []
         for dp in data_points:
-            try:
+            with contextlib.suppress(ValueError, TypeError):
                 values.append(float(dp["value"]))
-            except (ValueError, TypeError):
-                pass
 
         if values:
             avg_value = sum(values) / len(values)
@@ -139,8 +135,8 @@ def get_metric_trend(
 @router.get("/metric/search")
 def search_metrics(
     patient_id: str,
-    keyword: Optional[str] = None,
-    department: Optional[str] = None,
+    keyword: str | None = None,
+    department: str | None = None,
     abnormal_only: bool = False,
     limit: int = Query(50, ge=1, le=200)
 ):
