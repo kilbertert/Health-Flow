@@ -44,3 +44,13 @@ Raw reports, tokens, private identifiers, isolated databases, and unredacted log
 - Environment: Linux x86_64, Node 24.15.0, Python 3.13.13, isolated SQLite and loopback service
 - Result: PASS. The published 郅臻堂®植物甾醇咀嚼片 recommendation displays its bundled packaging image at 375px and 414px; the image asset returned HTTP 200 and the recommendation text remained visible without horizontal overflow.
 - Deterministic checks: `npm run build` passed; `HEALTHFLOW_E2E_PYTHON=/home/claude/Projects/health-flow/.venv/bin/python npm run test:e2e` passed (`38 passed`).
+
+## Complete Published Catalog Image Acceptance
+
+- Tested HealthFlow commit: `701267c1777ce44adf216a3b443634b16d370dc8`
+- Tested Genesis commit: `0a43dad0d7b88cdbf8f0f1ba402cd179a323f63a`
+- Executed at: `2026-08-29T02:30:10+08:00`
+- Environment: Linux x86_64, Node 24.15.0, Python 3.13.13, isolated SQLite and loopback service
+- Result: PASS. HealthFlow consumes `image_url` directly from the recommendation contract; all 10 published PDF products have distinct image files in the production build. No product-name-specific frontend mapping remains.
+- Safety boundary: the other 33 PDF candidates remain blocked and are not exposed as recommendations.
+- Deterministic checks: backend `143 passed, 1 skipped`; full-repository Ruff passed; production build passed; Playwright passed (`38 passed`).
