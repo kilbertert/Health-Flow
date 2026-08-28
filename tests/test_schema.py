@@ -214,6 +214,7 @@ def test_evidence_v3_groups_metric_items_under_one_condition():
                 "product_id": "product-1",
                 "product_name": "郅臻堂®植物甾醇咀嚼片",
                 "nutrient": "植物甾醇",
+                "image_url": "/products/zhizhen-plant-sterol.png",
                 "reason": "可作为血脂相关营养管理的一种膳食补充方向考虑。",
                 "safety_message": "请结合个人情况咨询专业人士。",
                 "disclaimer": "本建议为健康管理参考，不构成医疗或用药指令。",
@@ -257,6 +258,7 @@ def test_evidence_v3_groups_metric_items_under_one_condition():
     assert result.findings[0].evidence_items[0].card.scope_key == "metric:ldl_c"
     assert result.patient_reply.findings[0].evidence_items[0].metric_code == "ldl_c"
     assert result.findings[0].recommendations[0].product_id == "product-1"
+    assert result.findings[0].recommendations[0].image_url == "/products/zhizhen-plant-sterol.png"
     assert result.findings[0].recommendation_message == "以下为可考虑的健康管理建议"
 
 
