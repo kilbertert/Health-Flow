@@ -99,3 +99,6 @@ node_modules/
 # pnpm lockfiles (repo uses npm)
 pnpm-lock.yaml
 pnpm-workspace.yaml
+
+# AFK runner (package.json) dependencies
+node_modules/

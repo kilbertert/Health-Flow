@@ -41,7 +41,7 @@ trigger — nothing implements your issues until you run an engine.
 
 | Label | Means | Who acts |
 |---|---|---|
-| `ready-for-agent` | queued for the planner | `pnpm ralph` (dependency graph -> parallel -> merge/push/close) |
+| `ready-for-agent` | queued for the planner | `pnpm ralph` (dependency graph -> parallel -> delivery PR) |
 | `agent:implement` | legacy single-issue trigger — no longer auto-runs (dispatch-only) | `gh workflow run agent-implement.yml -f issue_number=N` |
 | `agent:review` / `agent:update-branch` | PR review / conflict-resolve | review / update-branch workflows |
 
@@ -56,12 +56,13 @@ Rules:
 
 ## Rules
 
-- Profiles are server-global (`claude`, `claude-ark`, `psydo`,
-  `aliyun-deepseek`); pick via the `AFK_PROFILE` repo variable. No repo-side
-  credentials.
-- The planner loop's merge phase pushes `main` + closes issues from the
-  container (degrading to a PR on branch-protected repos). Single-issue
-  `pnpm afk` never touches GitHub.
+- Profiles are server-global (`claude`, `claude-ark`, `agentrouter`, `psydo`,
+  `aliyun-deepseek`); pick via the `AFK_PROFILE` repo variable. `agentrouter`
+  uses server-managed Claude settings and supports `AFK_AGENTROUTER_SETTINGS`
+  as an operator override. No repo-side credentials.
+- The planner merge phase integrates into a delivery branch; the host pushes
+  that branch and opens a PR. Neither planner nor single-issue `pnpm afk`
+  pushes the default branch.
 - Deterministic checks are the gate: the repo's full check before any commit;
   PRs go through CI.
 - Never hardcode secrets. Keep `CONTEXT.md` and `.sandcastle/CODING_STANDARDS.md`
