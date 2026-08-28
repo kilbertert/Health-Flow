@@ -39,14 +39,48 @@ function assessedResponse(account, reportUrl) {
       schema_version: '2',
       sorting_version: 'published-card-reference-range-v1',
       correlation_id: 'e2e-mobile-confirmation',
-      findings: [],
+      findings: [{
+        condition_code: 'COND_DYSLIPIDEMIA',
+        condition_name: '血脂异常',
+        product_status: 'available',
+        recommendation_message: '以下为可考虑的健康管理建议',
+        recommendations: [{
+          recommendation_id: 'recommendation-1',
+          product_id: 'product-1',
+          product_name: '郅臻堂®植物甾醇咀嚼片',
+          nutrient: '植物甾醇',
+          reason: '可作为血脂相关营养管理的一种膳食补充方向考虑。',
+          safety_message: '请结合个人情况咨询专业人士。',
+          disclaimer: '本建议为健康管理参考，不构成医疗或用药指令。',
+          evidence_links: ['classification:test.xlsx#血脂管理'],
+          evidence_strength: 'low',
+          priority: 10,
+        }],
+      }],
       unmatched: [],
       skipped: [],
       message: 'E2E 移动端确认完成。',
       patient_reply: {
         title: '体检报告解读与健康风险提示',
         summary: 'E2E 移动端确认完成。',
-        findings: [],
+        findings: [{
+          condition_code: 'COND_DYSLIPIDEMIA',
+          condition_name: '血脂异常',
+          product_status: 'available',
+          recommendation_message: '以下为可考虑的健康管理建议',
+          recommendations: [{
+            recommendation_id: 'recommendation-1',
+            product_id: 'product-1',
+            product_name: '郅臻堂®植物甾醇咀嚼片',
+            nutrient: '植物甾醇',
+            reason: '可作为血脂相关营养管理的一种膳食补充方向考虑。',
+            safety_message: '请结合个人情况咨询专业人士。',
+            disclaimer: '本建议为健康管理参考，不构成医疗或用药指令。',
+            evidence_links: ['classification:test.xlsx#血脂管理'],
+            evidence_strength: 'low',
+            priority: 10,
+          }],
+        }],
         unmatched_count: 0,
         disclaimer: '本解读仅提供健康辅助建议。',
       },
@@ -98,6 +132,9 @@ function assessedResponse(account, reportUrl) {
 
       await page.getByRole('button', { name: '确认并生成健康提示' }).click();
       await expect(page.getByText('E2E 移动端确认完成。')).toBeVisible();
+      await expect(page.getByText('郅臻堂®植物甾醇咀嚼片')).toBeVisible();
+      await expect(page.getByText('植物甾醇', { exact: true })).toBeVisible();
+      await expect(page.getByText('本建议为健康管理参考，不构成医疗或用药指令。')).toBeVisible();
       expect(confirmationBody).toBeTruthy();
       expect(
         confirmationBody.observations.some(

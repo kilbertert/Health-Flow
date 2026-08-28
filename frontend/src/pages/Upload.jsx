@@ -494,6 +494,12 @@ export function EvidenceResult({ result, onOpenSource }) {
           renderItem={(finding) => {
             const detail = findingDetails.get(finding.condition_code) || finding;
             const evidenceItems = evidenceItemsFor(finding, detail);
+            const recommendations = Array.isArray(finding.recommendations)
+              ? finding.recommendations
+              : (Array.isArray(detail.recommendations) ? detail.recommendations : []);
+            const recommendationMessage = finding.recommendation_message
+              || detail.recommendation_message
+              || '暂无推荐';
             const observationCount = new Set(evidenceItems.flatMap((item) => item.source_observation_ids || [])).size;
             return (
               <List.Item>
@@ -583,6 +589,35 @@ export function EvidenceResult({ result, onOpenSource }) {
                       }}
                     />
                   )}
+                  <section className="product-recommendations" aria-label="健康管理建议">
+                    <Typography.Text strong>健康管理建议</Typography.Text>
+                    {recommendations.length > 0 ? (
+                      <List
+                        size="small"
+                        dataSource={recommendations}
+                        renderItem={(recommendation) => (
+                          <List.Item>
+                            <article className="product-recommendation">
+                              <Space wrap>
+                                <Typography.Text strong>{recommendation.product_name}</Typography.Text>
+                                <Tag color="green">{recommendation.nutrient}</Tag>
+                              </Space>
+                              <Typography.Paragraph>{recommendation.reason}</Typography.Paragraph>
+                              <Typography.Paragraph type="warning">{recommendation.safety_message}</Typography.Paragraph>
+                              <Typography.Paragraph type="secondary">{recommendation.disclaimer}</Typography.Paragraph>
+                              <Typography.Text type="secondary">
+                                证据：{(recommendation.evidence_links || []).join('、')}
+                              </Typography.Text>
+                            </article>
+                          </List.Item>
+                        )}
+                      />
+                    ) : (
+                      <Typography.Paragraph type="secondary" className="product-recommendation-empty">
+                        {recommendationMessage}
+                      </Typography.Paragraph>
+                    )}
+                  </section>
                 </div>
               </List.Item>
             );

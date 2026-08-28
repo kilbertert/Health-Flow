@@ -313,6 +313,10 @@ button { cursor: pointer; }
 .metric-card-field .ant-select, .metric-card-field .ant-input { width: 100%; }
 .report-page .technical-details { margin-bottom: 16px; }
 .report-page .technical-details .ant-collapse-content-box { min-width: 0; overflow-wrap: break-word; }
+.product-recommendations { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.product-recommendation { width: 100%; min-width: 0; }
+.product-recommendation .ant-typography { margin: 6px 0 0; overflow-wrap: anywhere; }
+.product-recommendation-empty { margin: 8px 0 0; }
 
 @media print {
   .report-detail-print .app-header,
