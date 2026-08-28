@@ -11,14 +11,14 @@ class MockLLMClient:
     def chat_with_json(self, messages, **kwargs):
         return [
             {"name": "空腹血糖", "type": "metric", "value": "6.5", "unit": "mmol/L"},
-            {"name": "多饮", "type": "symptom"}
+            {"name": "多饮", "type": "symptom"},
         ]
 
 
 @pytest.fixture
 def mock_deps():
     """Mock dependencies."""
-    with patch('app.agent.consistency_manager.get_llm_client', return_value=MockLLMClient()):
+    with patch("app.agent.consistency_manager.get_llm_client", return_value=MockLLMClient()):
         yield
 
 
@@ -67,11 +67,7 @@ def test_add_message(mock_deps):
     from app.agent.consistency_manager import ConsistencyManager
 
     manager = ConsistencyManager()
-    session = manager.add_message(
-        session_id="sess_123",
-        role="user",
-        content="我空腹血糖有点高"
-    )
+    session = manager.add_message(session_id="sess_123", role="user", content="我空腹血糖有点高")
 
     assert session.message_count == 1
 
@@ -82,10 +78,7 @@ def test_add_message_with_metrics(mock_deps):
 
     manager = ConsistencyManager()
     session = manager.add_message(
-        session_id="sess_123",
-        role="user",
-        content="我空腹血糖有点高",
-        referenced_metrics=["空腹血糖"]
+        session_id="sess_123", role="user", content="我空腹血糖有点高", referenced_metrics=["空腹血糖"]
     )
 
     assert session.message_count == 1
@@ -107,12 +100,7 @@ def test_get_context_summary_with_entities(mock_deps):
     from app.agent.consistency_manager import ConsistencyManager
 
     manager = ConsistencyManager()
-    manager.add_message(
-        session_id="sess_123",
-        role="user",
-        content="我空腹血糖有点高",
-        referenced_metrics=["空腹血糖"]
-    )
+    manager.add_message(session_id="sess_123", role="user", content="我空腹血糖有点高", referenced_metrics=["空腹血糖"])
 
     summary = manager.get_context_summary("sess_123")
 
@@ -127,22 +115,9 @@ def test_get_active_entities(mock_deps):
     manager = ConsistencyManager()
 
     # Add messages with different metrics
-    manager.add_message(
-        session_id="sess_123",
-        role="user",
-        content="我空腹血糖有点高",
-        referenced_metrics=["空腹血糖"]
-    )
-    manager.add_message(
-        session_id="sess_123",
-        role="assistant",
-        content="您的空腹血糖偏高。"
-    )
-    manager.add_message(
-        session_id="sess_123",
-        role="user",
-        content="那我现在怎么办"
-    )
+    manager.add_message(session_id="sess_123", role="user", content="我空腹血糖有点高", referenced_metrics=["空腹血糖"])
+    manager.add_message(session_id="sess_123", role="assistant", content="您的空腹血糖偏高。")
+    manager.add_message(session_id="sess_123", role="user", content="那我现在怎么办")
 
     active = manager.get_active_entities("sess_123", lookback=3)
 
@@ -168,11 +143,7 @@ def test_clear_session(mock_deps):
     from app.agent.consistency_manager import ConsistencyManager
 
     manager = ConsistencyManager()
-    manager.add_message(
-        session_id="sess_123",
-        role="user",
-        content="test"
-    )
+    manager.add_message(session_id="sess_123", role="user", content="test")
 
     assert manager.get_session("sess_123") is not None
 
@@ -185,12 +156,7 @@ def test_medical_entity_model():
     """Test MedicalEntity model."""
     from app.agent.consistency_manager import MedicalEntity
 
-    entity = MedicalEntity(
-        name="空腹血糖",
-        type="metric",
-        value="6.5",
-        unit="mmol/L"
-    )
+    entity = MedicalEntity(name="空腹血糖", type="metric", value="6.5", unit="mmol/L")
 
     assert entity.name == "空腹血糖"
     assert entity.type == "metric"
@@ -202,11 +168,7 @@ def test_session_context_model():
     """Test SessionContext model."""
     from app.agent.consistency_manager import SessionContext
 
-    session = SessionContext(
-        session_id="sess_123",
-        patient_id="P001",
-        current_department="内分泌科"
-    )
+    session = SessionContext(session_id="sess_123", patient_id="P001", current_department="内分泌科")
 
     assert session.session_id == "sess_123"
     assert session.patient_id == "P001"

@@ -24,9 +24,7 @@ def db_dependency():
         yield value
 
 
-def report_account_dependency(
-    request: Request, db=Depends(db_dependency)
-) -> UserAccount | None:
+def report_account_dependency(request: Request, db=Depends(db_dependency)) -> UserAccount | None:
     from app.service.auth import account_for_request
 
     account = account_for_request(request, db)

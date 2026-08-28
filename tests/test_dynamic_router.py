@@ -12,13 +12,7 @@ class MockLLMClient:
         return "mock response"
 
     def chat_with_json(self, messages, **kwargs):
-        return {
-            "内分泌科": 0.7,
-            "心内科": 0.1,
-            "消化科": 0.1,
-            "呼吸科": 0.05,
-            "全科": 0.05
-        }
+        return {"内分泌科": 0.7, "心内科": 0.1, "消化科": 0.1, "呼吸科": 0.05, "全科": 0.05}
 
 
 class MockNeo4jClient:
@@ -32,8 +26,10 @@ class MockNeo4jClient:
 @pytest.fixture
 def mock_deps():
     """Mock dependencies."""
-    with patch('app.agent.dynamic_router.get_llm_client', return_value=MockLLMClient()), \
-         patch('app.agent.dynamic_router.get_neo4j_client', return_value=MockNeo4jClient()):
+    with (
+        patch("app.agent.dynamic_router.get_llm_client", return_value=MockLLMClient()),
+        patch("app.agent.dynamic_router.get_neo4j_client", return_value=MockNeo4jClient()),
+    ):
         yield
 
 
@@ -48,7 +44,7 @@ def test_calculate_intent_distribution_keyword_match(mock_deps):
         "routed_department": "",
         "reasoning": "",
         "confidence": 0.0,
-        "related_symptoms": []
+        "related_symptoms": [],
     }
 
     result = calculate_intent_distribution(state)
@@ -68,7 +64,7 @@ def test_calculate_intent_distribution_no_match(mock_deps):
         "routed_department": "",
         "reasoning": "",
         "confidence": 0.0,
-        "related_symptoms": []
+        "related_symptoms": [],
     }
 
     result = calculate_intent_distribution(state)
@@ -89,7 +85,7 @@ def test_generate_reasoning(mock_deps):
         "routed_department": "",
         "reasoning": "",
         "confidence": 0.0,
-        "related_symptoms": []
+        "related_symptoms": [],
     }
 
     result = generate_reasoning(state)
@@ -110,7 +106,7 @@ def test_query_knowledge_graph(mock_deps):
         "routed_department": "内分泌科",
         "reasoning": "",
         "confidence": 0.7,
-        "related_symptoms": []
+        "related_symptoms": [],
     }
 
     # Neo4j returns empty in mock, so should handle gracefully
@@ -124,10 +120,7 @@ def test_route_function(mock_deps):
     """Test the main route function."""
     from app.agent.dynamic_router import route
 
-    result = route(
-        user_query="我空腹血糖有点高，6.5左右",
-        patient_id="P001"
-    )
+    result = route(user_query="我空腹血糖有点高，6.5左右", patient_id="P001")
 
     assert "routed_department" in result
     assert "intent_distribution" in result

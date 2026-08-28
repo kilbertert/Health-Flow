@@ -89,17 +89,13 @@ class ConsistencyManager:
                     {"role": "system", "content": "提取明确出现的医疗指标、症状或疾病，只输出 JSON 数组。"},
                     {
                         "role": "user",
-                        "content": f"文本：{content}\n格式：[{{\"name\":\"血糖\",\"type\":\"metric\"}}]",
+                        "content": f'文本：{content}\n格式：[{{"name":"血糖","type":"metric"}}]',
                     },
                 ],
                 json_schema={"type": "array"},
             )
             values = (
-                result
-                if isinstance(result, list)
-                else result.get("entities", [])
-                if isinstance(result, dict)
-                else []
+                result if isinstance(result, list) else result.get("entities", []) if isinstance(result, dict) else []
             )
         except Exception:
             values = []
@@ -142,9 +138,10 @@ class ConsistencyManager:
             f"对话轮数：{session.message_count}",
         ]
         if include_history:
-            lines.append("最近对话：\n" + "\n".join(
-                f"{item['role']}: {item['content']}" for item in self.get_history(session_id)
-            ))
+            lines.append(
+                "最近对话：\n"
+                + "\n".join(f"{item['role']}: {item['content']}" for item in self.get_history(session_id))
+            )
         return "\n".join(lines)
 
     def get_active_entities(self, session_id: str, lookback: int = 3) -> list[MedicalEntity]:

@@ -48,9 +48,7 @@ def test_seed_creates_login_account(database_url):
     assert account["display_name"] == "种子用户"
 
     with _session(database_url) as session:
-        saved = session.scalar(
-            select(UserAccount).where(UserAccount.email == account["email"])
-        )
+        saved = session.scalar(select(UserAccount).where(UserAccount.email == account["email"]))
     assert saved is not None
     assert verify_password(account["password"], saved.password_hash)
     assert saved.password_hash != account["password"]
@@ -71,25 +69,15 @@ def test_seed_creates_sqlite_database_directory(tmp_path):
 
 
 def test_seed_creates_completed_and_pending_reports(database_url):
-    payload = seed_database(
-        database_url, email="owner@healthflow.test", password="e2e-pass-123"
-    )
+    payload = seed_database(database_url, email="owner@healthflow.test", password="e2e-pass-123")
     statuses = [report["status"] for report in payload["reports"]]
     assert statuses == list(SEED_REPORT_STATUSES)
 
     with _session(database_url) as session:
-        account = session.scalar(
-            select(UserAccount).where(UserAccount.email == "owner@healthflow.test")
-        )
+        account = session.scalar(select(UserAccount).where(UserAccount.email == "owner@healthflow.test"))
         assert account is not None
-        completed = next(
-            item for item in payload["reports"] if item["status"] == "assessed"
-        )
-        pending = next(
-            item
-            for item in payload["reports"]
-            if item["status"] == "pending_confirmation"
-        )
+        completed = next(item for item in payload["reports"] if item["status"] == "assessed")
+        pending = next(item for item in payload["reports"] if item["status"] == "pending_confirmation")
 
         completed_row = session.get(MedicalReport, completed["id"])
         pending_row = session.get(MedicalReport, pending["id"])
@@ -97,9 +85,7 @@ def test_seed_creates_completed_and_pending_reports(database_url):
             assert row is not None
             assert row.owner_id == account.id
             assert row.patient_id == account.id
-            assert row.access_token_hash == hashlib.sha256(
-                item["access_token"].encode("utf-8")
-            ).hexdigest()
+            assert row.access_token_hash == hashlib.sha256(item["access_token"].encode("utf-8")).hexdigest()
 
         # 已完成报告:契约合法的 evidence_result + 已确认指标。
         EvidenceMatchResponse.model_validate(completed_row.evidence_result)
@@ -108,22 +94,16 @@ def test_seed_creates_completed_and_pending_reports(database_url):
         ).all()
         assert len(completed_metrics) == 3
         assert all(
-            metric.confirmation_status == "confirmed"
-            and metric.confirmed_value
-            and metric.confirmed_reference_range
+            metric.confirmation_status == "confirmed" and metric.confirmed_value and metric.confirmed_reference_range
             for metric in completed_metrics
         )
 
         # 待确认报告:尚未评估,指标等待核对。
         assert pending_row.evidence_result is None
-        pending_metrics = session.scalars(
-            select(MetricRecord).where(MetricRecord.report_id == pending_row.id)
-        ).all()
+        pending_metrics = session.scalars(select(MetricRecord).where(MetricRecord.report_id == pending_row.id)).all()
         assert len(pending_metrics) == 2
         assert all(
-            metric.confirmation_status == "pending"
-            and metric.confirmed_value is None
-            for metric in pending_metrics
+            metric.confirmation_status == "pending" and metric.confirmed_value is None for metric in pending_metrics
         )
         # 坐标感知契约:指标携带页码、坐标与证据原文。
         for metric in (*completed_metrics, *pending_metrics):
@@ -141,14 +121,10 @@ def test_seed_creates_report_page_file_when_dir_provided(database_url, tmp_path)
         reports=["assessed"],
         report_files_dir=str(report_files_dir),
     )
-    assessed = next(
-        item for item in payload["reports"] if item["status"] == "assessed"
-    )
+    assessed = next(item for item in payload["reports"] if item["status"] == "assessed")
 
     with _session(database_url) as session:
-        saved = session.scalar(
-            select(ReportFile).where(ReportFile.report_id == assessed["id"])
-        )
+        saved = session.scalar(select(ReportFile).where(ReportFile.report_id == assessed["id"]))
 
     assert saved is not None
     assert saved.file_index == 1

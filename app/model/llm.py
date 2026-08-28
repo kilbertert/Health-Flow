@@ -61,9 +61,7 @@ class vLLMClient(LLMClient):
         # Provider calls happen concurrently while a multi-file report is parsed.
         # Keep the last ID local to the current thread/task so one request cannot
         # accidentally record another request's provider run.
-        self._last_run_id: ContextVar[str] = ContextVar(
-            f"llm_last_run_id_{id(self)}", default=""
-        )
+        self._last_run_id: ContextVar[str] = ContextVar(f"llm_last_run_id_{id(self)}", default="")
         self.temperature = temperature
         self.max_tokens = max_tokens
 
@@ -117,9 +115,7 @@ class vLLMClient(LLMClient):
 
         response = llm.invoke(langchain_messages)
         self.last_run_id = str(
-            getattr(response, "id", None)
-            or getattr(response, "response_metadata", {}).get("id", "")
-            or ""
+            getattr(response, "id", None) or getattr(response, "response_metadata", {}).get("id", "") or ""
         )
         return response.content
 
@@ -131,9 +127,7 @@ class vLLMClient(LLMClient):
     def last_run_id(self, value: str) -> None:
         self._last_run_id.set(value)
 
-    def _responses_text(
-        self, input_items: list[dict[str, Any]], *, json_output: bool = False
-    ) -> str:
+    def _responses_text(self, input_items: list[dict[str, Any]], *, json_output: bool = False) -> str:
         request: dict[str, Any] = {
             "model": self.model,
             "input": input_items,
@@ -199,9 +193,7 @@ class vLLMClient(LLMClient):
         response = client.chat.completions.create(
             model=self.model,
             messages=chat_messages,
-            response_format={"type": "json_object"}
-            if json_schema
-            else {"type": "text"},
+            response_format={"type": "json_object"} if json_schema else {"type": "text"},
             temperature=self.temperature if temperature is None else temperature,
             max_tokens=self.max_tokens,
         )
@@ -271,9 +263,7 @@ class VLMClient(vLLMClient):
                                 "detail": image.get("detail", "original"),
                             }
                         )
-                input_items.append(
-                    {"role": message.get("role", "user"), "content": parts}
-                )
+                input_items.append({"role": message.get("role", "user"), "content": parts})
             return self._responses_text(input_items, json_output=True)
 
         from openai import OpenAI
@@ -410,9 +400,7 @@ class MiniMaxClient(LLMClient):
         response = client.chat.completions.create(
             model=self.model,
             messages=chat_messages,
-            response_format={"type": "json_object"}
-            if json_schema
-            else {"type": "text"},
+            response_format={"type": "json_object"} if json_schema else {"type": "text"},
             temperature=self.temperature,
             max_tokens=self.max_tokens,
         )

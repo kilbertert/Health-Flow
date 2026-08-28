@@ -19,9 +19,7 @@ class MockMilvusClient:
     """Mock Milvus client."""
 
     def __init__(self):
-        self.search_results = [
-            {"id": 1, "report_id": 1, "content": "空腹血糖正常范围3.9-6.1", "distance": 0.1}
-        ]
+        self.search_results = [{"id": 1, "report_id": 1, "content": "空腹血糖正常范围3.9-6.1", "distance": 0.1}]
 
     def search(self, query_embedding, top_k=5, department=None):
         return self.search_results
@@ -50,10 +48,12 @@ class MockLLMClient:
 @pytest.fixture
 def mock_deps():
     """Mock all dependencies."""
-    with patch('app.service.medical_rag.get_embedding_client', return_value=MockEmbeddingClient()), \
-         patch('app.service.medical_rag.get_milvus_client', return_value=MockMilvusClient()), \
-         patch('app.service.medical_rag.get_neo4j_client', return_value=MockNeo4jClient()), \
-         patch('app.service.medical_rag.get_llm_client', return_value=MockLLMClient()):
+    with (
+        patch("app.service.medical_rag.get_embedding_client", return_value=MockEmbeddingClient()),
+        patch("app.service.medical_rag.get_milvus_client", return_value=MockMilvusClient()),
+        patch("app.service.medical_rag.get_neo4j_client", return_value=MockNeo4jClient()),
+        patch("app.service.medical_rag.get_llm_client", return_value=MockLLMClient()),
+    ):
         yield
 
 
@@ -150,12 +150,10 @@ def test_fuse_results():
 
     vector_results = [
         {"id": 1, "content": "空腹血糖正常", "distance": 0.1},
-        {"id": 2, "content": "血糖偏高", "distance": 0.2}
+        {"id": 2, "content": "血糖偏高", "distance": 0.2},
     ]
 
-    kg_results = [
-        {"type": "symptom", "name": "多饮", "description": "喝水量增多"}
-    ]
+    kg_results = [{"type": "symptom", "name": "多饮", "description": "喝水量增多"}]
 
     fused = service._fuse_results(vector_results, kg_results, "空腹血糖")
 

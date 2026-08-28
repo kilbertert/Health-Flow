@@ -30,30 +30,19 @@ class SourceObservation(StrictModel):
     source_id: str | None = None
     source_url: str | None = None
     bbox: list[float] | None = Field(default=None, min_length=4, max_length=4)
-    bbox_normalized: list[float] | None = Field(
-        default=None, min_length=4, max_length=4
-    )
+    bbox_normalized: list[float] | None = Field(default=None, min_length=4, max_length=4)
 
     @model_validator(mode="after")
     def validate_bbox(self) -> "SourceObservation":
         if self.bbox is not None:
-            if any(
-                not math.isfinite(coordinate) or coordinate < 0
-                for coordinate in self.bbox
-            ):
+            if any(not math.isfinite(coordinate) or coordinate < 0 for coordinate in self.bbox):
                 raise ValueError("bbox coordinates are invalid")
             if self.bbox[0] > self.bbox[2] or self.bbox[1] > self.bbox[3]:
                 raise ValueError("bbox must be ordered as x1,y1,x2,y2")
         if self.bbox_normalized is not None:
-            if any(
-                not math.isfinite(coordinate) or not 0 <= coordinate <= 1000
-                for coordinate in self.bbox_normalized
-            ):
+            if any(not math.isfinite(coordinate) or not 0 <= coordinate <= 1000 for coordinate in self.bbox_normalized):
                 raise ValueError("bbox_normalized coordinates are invalid")
-            if (
-                self.bbox_normalized[0] > self.bbox_normalized[2]
-                or self.bbox_normalized[1] > self.bbox_normalized[3]
-            ):
+            if self.bbox_normalized[0] > self.bbox_normalized[2] or self.bbox_normalized[1] > self.bbox_normalized[3]:
                 raise ValueError("bbox_normalized must be ordered as x1,y1,x2,y2")
         return self
 
@@ -167,9 +156,7 @@ class Unmatched(StrictModel):
 
     @model_validator(mode="after")
     def align_condition_names(self) -> "Unmatched":
-        if self.condition_names and len(self.condition_names) != len(
-            self.condition_codes
-        ):
+        if self.condition_names and len(self.condition_names) != len(self.condition_codes):
             raise ValueError("condition_names must align with condition_codes")
         return self
 
@@ -241,11 +228,7 @@ class EvidenceMatchResponse(StrictModel):
     def validate_version_shape(self) -> "EvidenceMatchResponse":
         if self.schema_version == "3":
             if any(not finding.evidence_items for finding in self.findings):
-                raise ValueError(
-                    "schema v3 findings require metric-level evidence_items"
-                )
-            if any(
-                not finding.evidence_items for finding in self.patient_reply.findings
-            ):
+                raise ValueError("schema v3 findings require metric-level evidence_items")
+            if any(not finding.evidence_items for finding in self.patient_reply.findings):
                 raise ValueError("schema v3 patient findings require evidence_items")
         return self

@@ -34,12 +34,8 @@ class MockLLMClient:
 def mock_deps():
     """Mock dependencies."""
     with (
-        patch(
-            "app.service.vision_encoder.get_vlm_client", return_value=MockVLMClient()
-        ),
-        patch(
-            "app.service.vision_encoder.get_llm_client", return_value=MockLLMClient()
-        ),
+        patch("app.service.vision_encoder.get_vlm_client", return_value=MockVLMClient()),
+        patch("app.service.vision_encoder.get_llm_client", return_value=MockLLMClient()),
     ):
         yield
 
@@ -139,9 +135,7 @@ def test_empty_image_metrics_are_not_reported_as_success(mock_deps):
 
     service = VisionEncoderService()
     service._vlm_client = SimpleNamespace(
-        chat_with_image=lambda messages, **kwargs: (
-            '{"text_summary":"仅标题","metrics":[]}'
-        ),
+        chat_with_image=lambda messages, **kwargs: '{"text_summary":"仅标题","metrics":[]}',
         last_run_id="run-empty",
         use_responses_api=False,
     )
@@ -208,9 +202,7 @@ def test_text_metric_provider_error_is_not_hidden():
 
     service = VisionEncoderService()
     service._llm_client = MagicMock()
-    service._llm_client.chat_with_json.side_effect = RuntimeError(
-        "provider unavailable"
-    )
+    service._llm_client.chat_with_json.side_effect = RuntimeError("provider unavailable")
 
     with pytest.raises(RuntimeError, match="provider unavailable"):
         service._extract_metrics_from_text("空腹血糖 6.5", page_number=1)
@@ -240,9 +232,7 @@ def test_text_pdf_keeps_successful_pages_when_one_provider_call_fails(monkeypatc
         def __exit__(self, *args):
             return False
 
-    monkeypatch.setitem(
-        sys.modules, "pdfplumber", SimpleNamespace(open=lambda _: Document())
-    )
+    monkeypatch.setitem(sys.modules, "pdfplumber", SimpleNamespace(open=lambda _: Document()))
     service = VisionEncoderService()
 
     def extract(page):

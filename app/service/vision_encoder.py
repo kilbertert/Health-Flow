@@ -83,9 +83,7 @@ class VisionEncoderService:
 
             with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                 page_count = len(pdf.pages)
-                text_pages = sum(
-                    1 for page in pdf.pages if (page.extract_text() or "").strip()
-                )
+                text_pages = sum(1 for page in pdf.pages if (page.extract_text() or "").strip())
                 return ("text_pdf" if text_pages >= 1 else "scanned_pdf", page_count)
         except ImportError:
             return "scanned_pdf", 0
@@ -102,32 +100,21 @@ class VisionEncoderService:
                 for page in pdf.pages:
                     text = page.extract_text() or ""
                     tables = page.extract_tables() or []
-                    rows = [
-                        " | ".join(str(cell or "") for cell in row)
-                        for table in tables
-                        for row in table
-                        if row
-                    ]
+                    rows = [" | ".join(str(cell or "") for cell in row) for table in tables for row in table if row]
                     pages.append(text if text.strip() else "\n".join(rows))
 
             raw_text = "\n\n".join(page for page in pages if page)
             indexed_pages = [
-                (page_number, page_text)
-                for page_number, page_text in enumerate(pages, start=1)
-                if page_text.strip()
+                (page_number, page_text) for page_number, page_text in enumerate(pages, start=1) if page_text.strip()
             ]
-            workers = max(
-                1, min(get_settings().REPORT_PARSE_WORKERS, len(indexed_pages))
-            )
+            workers = max(1, min(get_settings().REPORT_PARSE_WORKERS, len(indexed_pages)))
             page_results: list[tuple[list[MetricRecord], str]] = []
             errors: list[str] = []
             with ThreadPoolExecutor(max_workers=workers) as executor:
                 futures = [
                     (
                         page_number,
-                        executor.submit(
-                            self._extract_text_page, (page_number, page_text)
-                        ),
+                        executor.submit(self._extract_text_page, (page_number, page_text)),
                     )
                     for page_number, page_text in indexed_pages
                 ]
@@ -158,13 +145,7 @@ class VisionEncoderService:
                     metrics=unique_metrics,
                     page_count=page_count,
                     success=bool(unique_metrics),
-                    error=(
-                        "; ".join(errors)
-                        if errors
-                        else None
-                        if unique_metrics
-                        else "未提取到可确认的医学指标"
-                    ),
+                    error=("; ".join(errors) if errors else None if unique_metrics else "未提取到可确认的医学指标"),
                 ),
                 self.llm_client,
             )
@@ -174,9 +155,7 @@ class VisionEncoderService:
                 provider_run_ids=provider_run_ids,
             )
         except Exception as exc:
-            return self._with_trace(
-                ParsedReport("text_pdf", "", [], 0, False, str(exc)), self.llm_client
-            )
+            return self._with_trace(ParsedReport("text_pdf", "", [], 0, False, str(exc)), self.llm_client)
 
     def parse_scanned_pdf(self, pdf_bytes: bytes) -> ParsedReport:
         images = self._render_pdf_to_images(pdf_bytes)
@@ -214,13 +193,7 @@ class VisionEncoderService:
                 metrics=metrics,
                 page_count=len(images),
                 success=bool(metrics),
-                error=(
-                    "; ".join(errors)
-                    if errors
-                    else None
-                    if metrics
-                    else "未提取到可确认的医学指标"
-                ),
+                error=("; ".join(errors) if errors else None if metrics else "未提取到可确认的医学指标"),
             ),
             self.vlm_client,
         )
@@ -230,9 +203,7 @@ class VisionEncoderService:
             provider_run_ids=tuple(provider_run_ids),
         )
 
-    def parse_image_report(
-        self, image_bytes: bytes, mime_type: str = "image/png"
-    ) -> ParsedReport:
+    def parse_image_report(self, image_bytes: bytes, mime_type: str = "image/png") -> ParsedReport:
         text, metrics, error = self._parse_image_with_vlm(image_bytes, mime_type, 1)
         parsed = self._with_trace(
             ParsedReport(
@@ -257,9 +228,7 @@ class VisionEncoderService:
     def _with_trace(parsed: ParsedReport, client: Any) -> ParsedReport:
         settings = get_settings()
         provider = (
-            "openai-compatible-responses"
-            if getattr(client, "use_responses_api", False)
-            else "openai-compatible-chat"
+            "openai-compatible-responses" if getattr(client, "use_responses_api", False) else "openai-compatible-chat"
         )
         return replace(
             parsed,
@@ -275,16 +244,10 @@ class VisionEncoderService:
         lower = filename.lower()
         if lower.endswith(".pdf"):
             pdf_type, _ = self.detect_pdf_type(content)
-            return (
-                self.parse_text_pdf(content)
-                if pdf_type == "text_pdf"
-                else self.parse_scanned_pdf(content)
-            )
+            return self.parse_text_pdf(content) if pdf_type == "text_pdf" else self.parse_scanned_pdf(content)
         if lower.endswith((".jpg", ".jpeg", ".png", ".gif", ".bmp")):
             return self.parse_image_report(content, self._get_mime_type(lower))
-        return ParsedReport(
-            "unknown", "", [], 0, False, f"不支持的文件类型：{filename}"
-        )
+        return ParsedReport("unknown", "", [], 0, False, f"不支持的文件类型：{filename}")
 
     def _parse_image_with_vlm(
         self, image_bytes: bytes, mime_type: str, page_number: int
@@ -372,9 +335,7 @@ class VisionEncoderService:
         )
 
     @staticmethod
-    def _clean_bbox(
-        value: Any, *, upper: float | None = None
-    ) -> list[float] | None:
+    def _clean_bbox(value: Any, *, upper: float | None = None) -> list[float] | None:
         if not isinstance(value, (list, tuple)) or len(value) != 4:
             return None
         try:
@@ -382,10 +343,7 @@ class VisionEncoderService:
         except (TypeError, ValueError):
             return None
         x1, y1, x2, y2 = values
-        if any(
-            not math.isfinite(item) or item < 0 or (upper is not None and item > upper)
-            for item in values
-        ):
+        if any(not math.isfinite(item) or item < 0 or (upper is not None and item > upper) for item in values):
             return None
         if x2 <= x1 or y2 <= y1:
             return None
@@ -442,9 +400,7 @@ class VisionEncoderService:
 
             document = fitz.open(stream=pdf_bytes, filetype="pdf")
             matrix = fitz.Matrix(dpi / 72, dpi / 72)
-            images = [
-                page.get_pixmap(matrix=matrix).tobytes("png") for page in document
-            ]
+            images = [page.get_pixmap(matrix=matrix).tobytes("png") for page in document]
             document.close()
             return images
         except Exception:
@@ -460,25 +416,17 @@ class VisionEncoderService:
             ".bmp": "image/bmp",
         }.get(
             next(
-                (
-                    ext
-                    for ext in (".jpg", ".jpeg", ".png", ".gif", ".bmp")
-                    if filename.endswith(ext)
-                ),
+                (ext for ext in (".jpg", ".jpeg", ".png", ".gif", ".bmp") if filename.endswith(ext)),
                 ".png",
             ),
             "image/png",
         )
 
-    def _extract_metrics_from_text(
-        self, text: str, page_number: int = 1
-    ) -> list[MetricRecord]:
+    def _extract_metrics_from_text(self, text: str, page_number: int = 1) -> list[MetricRecord]:
         metrics, _ = self._extract_text_page((page_number, text))
         return metrics
 
-    def _extract_text_page(
-        self, page: tuple[int, str]
-    ) -> tuple[list[MetricRecord], str]:
+    def _extract_text_page(self, page: tuple[int, str]) -> tuple[list[MetricRecord], str]:
         page_number, text = page
         if not text.strip():
             return [], ""

@@ -20,9 +20,7 @@ def test_metric_record_validation():
 
 def test_metric_record_with_bbox():
     """Test MetricRecord with bbox."""
-    metric = MetricRecord(
-        metric_name="空腹血糖", metric_value="6.5", bbox=[120.0, 340.0, 280.0, 360.0]
-    )
+    metric = MetricRecord(metric_name="空腹血糖", metric_value="6.5", bbox=[120.0, 340.0, 280.0, 360.0])
     assert metric.bbox == [120.0, 340.0, 280.0, 360.0]
 
 
@@ -313,9 +311,7 @@ def test_finetune_request_defaults():
 
 def test_data_augment_request():
     """Test DataAugmentRequest validation."""
-    request = DataAugmentRequest(
-        source="pmc", target_size=8000, categories=["体检报告解读", "指标异常问询"]
-    )
+    request = DataAugmentRequest(source="pmc", target_size=8000, categories=["体检报告解读", "指标异常问询"])
     assert request.source == "pmc"
     assert request.target_size == 8000
     assert len(request.categories) == 2

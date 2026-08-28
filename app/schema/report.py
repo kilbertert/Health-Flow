@@ -25,9 +25,7 @@ class MetricRecord(BaseModel):
     evidence_text: str | None = None
     source_id: str | None = None
     metric_code: str | None = None
-    confirmation_status: Literal["pending", "confirmed", "corrected", "excluded"] = (
-        "pending"
-    )
+    confirmation_status: Literal["pending", "confirmed", "corrected", "excluded"] = "pending"
     confirmed_value: str | None = None
     confirmed_unit: str | None = None
     confirmed_reference_range: str | None = None
@@ -43,9 +41,7 @@ class MetricRecord(BaseModel):
                 continue
             upper = 1000 if name == "bbox_normalized" else None
             if any(
-                not math.isfinite(coordinate)
-                or coordinate < 0
-                or (upper is not None and coordinate > upper)
+                not math.isfinite(coordinate) or coordinate < 0 or (upper is not None and coordinate > upper)
                 for coordinate in box
             ):
                 raise ValueError(f"{name} coordinates are invalid")

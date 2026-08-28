@@ -13,16 +13,13 @@ class MockLLMClient:
 
     def chat_with_json(self, messages, **kwargs):
         # Default: no contradiction
-        return {
-            "has_contradiction": False,
-            "contradictions": []
-        }
+        return {"has_contradiction": False, "contradictions": []}
 
 
 @pytest.fixture
 def mock_llm():
     """Mock LLM client."""
-    with patch('app.agent.recursive_feedback.get_llm_client', return_value=MockLLMClient()):
+    with patch("app.agent.recursive_feedback.get_llm_client", return_value=MockLLMClient()):
         yield
 
 
@@ -38,7 +35,7 @@ def test_detect_contradictions_no_history():
         "recursion_depth": 0,
         "max_recursion": 3,
         "is_consistent": False,
-        "refined_response": ""
+        "refined_response": "",
     }
 
     result = detect_contradictions(state)
@@ -56,7 +53,7 @@ def test_detect_contradictions_with_contradiction(mock_llm):
         "original_response": "您的空腹血糖为5.2mmol/L。",
         "conversation_history": [
             {"role": "user", "content": "我空腹血糖多少？"},
-            {"role": "assistant", "content": "您的空腹血糖为6.5mmol/L。"}
+            {"role": "assistant", "content": "您的空腹血糖为6.5mmol/L。"},
         ],
         "current_response": "您的空腹血糖为5.2mmol/L。",
         "contradictions": [],
@@ -89,7 +86,7 @@ def test_refine_response_no_contradiction():
         "recursion_depth": 0,
         "max_recursion": 3,
         "is_consistent": True,
-        "refined_response": ""
+        "refined_response": "",
     }
 
     result = refine_response(state)
@@ -111,7 +108,7 @@ def test_refine_response_with_max_recursion():
         "recursion_depth": 3,  # Already at max
         "max_recursion": 3,
         "is_consistent": False,
-        "refined_response": ""
+        "refined_response": "",
     }
 
     result = refine_response(state)
@@ -132,7 +129,7 @@ def test_should_continue_end_when_consistent():
         "recursion_depth": 0,
         "max_recursion": 3,
         "is_consistent": True,
-        "refined_response": "您的血糖偏高。"
+        "refined_response": "您的血糖偏高。",
     }
 
     result = should_continue(state)
@@ -148,9 +145,9 @@ def test_validate_and_refine_basic(mock_llm):
         response="您的空腹血糖为6.5mmol/L，属于正常范围。",
         conversation_history=[
             {"role": "user", "content": "我空腹血糖6.5"},
-            {"role": "assistant", "content": "您的空腹血糖偏高。"}
+            {"role": "assistant", "content": "您的空腹血糖偏高。"},
         ],
-        max_recursion=3
+        max_recursion=3,
     )
 
     assert "original_response" in result

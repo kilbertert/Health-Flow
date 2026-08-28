@@ -42,9 +42,7 @@ from app.service.auth import new_account
 # 支持的种子报告状态:已完成(assessed)与待确认(pending_confirmation)。
 SEED_REPORT_STATUSES = ("assessed", "pending_confirmation")
 
-E2E_DISCLAIMER = (
-    "本解读由 HealthFlow 生成,仅提供信息整理与健康辅助建议,不能替代医生诊断。"
-)
+E2E_DISCLAIMER = "本解读由 HealthFlow 生成,仅提供信息整理与健康辅助建议,不能替代医生诊断。"
 
 # 已完成(assessed)报告的指标:确认流程已结束,携带用户核对后的值。
 _ASSESSED_METRICS: tuple[dict[str, Any], ...] = (
@@ -237,9 +235,7 @@ def _seed_report(
     session.add(report)
     session.flush()
     if report_files_dir:
-        stored_path, media_type, original_filename = _write_seed_report_page(
-            report_files_dir, report.id
-        )
+        stored_path, media_type, original_filename = _write_seed_report_page(report_files_dir, report.id)
         session.add(
             ReportFile(
                 report_id=report.id,
@@ -308,9 +304,7 @@ def seed_database(
 
 
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="向 E2E 测试数据库写入登录账户与指定状态的报告种子数据。"
-    )
+    parser = argparse.ArgumentParser(description="向 E2E 测试数据库写入登录账户与指定状态的报告种子数据。")
     parser.add_argument("--database", required=True, help="测试数据库 SQLAlchemy URL")
     parser.add_argument("--email", required=True, help="登录账户邮箱")
     parser.add_argument("--password", required=True, help="登录账户密码")

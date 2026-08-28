@@ -12,12 +12,7 @@ def test_milvus_client_init():
 
 def test_milvus_client_custom_params():
     """Test MilvusClient with custom parameters."""
-    client = MilvusClient(
-        host="custom-host",
-        port=19530,
-        collection_name="custom_collection",
-        dim=768
-    )
+    client = MilvusClient(host="custom-host", port=19530, collection_name="custom_collection", dim=768)
     assert client.host == "custom-host"
     assert client.port == 19530
     assert client.collection_name == "custom_collection"

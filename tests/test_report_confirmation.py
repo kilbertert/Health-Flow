@@ -235,15 +235,10 @@ def test_confirmed_non_hdl_abnormal_is_sent_to_evidence_service():
         response = asyncio.run(_assess_report(report, session))
 
     assert match.call_args.args[0][0]["metric_code"] == "non_hdl_c"
-    assert (
-        response.evidence_result.unmatched[0].observation_id == "health-flow-metric-1"
-    )
+    assert response.evidence_result.unmatched[0].observation_id == "health-flow-metric-1"
     assert response.evidence_result.unmatched[0].reason == "no_published_knowledge_card"
     assert response.evidence_result.unmatched[0].metric_label == "非高密度脂蛋白胆固醇"
-    assert (
-        response.evidence_result.unmatched[0].source_observation.evidence_text
-        == "Non-HDL 4.00 mmol/L (<3.40)"
-    )
+    assert response.evidence_result.unmatched[0].source_observation.evidence_text == "Non-HDL 4.00 mmol/L (<3.40)"
     session.close()
 
 
@@ -438,22 +433,14 @@ def test_report_metrics_are_returned_in_source_order():
     session.flush()
     session.add_all(
         [
-            MetricModel(
-                report_id=report.id, source_file_index=2, page_number=1, metric_name="C"
-            ),
-            MetricModel(
-                report_id=report.id, source_file_index=1, page_number=2, metric_name="B"
-            ),
-            MetricModel(
-                report_id=report.id, source_file_index=1, page_number=1, metric_name="A"
-            ),
+            MetricModel(report_id=report.id, source_file_index=2, page_number=1, metric_name="C"),
+            MetricModel(report_id=report.id, source_file_index=1, page_number=2, metric_name="B"),
+            MetricModel(report_id=report.id, source_file_index=1, page_number=1, metric_name="A"),
         ]
     )
     session.commit()
 
-    assert [
-        item.metric_name for item in _ordered_metrics(session, report.id).all()
-    ] == [
+    assert [item.metric_name for item in _ordered_metrics(session, report.id).all()] == [
         "A",
         "B",
         "C",
@@ -562,9 +549,7 @@ def test_multi_file_confirmation_matches_published_card(tmp_path):
             from app.service.report_worker import run_next_job
 
             assert run_next_job(fake_db.SessionLocal) is not None
-            report = client.get(
-                f"/api/health/report/{report_id}", headers=headers
-            ).json()
+            report = client.get(f"/api/health/report/{report_id}", headers=headers).json()
             assert report["status"] == "pending_confirmation"
             assert [item["source_file_index"] for item in report["metrics"]] == [1, 2]
             assert [item["original_filename"] for item in report["files"]] == [
@@ -591,12 +576,8 @@ def test_multi_file_confirmation_matches_published_card(tmp_path):
             assert confirmed.status_code == 200, confirmed.text
             result = confirmed.json()
             assert result["status"] == "assessed"
-            assert (
-                result["evidence_result"]["findings"][0]["card"]["version"] == "1.0.0"
-            )
-            assert (
-                evidence_match.call_args.args[0][0]["metric_code"] == "custom_glucose"
-            )
+            assert result["evidence_result"]["findings"][0]["card"]["version"] == "1.0.0"
+            assert evidence_match.call_args.args[0][0]["metric_code"] == "custom_glucose"
 
     assert sorted(vision.calls) == ["first.png", "second.png"]
 
@@ -658,9 +639,7 @@ def test_report_parse_keeps_successful_files_when_one_file_fails():
         (2, "bad.png", "image/png", b"bad"),
     ]
     with (
-        patch(
-            "app.api.report.get_vision_encoder_service", return_value=PartialVision()
-        ),
+        patch("app.api.report.get_vision_encoder_service", return_value=PartialVision()),
         patch(
             "app.api.report.get_settings",
             return_value=SimpleNamespace(REPORT_PARSE_WORKERS=2),

@@ -67,8 +67,13 @@ def routing_node(state: MedicalGraphState) -> MedicalGraphState:
     if pre_routed:
         # chat 端点已先算过路由，直接复用，避免同一请求打两次 LLM 分类
         for key in (
-            "routed_department", "intent_distribution", "reasoning", "confidence",
-            "low_confidence", "human_review_required", "risk_level",
+            "routed_department",
+            "intent_distribution",
+            "reasoning",
+            "confidence",
+            "low_confidence",
+            "human_review_required",
+            "risk_level",
         ):
             state[key] = pre_routed.get(key, state.get(key))
         state["error"] = None
@@ -76,8 +81,13 @@ def routing_node(state: MedicalGraphState) -> MedicalGraphState:
     try:
         result = router_route(state["user_query"], state.get("patient_id"))
         for key in (
-            "routed_department", "intent_distribution", "reasoning", "confidence",
-            "low_confidence", "human_review_required", "risk_level",
+            "routed_department",
+            "intent_distribution",
+            "reasoning",
+            "confidence",
+            "low_confidence",
+            "human_review_required",
+            "risk_level",
         ):
             state[key] = result.get(key, state.get(key))
         state["error"] = None

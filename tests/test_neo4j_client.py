@@ -12,12 +12,7 @@ def test_neo4j_client_init():
 
 def test_neo4j_client_custom_params():
     """Test Neo4jClient with custom parameters."""
-    client = Neo4jClient(
-        uri="bolt://custom:7687",
-        user="custom_user",
-        password="custom_pass",
-        database="test_db"
-    )
+    client = Neo4jClient(uri="bolt://custom:7687", user="custom_user", password="custom_pass", database="test_db")
     assert client.uri == "bolt://custom:7687"
     assert client.user == "custom_user"
     assert client.database == "test_db"

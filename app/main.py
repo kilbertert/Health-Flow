@@ -54,19 +54,14 @@ def _valid_basic_auth(authorization: str, username: str, password: str) -> bool:
         return False
     supplied_user, separator, supplied_password = supplied.partition(":")
     return bool(
-        separator
-        and hmac.compare_digest(supplied_user, username)
-        and hmac.compare_digest(supplied_password, password)
+        separator and hmac.compare_digest(supplied_user, username) and hmac.compare_digest(supplied_password, password)
     )
 
 
 @app.middleware("http")
 async def basic_auth(request: Request, call_next):
     settings = get_settings()
-    auth_configured = bool(
-        settings.HEALTHFLOW_BASIC_USER.strip()
-        and settings.HEALTHFLOW_BASIC_PASSWORD.strip()
-    )
+    auth_configured = bool(settings.HEALTHFLOW_BASIC_USER.strip() and settings.HEALTHFLOW_BASIC_PASSWORD.strip())
     request.state.owner_id = "anonymous"
     request.state.basic_authenticated = False
     auth_required = bool(settings.basic_auth_enabled and auth_configured)
@@ -114,8 +109,7 @@ async def readiness_check():
         db_ok = False
 
     evidence_configured = bool(
-        settings.GENESIS_EVIDENCE_API_URL.strip()
-        and len(settings.GENESIS_EVIDENCE_API_KEY.strip()) >= 24
+        settings.GENESIS_EVIDENCE_API_URL.strip() and len(settings.GENESIS_EVIDENCE_API_KEY.strip()) >= 24
     )
     provider_configured = bool(
         (settings.VLLM_API_KEY.strip() or settings.OPENAI_API_KEY.strip())
@@ -128,16 +122,10 @@ async def readiness_check():
         and settings.HEALTHFLOW_BASIC_PASSWORD.strip()
     )
     report_owner = (
-        "account"
-        if settings.report_account_required
-        else "configured"
-        if basic_auth_configured
-        else "unconfigured"
+        "account" if settings.report_account_required else "configured" if basic_auth_configured else "unconfigured"
     )
     return {
-        "status": "ready"
-        if db_ok and evidence_configured and provider_configured
-        else "degraded",
+        "status": "ready" if db_ok and evidence_configured and provider_configured else "degraded",
         "database": "ok" if db_ok else "unavailable",
         "evidence_service": "configured" if evidence_configured else "unconfigured",
         "report_provider": "configured" if provider_configured else "unconfigured",

@@ -36,9 +36,7 @@ class UserAccount(Base):
         nullable=False,
     )
 
-    sessions = relationship(
-        "UserSession", back_populates="account", cascade="all, delete-orphan"
-    )
+    sessions = relationship("UserSession", back_populates="account", cascade="all, delete-orphan")
 
 
 class UserSession(Base):
@@ -47,9 +45,7 @@ class UserSession(Base):
     __tablename__ = "user_sessions"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    account_id = Column(
-        String(36), ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=False
-    )
+    account_id = Column(String(36), ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=False)
     token_hash = Column(String(64), nullable=False, unique=True, index=True)
     created_at = Column(DateTime, default=datetime.now, nullable=False)
     expires_at = Column(DateTime, nullable=False, index=True)
@@ -85,15 +81,9 @@ class MedicalReport(Base):
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
-    metrics = relationship(
-        "MetricRecord", back_populates="report", cascade="all, delete-orphan"
-    )
-    files = relationship(
-        "ReportFile", back_populates="report", cascade="all, delete-orphan"
-    )
-    audit_events = relationship(
-        "ReportAuditEvent", back_populates="report", cascade="all, delete-orphan"
-    )
+    metrics = relationship("MetricRecord", back_populates="report", cascade="all, delete-orphan")
+    files = relationship("ReportFile", back_populates="report", cascade="all, delete-orphan")
+    audit_events = relationship("ReportAuditEvent", back_populates="report", cascade="all, delete-orphan")
     extraction_job = relationship(
         "ReportExtractionJob",
         back_populates="report",
@@ -106,9 +96,7 @@ class ReportFile(Base):
     __tablename__ = "report_files"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    report_id = Column(
-        Integer, ForeignKey("medical_reports.id"), nullable=False, index=True
-    )
+    report_id = Column(Integer, ForeignKey("medical_reports.id"), nullable=False, index=True)
     file_index = Column(Integer, nullable=False)
     original_filename = Column(String(255), nullable=False)
     media_type = Column(String(128), nullable=False)
@@ -151,9 +139,7 @@ class ReportAuditEvent(Base):
     __tablename__ = "report_audit_events"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    report_id = Column(
-        Integer, ForeignKey("medical_reports.id"), nullable=False, index=True
-    )
+    report_id = Column(Integer, ForeignKey("medical_reports.id"), nullable=False, index=True)
     action = Column(String(64), nullable=False)
     actor = Column(String(128), nullable=False)
     correlation_id = Column(String(64))
@@ -205,12 +191,8 @@ class ChatSession(Base):
     conversation_summary = Column(Text)
     created_at = Column(DateTime, default=datetime.now)
 
-    messages = relationship(
-        "ChatMessage", back_populates="session", cascade="all, delete-orphan"
-    )
-    routing_logs = relationship(
-        "RoutingLog", back_populates="session", cascade="all, delete-orphan"
-    )
+    messages = relationship("ChatMessage", back_populates="session", cascade="all, delete-orphan")
+    routing_logs = relationship("RoutingLog", back_populates="session", cascade="all, delete-orphan")
 
 
 class ChatMessage(Base):

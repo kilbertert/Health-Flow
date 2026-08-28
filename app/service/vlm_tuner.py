@@ -205,9 +205,7 @@ class VLMTuner:
         )
         trainer.train()
         trainable, total = self._parameter_counts(self._model)
-        lora_params = sum(
-            parameter.numel() for name, parameter in self._model.named_parameters() if "lora_" in name
-        )
+        lora_params = sum(parameter.numel() for name, parameter in self._model.named_parameters() if "lora_" in name)
         self._stats = VLMTunerStats(len(dataset), trainable, total, lora_params)
         return self._stats
 
