@@ -6,6 +6,7 @@ import {
   Collapse,
   Descriptions,
   Form,
+  Image,
   Input,
   List,
   message,
@@ -43,6 +44,7 @@ const PASTE_IMAGE_EXTENSIONS = {
   'image/gif': 'gif',
   'image/bmp': 'bmp',
 };
+
 const UNSUPPORTED_PASTE_IMAGE_TYPES = new Set([
   'image/webp',
   'image/heic',
@@ -595,22 +597,39 @@ export function EvidenceResult({ result, onOpenSource }) {
                       <List
                         size="small"
                         dataSource={recommendations}
-                        renderItem={(recommendation) => (
-                          <List.Item>
-                            <article className="product-recommendation">
-                              <Space wrap>
-                                <Typography.Text strong>{recommendation.product_name}</Typography.Text>
-                                <Tag color="green">{recommendation.nutrient}</Tag>
-                              </Space>
-                              <Typography.Paragraph>{recommendation.reason}</Typography.Paragraph>
-                              <Typography.Paragraph type="warning">{recommendation.safety_message}</Typography.Paragraph>
-                              <Typography.Paragraph type="secondary">{recommendation.disclaimer}</Typography.Paragraph>
-                              <Typography.Text type="secondary">
-                                证据：{(recommendation.evidence_links || []).join('、')}
-                              </Typography.Text>
-                            </article>
-                          </List.Item>
-                        )}
+                        renderItem={(recommendation) => {
+                          const imageUrl = recommendation.image_url;
+                          return (
+                            <List.Item>
+                              <article className="product-recommendation">
+                                <div className="product-recommendation-layout">
+                                  {imageUrl && (
+                                    <Image
+                                      className="product-recommendation-image"
+                                      src={imageUrl}
+                                      alt={`${recommendation.product_name}产品图`}
+                                      width={112}
+                                      height={112}
+                                      preview
+                                    />
+                                  )}
+                                  <div className="product-recommendation-copy">
+                                    <Space wrap>
+                                      <Typography.Text strong>{recommendation.product_name}</Typography.Text>
+                                      <Tag color="green">{recommendation.nutrient}</Tag>
+                                    </Space>
+                                    <Typography.Paragraph>{recommendation.reason}</Typography.Paragraph>
+                                    <Typography.Paragraph type="warning">{recommendation.safety_message}</Typography.Paragraph>
+                                    <Typography.Paragraph type="secondary">{recommendation.disclaimer}</Typography.Paragraph>
+                                    <Typography.Text type="secondary">
+                                      证据：{(recommendation.evidence_links || []).join('、')}
+                                    </Typography.Text>
+                                  </div>
+                                </div>
+                              </article>
+                            </List.Item>
+                          );
+                        }}
                       />
                     ) : (
                       <Typography.Paragraph type="secondary" className="product-recommendation-empty">

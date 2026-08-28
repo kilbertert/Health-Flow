@@ -315,8 +315,17 @@ button { cursor: pointer; }
 .report-page .technical-details .ant-collapse-content-box { min-width: 0; overflow-wrap: break-word; }
 .product-recommendations { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
 .product-recommendation { width: 100%; min-width: 0; }
+.product-recommendation-layout { display: grid; grid-template-columns: 112px minmax(0, 1fr); align-items: start; gap: 12px; }
+.product-recommendation-image { width: 112px; height: 112px; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: #f7f8f6; }
+.product-recommendation-image .ant-image-img { width: 100%; height: 100%; object-fit: contain; }
+.product-recommendation-copy { min-width: 0; }
 .product-recommendation .ant-typography { margin: 6px 0 0; overflow-wrap: anywhere; }
 .product-recommendation-empty { margin: 8px 0 0; }
+
+@media (max-width: 430px) {
+  .product-recommendation-layout { grid-template-columns: 96px minmax(0, 1fr); gap: 10px; }
+  .product-recommendation-image { width: 96px; height: 96px; }
+}
 
 @media print {
   .report-detail-print .app-header,

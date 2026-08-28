@@ -75,6 +75,7 @@ class ProductRecommendation(StrictModel):
     reason: str = Field(min_length=1)
     safety_message: str = Field(min_length=1)
     disclaimer: str = Field(min_length=1)
+    image_url: str | None = Field(default=None, pattern=r"^/products/[A-Za-z0-9_-]+\.png$")
     evidence_links: list[str] = Field(min_length=1)
     evidence_strength: Literal["high", "moderate", "low", "very_low", "mixed"]
     priority: int = Field(ge=0)
