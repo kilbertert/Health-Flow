@@ -52,6 +52,7 @@ function assessedResponse(account, reportUrl) {
           reason: '可作为血脂相关营养管理的一种膳食补充方向考虑。',
           safety_message: '请结合个人情况咨询专业人士。',
           disclaimer: '本建议为健康管理参考，不构成医疗或用药指令。',
+          image_url: '/products/zhizhen-plant-sterol.png',
           evidence_links: ['classification:test.xlsx#血脂管理'],
           evidence_strength: 'low',
           priority: 10,
@@ -76,6 +77,7 @@ function assessedResponse(account, reportUrl) {
             reason: '可作为血脂相关营养管理的一种膳食补充方向考虑。',
             safety_message: '请结合个人情况咨询专业人士。',
             disclaimer: '本建议为健康管理参考，不构成医疗或用药指令。',
+            image_url: '/products/zhizhen-plant-sterol.png',
             evidence_links: ['classification:test.xlsx#血脂管理'],
             evidence_strength: 'low',
             priority: 10,
@@ -133,7 +135,7 @@ function assessedResponse(account, reportUrl) {
       await page.getByRole('button', { name: '确认并生成健康提示' }).click();
       await expect(page.getByText('E2E 移动端确认完成。')).toBeVisible();
       await expect(page.getByText('郅臻堂®植物甾醇咀嚼片')).toBeVisible();
-      await expect(page.getByRole('img', { name: '郅臻堂®植物甾醇咀嚼片产品包装图' })).toBeVisible();
+      await expect(page.getByRole('img', { name: '郅臻堂®植物甾醇咀嚼片产品图' })).toBeVisible();
       await expect(page.getByText('植物甾醇', { exact: true })).toBeVisible();
       await expect(page.getByText('本建议为健康管理参考，不构成医疗或用药指令。')).toBeVisible();
       expect(confirmationBody).toBeTruthy();

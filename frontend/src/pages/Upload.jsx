@@ -21,7 +21,6 @@ import {
   Upload,
 } from 'antd';
 import { CheckCircleOutlined, EyeOutlined, InboxOutlined, PictureOutlined, ReloadOutlined } from '@ant-design/icons';
-import zhizhenProductImage from '../assets/products/zhizhen-plant-sterol.png';
 import {
   assessReport,
   confirmReport,
@@ -46,12 +45,6 @@ const PASTE_IMAGE_EXTENSIONS = {
   'image/bmp': 'bmp',
 };
 
-function recommendationImageFor(recommendation) {
-  const productName = String(recommendation?.product_name || '').replace(/\s+/g, '');
-  return productName.startsWith('郅臻堂®植物甾醇') || productName.startsWith('郅臻堂植物甾醇')
-    ? zhizhenProductImage
-    : null;
-}
 const UNSUPPORTED_PASTE_IMAGE_TYPES = new Set([
   'image/webp',
   'image/heic',
@@ -605,7 +598,7 @@ export function EvidenceResult({ result, onOpenSource }) {
                         size="small"
                         dataSource={recommendations}
                         renderItem={(recommendation) => {
-                          const imageUrl = recommendationImageFor(recommendation);
+                          const imageUrl = recommendation.image_url;
                           return (
                             <List.Item>
                               <article className="product-recommendation">
@@ -614,7 +607,7 @@ export function EvidenceResult({ result, onOpenSource }) {
                                     <Image
                                       className="product-recommendation-image"
                                       src={imageUrl}
-                                      alt={`${recommendation.product_name}产品包装图`}
+                                      alt={`${recommendation.product_name}产品图`}
                                       width={112}
                                       height={112}
                                       preview
