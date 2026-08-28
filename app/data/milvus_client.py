@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from app.config import get_settings
 
@@ -10,8 +10,8 @@ from app.config import get_settings
 class MilvusClient:
     def __init__(
         self,
-        host: Optional[str] = None,
-        port: Optional[int] = None,
+        host: str | None = None,
+        port: int | None = None,
         collection_name: str = "medical_reports",
         dim: int = 1024,
     ) -> None:
@@ -22,7 +22,7 @@ class MilvusClient:
         self.dim = dim
         self._client = None
         self._collection_ready = False
-        self.last_error: Optional[str] = None
+        self.last_error: str | None = None
 
     @property
     def client(self):
@@ -82,17 +82,19 @@ class MilvusClient:
 
     def insert(
         self,
-        report_ids: List[int],
-        texts: List[str],
-        embeddings: List[List[float]],
-        departments: Optional[List[str]] = None,
-    ) -> List[int]:
+        report_ids: list[int],
+        texts: list[str],
+        embeddings: list[list[float]],
+        departments: list[str] | None = None,
+    ) -> list[int]:
         if not self.ensure_collection():
             return []
         if not (len(report_ids) == len(texts) == len(embeddings)):
             raise ValueError("report_ids、texts 和 embeddings 长度必须一致")
         data = []
-        for index, (report_id, text, embedding) in enumerate(zip(report_ids, texts, embeddings)):
+        for index, (report_id, text, embedding) in enumerate(
+            zip(report_ids, texts, embeddings, strict=True)
+        ):
             data.append(
                 {
                     "id": int(report_id),
@@ -111,10 +113,10 @@ class MilvusClient:
 
     def search(
         self,
-        query_embedding: List[float],
+        query_embedding: list[float],
         top_k: int = 5,
-        department: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        department: str | None = None,
+    ) -> list[dict[str, Any]]:
         if not self.ensure_collection():
             return []
         filter_expr = None

@@ -1,7 +1,8 @@
 """Tests for DynamicRouter Agent."""
 
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import MagicMock, patch
 
 
 class MockLLMClient:
@@ -38,7 +39,7 @@ def mock_deps():
 
 def test_calculate_intent_distribution_keyword_match(mock_deps):
     """Test intent distribution with keyword matching."""
-    from app.agent.dynamic_router import calculate_intent_distribution, RouterState
+    from app.agent.dynamic_router import RouterState, calculate_intent_distribution
 
     state: RouterState = {
         "user_query": "我最近血糖有点高，空腹6.5，而且有点胸闷",
@@ -58,7 +59,7 @@ def test_calculate_intent_distribution_keyword_match(mock_deps):
 
 def test_calculate_intent_distribution_no_match(mock_deps):
     """Test intent distribution with no keyword match."""
-    from app.agent.dynamic_router import calculate_intent_distribution, RouterState
+    from app.agent.dynamic_router import RouterState, calculate_intent_distribution
 
     state: RouterState = {
         "user_query": "今天天气不错",
@@ -79,7 +80,7 @@ def test_calculate_intent_distribution_no_match(mock_deps):
 
 def test_generate_reasoning(mock_deps):
     """Test reasoning generation."""
-    from app.agent.dynamic_router import generate_reasoning, RouterState
+    from app.agent.dynamic_router import RouterState, generate_reasoning
 
     state: RouterState = {
         "user_query": "血糖高怎么办",
@@ -100,7 +101,7 @@ def test_generate_reasoning(mock_deps):
 
 def test_query_knowledge_graph(mock_deps):
     """Test knowledge graph query."""
-    from app.agent.dynamic_router import query_knowledge_graph, RouterState
+    from app.agent.dynamic_router import RouterState, query_knowledge_graph
 
     state: RouterState = {
         "user_query": "血糖高",

@@ -8,14 +8,14 @@
     MINIMAX_API_KEY: MiniMax API Key（必填）
 """
 
+import argparse
 import os
 import sys
-import argparse
 
 # 添加项目根目录到 path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.service.data_augment import DataAugmentationPipeline, AugmentConfig
+from app.service.data_augment import AugmentConfig, DataAugmentationPipeline
 
 
 def main():

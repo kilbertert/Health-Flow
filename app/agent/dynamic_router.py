@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, TypedDict
 
 from langgraph.graph import END, StateGraph
 
 from app.config import get_settings
 from app.data.neo4j_client import get_neo4j_client
 from app.model.llm import get_llm_client
-
 
 DEPARTMENTS = ("内分泌科", "心内科", "消化科", "呼吸科", "全科")
 DEPT_KEYWORDS: dict[str, tuple[str, ...]] = {
@@ -35,19 +34,19 @@ HIGH_RISK_TERMS = ("危急值", "胸痛", "呼吸困难", "意识不清", "昏�
 
 class RouterState(TypedDict):
     user_query: str
-    patient_id: Optional[str]
-    intent_distribution: Dict[str, float]
+    patient_id: str | None
+    intent_distribution: dict[str, float]
     routed_department: str
     reasoning: str
     confidence: float
-    related_symptoms: List[Dict[str, Any]]
+    related_symptoms: list[dict[str, Any]]
     low_confidence: bool
     human_review_required: bool
     risk_level: str
-    specialist_skills: List[str]
+    specialist_skills: list[str]
 
 
-def _normalise_distribution(values: Dict[str, Any]) -> Dict[str, float]:
+def _normalise_distribution(values: dict[str, Any]) -> dict[str, float]:
     clean = {dept: 0.0 for dept in DEPARTMENTS}
     for key, value in values.items():
         department = DEPARTMENT_ALIASES.get(str(key), str(key))
@@ -63,7 +62,7 @@ def _normalise_distribution(values: Dict[str, Any]) -> Dict[str, float]:
     return {dept: score / total for dept, score in clean.items()}
 
 
-def _keyword_distribution(query: str) -> Dict[str, float]:
+def _keyword_distribution(query: str) -> dict[str, float]:
     scores = {dept: 0.0 for dept in DEPARTMENTS}
     for department, keywords in DEPT_KEYWORDS.items():
         scores[department] = float(sum(query.count(keyword) for keyword in keywords))
@@ -72,7 +71,7 @@ def _keyword_distribution(query: str) -> Dict[str, float]:
     return _normalise_distribution(scores)
 
 
-def _llm_distribution(query: str) -> Optional[Dict[str, float]]:
+def _llm_distribution(query: str) -> dict[str, float] | None:
     prompt = (
         "将用户医疗辅助问题路由到一个或多个科室。只输出 JSON，键可使用 "
         "endocrinology/cardiology/gastroenterology/respiratory/general，值为 0 到 1 的概率。\n"
@@ -170,7 +169,7 @@ def get_router_graph():
     return _router_graph
 
 
-def route(user_query: str, patient_id: Optional[str] = None) -> Dict[str, Any]:
+def route(user_query: str, patient_id: str | None = None) -> dict[str, Any]:
     initial_state: RouterState = {
         "user_query": user_query,
         "patient_id": patient_id,

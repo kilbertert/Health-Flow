@@ -1,7 +1,8 @@
 """Tests for RecursiveFeedback Agent."""
 
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import MagicMock, patch
 
 
 class MockLLMClient:
@@ -27,7 +28,7 @@ def mock_llm():
 
 def test_detect_contradictions_no_history():
     """Test contradiction detection with no history."""
-    from app.agent.recursive_feedback import detect_contradictions, FeedbackState
+    from app.agent.recursive_feedback import FeedbackState, detect_contradictions
 
     state: FeedbackState = {
         "original_response": "您的血糖正常。",
@@ -49,7 +50,7 @@ def test_detect_contradictions_no_history():
 
 def test_detect_contradictions_with_contradiction(mock_llm):
     """Test contradiction detection with an actual deterministic contradiction."""
-    from app.agent.recursive_feedback import detect_contradictions, FeedbackState
+    from app.agent.recursive_feedback import FeedbackState, detect_contradictions
 
     state: FeedbackState = {
         "original_response": "您的空腹血糖为5.2mmol/L。",
@@ -78,7 +79,7 @@ def test_detect_contradictions_with_contradiction(mock_llm):
 
 def test_refine_response_no_contradiction():
     """Test refine when there's no contradiction."""
-    from app.agent.recursive_feedback import refine_response, FeedbackState
+    from app.agent.recursive_feedback import FeedbackState, refine_response
 
     state: FeedbackState = {
         "original_response": "您的血糖偏高。",
@@ -100,7 +101,7 @@ def test_refine_response_no_contradiction():
 
 def test_refine_response_with_max_recursion():
     """Test refine when max recursion is reached."""
-    from app.agent.recursive_feedback import refine_response, FeedbackState
+    from app.agent.recursive_feedback import FeedbackState, refine_response
 
     state: FeedbackState = {
         "original_response": "您的血糖偏高。",
@@ -121,7 +122,7 @@ def test_refine_response_with_max_recursion():
 
 def test_should_continue_end_when_consistent():
     """Test should_continue returns END when consistent."""
-    from app.agent.recursive_feedback import should_continue, END, FeedbackState
+    from app.agent.recursive_feedback import END, FeedbackState, should_continue
 
     state: FeedbackState = {
         "original_response": "您的血糖偏高。",

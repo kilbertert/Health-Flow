@@ -4,19 +4,19 @@
 这些接口主要用于触发训练流程，实际训练在后台异步执行。
 """
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
 import uuid
 from datetime import datetime
+
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from app.schema.train import (
     DataAugmentRequest,
     DataAugmentResponse,
-    FinetuneRequest,
-    FinetuneResponse,
     DPORequest,
     DPOResponse,
+    FinetuneRequest,
+    FinetuneResponse,
 )
-
 
 router = APIRouter()
 
@@ -53,7 +53,7 @@ def run_data_augmentation(task_id: str, request: DataAugmentRequest):
         task_id: 任务ID
         request: 增强请求参数
     """
-    from app.service.data_augment import DataAugmentationPipeline, AugmentConfig
+    from app.service.data_augment import AugmentConfig, DataAugmentationPipeline
 
     update_task_status(task_id, "STARTING", 0.0)
 
@@ -76,7 +76,7 @@ def run_data_augmentation(task_id: str, request: DataAugmentRequest):
         update_task_status(task_id, "PROCESSING", 0.3)
 
         # 运行增强流程
-        pairs = pipeline.run()
+        pipeline.run()
 
         update_task_status(task_id, "GENERATING", 0.6)
 
@@ -160,7 +160,7 @@ def run_dpo_training(task_id: str, request: DPORequest):
         task_id: 任务ID
         request: DPO请求参数
     """
-    from app.service.safety_dpo import SafetyDPOTrainer, DPOConfig
+    from app.service.safety_dpo import DPOConfig, SafetyDPOTrainer
 
     update_task_status(task_id, "STARTING", 0.0)
 

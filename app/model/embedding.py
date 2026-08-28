@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-from typing import List, Optional
 
 import numpy as np
 
@@ -13,8 +12,8 @@ from app.config import get_settings
 class EmbeddingClient:
     def __init__(
         self,
-        model_name: Optional[str] = None,
-        device: Optional[str] = None,
+        model_name: str | None = None,
+        device: str | None = None,
         normalize: bool = True,
     ) -> None:
         settings = get_settings()
@@ -43,7 +42,7 @@ class EmbeddingClient:
     def dimension(self) -> int:
         return self._dimension
 
-    def _fallback_embedding(self, text: str) -> List[float]:
+    def _fallback_embedding(self, text: str) -> list[float]:
         """Stable hashed embedding for local tests and service degradation.
 
         It is not a semantic replacement for BGE; production retrieval should
@@ -60,7 +59,7 @@ class EmbeddingClient:
                 values = [value / norm for value in values]
         return values
 
-    def embed(self, text: str) -> List[float]:
+    def embed(self, text: str) -> list[float]:
         if self.model is None:
             return self._fallback_embedding(text)
         embedding = self.model.encode(
@@ -70,7 +69,7 @@ class EmbeddingClient:
         )
         return embedding.tolist()
 
-    def embed_batch(self, texts: List[str], batch_size: int = 32) -> List[List[float]]:
+    def embed_batch(self, texts: list[str], batch_size: int = 32) -> list[list[float]]:
         if self.model is None:
             return [self._fallback_embedding(text) for text in texts]
         embeddings = self.model.encode(

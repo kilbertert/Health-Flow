@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import json
+import contextlib
 import inspect
 import logging
 from dataclasses import dataclass, field
@@ -14,10 +14,8 @@ logger = logging.getLogger(__name__)
 # Pre-load the concrete SFT module when available.  This keeps TRL's lazy
 # module compatible with environments that replace transformers classes while
 # constructing a trainer in tests; failures are deferred until ``train``.
-try:  # pragma: no cover - availability depends on the optional training stack
+with contextlib.suppress(Exception):  # pragma: no cover - optional training stack
     import trl.trainer.sft_trainer  # noqa: F401
-except Exception:
-    pass
 
 
 @dataclass
@@ -154,6 +152,7 @@ class VLMTuner:
 
     def train(self) -> VLMTunerStats:
         from transformers import TrainingArguments, set_seed
+
         # Import from the concrete module so both current TRL and test doubles
         # patched at ``trl.trainer.sft_trainer.SFTTrainer`` are respected.
         from trl.trainer.sft_trainer import SFTTrainer
