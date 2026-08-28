@@ -36,3 +36,11 @@
 - Full-repository Ruff has pre-existing findings outside the changed paths and is not reported as passing.
 
 Raw reports, tokens, private identifiers, isolated databases, and unredacted logs are intentionally excluded.
+
+## Product Image Extension
+
+- Tested HealthFlow commit: `ff3cd20` (feature commit `9a17e8a`)
+- Executed at: `2026-08-28T23:43:38+08:00`
+- Environment: Linux x86_64, Node 24.15.0, Python 3.13.13, isolated SQLite and loopback service
+- Result: PASS. The published 郅臻堂®植物甾醇咀嚼片 recommendation displays its bundled packaging image at 375px and 414px; the image asset returned HTTP 200 and the recommendation text remained visible without horizontal overflow.
+- Deterministic checks: `npm run build` passed; `HEALTHFLOW_E2E_PYTHON=/home/claude/Projects/health-flow/.venv/bin/python npm run test:e2e` passed (`38 passed`).
