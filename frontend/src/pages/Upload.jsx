@@ -6,6 +6,7 @@ import {
   Collapse,
   Descriptions,
   Form,
+  Image,
   Input,
   List,
   message,
@@ -20,6 +21,7 @@ import {
   Upload,
 } from 'antd';
 import { CheckCircleOutlined, EyeOutlined, InboxOutlined, PictureOutlined, ReloadOutlined } from '@ant-design/icons';
+import zhizhenProductImage from '../assets/products/zhizhen-plant-sterol.png';
 import {
   assessReport,
   confirmReport,
@@ -43,6 +45,13 @@ const PASTE_IMAGE_EXTENSIONS = {
   'image/gif': 'gif',
   'image/bmp': 'bmp',
 };
+
+function recommendationImageFor(recommendation) {
+  const productName = String(recommendation?.product_name || '').replace(/\s+/g, '');
+  return productName.startsWith('郅臻堂®植物甾醇') || productName.startsWith('郅臻堂植物甾醇')
+    ? zhizhenProductImage
+    : null;
+}
 const UNSUPPORTED_PASTE_IMAGE_TYPES = new Set([
   'image/webp',
   'image/heic',
@@ -595,22 +604,39 @@ export function EvidenceResult({ result, onOpenSource }) {
                       <List
                         size="small"
                         dataSource={recommendations}
-                        renderItem={(recommendation) => (
-                          <List.Item>
-                            <article className="product-recommendation">
-                              <Space wrap>
-                                <Typography.Text strong>{recommendation.product_name}</Typography.Text>
-                                <Tag color="green">{recommendation.nutrient}</Tag>
-                              </Space>
-                              <Typography.Paragraph>{recommendation.reason}</Typography.Paragraph>
-                              <Typography.Paragraph type="warning">{recommendation.safety_message}</Typography.Paragraph>
-                              <Typography.Paragraph type="secondary">{recommendation.disclaimer}</Typography.Paragraph>
-                              <Typography.Text type="secondary">
-                                证据：{(recommendation.evidence_links || []).join('、')}
-                              </Typography.Text>
-                            </article>
-                          </List.Item>
-                        )}
+                        renderItem={(recommendation) => {
+                          const imageUrl = recommendationImageFor(recommendation);
+                          return (
+                            <List.Item>
+                              <article className="product-recommendation">
+                                <div className="product-recommendation-layout">
+                                  {imageUrl && (
+                                    <Image
+                                      className="product-recommendation-image"
+                                      src={imageUrl}
+                                      alt={`${recommendation.product_name}产品包装图`}
+                                      width={112}
+                                      height={112}
+                                      preview
+                                    />
+                                  )}
+                                  <div className="product-recommendation-copy">
+                                    <Space wrap>
+                                      <Typography.Text strong>{recommendation.product_name}</Typography.Text>
+                                      <Tag color="green">{recommendation.nutrient}</Tag>
+                                    </Space>
+                                    <Typography.Paragraph>{recommendation.reason}</Typography.Paragraph>
+                                    <Typography.Paragraph type="warning">{recommendation.safety_message}</Typography.Paragraph>
+                                    <Typography.Paragraph type="secondary">{recommendation.disclaimer}</Typography.Paragraph>
+                                    <Typography.Text type="secondary">
+                                      证据：{(recommendation.evidence_links || []).join('、')}
+                                    </Typography.Text>
+                                  </div>
+                                </div>
+                              </article>
+                            </List.Item>
+                          );
+                        }}
                       />
                     ) : (
                       <Typography.Paragraph type="secondary" className="product-recommendation-empty">
