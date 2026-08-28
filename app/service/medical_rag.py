@@ -11,8 +11,23 @@ from app.model.embedding import get_embedding_client
 from app.model.llm import get_llm_client
 
 MEDICAL_ENTITY_TERMS = (
-    "血糖", "糖尿病", "糖化血红蛋白", "血压", "血脂", "尿酸", "甲状腺", "心脏",
-    "胸痛", "咳嗽", "呼吸", "胃", "肝", "胆", "腹痛", "便秘", "体检报告",
+    "血糖",
+    "糖尿病",
+    "糖化血红蛋白",
+    "血压",
+    "血脂",
+    "尿酸",
+    "甲状腺",
+    "心脏",
+    "胸痛",
+    "咳嗽",
+    "呼吸",
+    "胃",
+    "肝",
+    "胆",
+    "腹痛",
+    "便秘",
+    "体检报告",
 )
 
 
@@ -96,24 +111,39 @@ class MedicalRAGService:
                 # Keep the domain-specific methods as a compatibility path for
                 # older Neo4j adapters and small test doubles.
                 for item in getattr(self.neo4j_client, "get_related_symptoms", lambda _: [])(entity):
-                    results.append({
-                        "type": "symptom", "name": item.get("name", ""),
-                        "description": item.get("description", ""), "entity": entity,
-                        "source": "graph", "source_id": f"G-symptom-{entity}",
-                    })
+                    results.append(
+                        {
+                            "type": "symptom",
+                            "name": item.get("name", ""),
+                            "description": item.get("description", ""),
+                            "entity": entity,
+                            "source": "graph",
+                            "source_id": f"G-symptom-{entity}",
+                        }
+                    )
                 for item in getattr(self.neo4j_client, "get_related_drugs", lambda _: [])(entity):
-                    results.append({
-                        "type": "drug", "name": item.get("name", ""),
-                        "description": item.get("description", ""), "entity": entity,
-                        "source": "graph", "source_id": f"G-drug-{entity}",
-                    })
+                    results.append(
+                        {
+                            "type": "drug",
+                            "name": item.get("name", ""),
+                            "description": item.get("description", ""),
+                            "entity": entity,
+                            "source": "graph",
+                            "source_id": f"G-drug-{entity}",
+                        }
+                    )
                 for item in getattr(self.neo4j_client, "find_diagnosis_path", lambda _: [])([entity]):
-                    results.append({
-                        "type": "diagnosis", "name": item.get("disease", ""),
-                        "description": item.get("description", ""), "entity": entity,
-                        "matched_symptoms": item.get("matched_symptoms", []),
-                        "source": "graph", "source_id": f"G-diagnosis-{entity}",
-                    })
+                    results.append(
+                        {
+                            "type": "diagnosis",
+                            "name": item.get("disease", ""),
+                            "description": item.get("description", ""),
+                            "entity": entity,
+                            "matched_symptoms": item.get("matched_symptoms", []),
+                            "source": "graph",
+                            "source_id": f"G-diagnosis-{entity}",
+                        }
+                    )
             except Exception:
                 continue
         return self._deduplicate(results)[: top_k or self.top_k]
@@ -189,9 +219,7 @@ class MedicalRAGService:
                 unique.append(item)
         return unique
 
-    def retrieve_and_build_context(
-        self, query: str, department: str | None = None
-    ) -> tuple[list[dict[str, Any]], str]:
+    def retrieve_and_build_context(self, query: str, department: str | None = None) -> tuple[list[dict[str, Any]], str]:
         results = self.hybrid_search(query, department=department)
         return results, self.build_context_from_results(results)
 

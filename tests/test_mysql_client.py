@@ -52,9 +52,7 @@ def test_chat_session_with_messages(test_db):
     test_db.commit()
 
     msg1 = ChatMessage(session_id=session.id, role="user", content="我空腹血糖有点高")
-    msg2 = ChatMessage(
-        session_id=session.id, role="assistant", content="您的空腹血糖为6.5mmol/L..."
-    )
+    msg2 = ChatMessage(session_id=session.id, role="assistant", content="您的空腹血糖为6.5mmol/L...")
     test_db.add_all([msg1, msg2])
     test_db.commit()
 
@@ -91,10 +89,7 @@ def test_legacy_reports_are_sealed_when_owner_columns_are_added(tmp_path, monkey
             )
         )
         connection.execute(
-            text(
-                "INSERT INTO medical_reports(id, patient_id, status) "
-                "VALUES (1, 'legacy-patient', 'assessed')"
-            )
+            text("INSERT INTO medical_reports(id, patient_id, status) VALUES (1, 'legacy-patient', 'assessed')")
         )
     engine.dispose()
     monkeypatch.setattr(
@@ -106,18 +101,11 @@ def test_legacy_reports_are_sealed_when_owner_columns_are_added(tmp_path, monkey
     client.create_tables()
     with client.engine.connect() as connection:
         row = (
-            connection.execute(
-                text(
-                    "SELECT status, access_token_hash, owner_id "
-                    "FROM medical_reports WHERE id = 1"
-                )
-            )
+            connection.execute(text("SELECT status, access_token_hash, owner_id FROM medical_reports WHERE id = 1"))
             .mappings()
             .one()
         )
-        index_names = {
-            item["name"] for item in inspect(connection).get_indexes("medical_reports")
-        }
+        index_names = {item["name"] for item in inspect(connection).get_indexes("medical_reports")}
     client.close()
 
     assert dict(row) == {
@@ -147,8 +135,7 @@ def test_sqlite_foreign_keys_are_enabled_for_report_cleanup(tmp_path, monkeypatc
         ).scalar_one()
         connection.execute(
             text(
-                "INSERT INTO report_extraction_jobs(report_id, status, attempt_count) "
-                "VALUES (:report_id, 'queued', 0)"
+                "INSERT INTO report_extraction_jobs(report_id, status, attempt_count) VALUES (:report_id, 'queued', 0)"
             ),
             {"report_id": report_id},
         )
@@ -157,9 +144,7 @@ def test_sqlite_foreign_keys_are_enabled_for_report_cleanup(tmp_path, monkeypatc
             {"report_id": report_id},
         )
         remaining = connection.execute(
-            text(
-                "SELECT count(*) FROM report_extraction_jobs WHERE report_id = :report_id"
-            ),
+            text("SELECT count(*) FROM report_extraction_jobs WHERE report_id = :report_id"),
             {"report_id": report_id},
         ).scalar_one()
     client.close()

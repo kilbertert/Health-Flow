@@ -104,7 +104,6 @@ class LLMExpander:
 4. 每条数据包含：instruction、input、output
 
 请直接输出JSON数组，不要包含其他内容。""",
-
         "指标异常问询": """请为以下模板生成{batch_size}条多样化的变体。
 
 模板：
@@ -117,7 +116,6 @@ class LLMExpander:
 4. 每条数据包含：instruction、input、output
 
 请直接输出JSON数组，不要包含其他内容。""",
-
         "科室分诊建议": """请为以下模板生成{batch_size}条多样化的变体。
 
 模板：
@@ -130,7 +128,6 @@ class LLMExpander:
 4. 每条数据包含：instruction、input、output
 
 请直接输出JSON数组，不要包含其他内容。""",
-
         "医疗安全问答": """请为以下safe回答生成对应的unsafe回答。
 
 Safe回答：
@@ -167,6 +164,7 @@ Safe回答：
     def _call_llm(self, messages: list[dict[str, str]], retries: int = 0) -> str:
         """调用 LLM，返回文本内容。"""
         import time
+
         try:
             return self.client.chat(messages)
         except Exception as e:
@@ -204,7 +202,7 @@ Safe回答：
             logger.warning(f"JSON解析失败: {e}, 原始文本: {text[:200]}")
             # 尝试修复常见转义问题后重试
             try:
-                fixed = text.replace('\\/', '/').replace('\\n', '\n')
+                fixed = text.replace("\\/", "/").replace("\\n", "\n")
                 data = json.loads(fixed)
                 if isinstance(data, list):
                     return data
@@ -257,8 +255,7 @@ Safe回答：
         for batch_idx in range(batches):
             batch_count = min(self.config.batch_size, count - batch_idx * self.config.batch_size)
             self._report_progress(
-                batch_idx / batches,
-                f"体检报告解读: 生成第 {batch_idx + 1}/{batches} 批 ({batch_count}条)"
+                batch_idx / batches, f"体检报告解读: 生成第 {batch_idx + 1}/{batches} 批 ({batch_count}条)"
             )
 
             prompt = self.EXPANSION_PROMPTS["体检报告解读"].format(
@@ -279,13 +276,15 @@ Safe回答：
             items = self._parse_json_array(text, "体检报告解读")
             for item in items:
                 if "instruction" in item and "output" in item:
-                    results.append(ExpansionResult(
-                        instruction=item["instruction"],
-                        input=item.get("input", ""),
-                        output=item["output"],
-                        category="体检报告解读",
-                        metadata={"source": "llm_expanded"},
-                    ))
+                    results.append(
+                        ExpansionResult(
+                            instruction=item["instruction"],
+                            input=item.get("input", ""),
+                            output=item["output"],
+                            category="体检报告解读",
+                            metadata={"source": "llm_expanded"},
+                        )
+                    )
 
         return results
 
@@ -299,8 +298,7 @@ Safe回答：
         for batch_idx in range(batches):
             batch_count = min(self.config.batch_size, count - batch_idx * self.config.batch_size)
             self._report_progress(
-                batch_idx / batches,
-                f"指标异常问询: 生成第 {batch_idx + 1}/{batches} 批 ({batch_count}条)"
+                batch_idx / batches, f"指标异常问询: 生成第 {batch_idx + 1}/{batches} 批 ({batch_count}条)"
             )
 
             prompt = self.EXPANSION_PROMPTS["指标异常问询"].format(
@@ -321,13 +319,15 @@ Safe回答：
             items = self._parse_json_array(text, "指标异常问询")
             for item in items:
                 if "instruction" in item and "output" in item:
-                    results.append(ExpansionResult(
-                        instruction=item["instruction"],
-                        input=item.get("input", ""),
-                        output=item["output"],
-                        category="指标异常问询",
-                        metadata={"source": "llm_expanded"},
-                    ))
+                    results.append(
+                        ExpansionResult(
+                            instruction=item["instruction"],
+                            input=item.get("input", ""),
+                            output=item["output"],
+                            category="指标异常问询",
+                            metadata={"source": "llm_expanded"},
+                        )
+                    )
 
         return results
 
@@ -339,8 +339,7 @@ Safe回答：
         for batch_idx in range(batches):
             batch_count = min(self.config.batch_size, count - batch_idx * self.config.batch_size)
             self._report_progress(
-                batch_idx / batches,
-                f"科室分诊: 生成第 {batch_idx + 1}/{batches} 批 ({batch_count}条)"
+                batch_idx / batches, f"科室分诊: 生成第 {batch_idx + 1}/{batches} 批 ({batch_count}条)"
             )
 
             prompt = self.EXPANSION_PROMPTS["科室分诊建议"].format(
@@ -361,13 +360,15 @@ Safe回答：
             items = self._parse_json_array(text, "科室分诊建议")
             for item in items:
                 if "instruction" in item and "output" in item:
-                    results.append(ExpansionResult(
-                        instruction=item["instruction"],
-                        input=item.get("input", ""),
-                        output=item["output"],
-                        category="科室分诊建议",
-                        metadata={"source": "llm_expanded"},
-                    ))
+                    results.append(
+                        ExpansionResult(
+                            instruction=item["instruction"],
+                            input=item.get("input", ""),
+                            output=item["output"],
+                            category="科室分诊建议",
+                            metadata={"source": "llm_expanded"},
+                        )
+                    )
 
         return results
 
@@ -384,10 +385,7 @@ Safe回答：
         """
         results = []
         for i, safe_output in enumerate(safe_outputs[:count]):
-            self._report_progress(
-                i / count,
-                f"医疗安全问答: 生成第 {i + 1}/{count} 条"
-            )
+            self._report_progress(i / count, f"医疗安全问答: 生成第 {i + 1}/{count} 条")
 
             prompt = self.EXPANSION_PROMPTS["医疗安全问答"].format(
                 safe_output=safe_output,
@@ -405,21 +403,25 @@ Safe回答：
             data = self._parse_json_object(text)
             if "instruction" in data and "unsafe_output" in data:
                 # Safe sample
-                results.append(ExpansionResult(
-                    instruction=data["instruction"],
-                    input=data.get("input", ""),
-                    output=safe_output,
-                    category="医疗安全问答",
-                    metadata={"source": "llm_expanded", "is_dpo_negative": False},
-                ))
+                results.append(
+                    ExpansionResult(
+                        instruction=data["instruction"],
+                        input=data.get("input", ""),
+                        output=safe_output,
+                        category="医疗安全问答",
+                        metadata={"source": "llm_expanded", "is_dpo_negative": False},
+                    )
+                )
                 # Unsafe sample (DPO negative)
-                results.append(ExpansionResult(
-                    instruction=data["instruction"],
-                    input=data.get("input", ""),
-                    output=data["unsafe_output"],
-                    category="医疗安全问答",
-                    metadata={"source": "llm_expanded", "is_dpo_negative": True},
-                ))
+                results.append(
+                    ExpansionResult(
+                        instruction=data["instruction"],
+                        input=data.get("input", ""),
+                        output=data["unsafe_output"],
+                        category="医疗安全问答",
+                        metadata={"source": "llm_expanded", "is_dpo_negative": True},
+                    )
+                )
 
         return results
 

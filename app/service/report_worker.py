@@ -76,10 +76,7 @@ def run_next_job(factory) -> int | None:
             job = db.get(ReportExtractionJob, job_id)
             report = db.get(MedicalReport, job.report_id) if job else None
             files = (
-                db.query(ReportFile)
-                .filter(ReportFile.report_id == job.report_id)
-                .order_by(ReportFile.file_index)
-                .all()
+                db.query(ReportFile).filter(ReportFile.report_id == job.report_id).order_by(ReportFile.file_index).all()
                 if job
                 else []
             )
@@ -93,11 +90,7 @@ def run_next_job(factory) -> int | None:
                 )
                 for item in files
             ]
-        succeeded = bool(
-            report
-            and accepted_files
-            and _parse_report(report_id, accepted_files, factory)
-        )
+        succeeded = bool(report and accepted_files and _parse_report(report_id, accepted_files, factory))
     except OSError:
         succeeded = False
         with factory() as db:
@@ -123,12 +116,8 @@ def run_next_job(factory) -> int | None:
         report = db.get(MedicalReport, job.report_id) if job else None
         if job is None:
             return job_id
-        retryable = (
-            bool((report.parsed_content or {}).get("retryable")) if report else False
-        )
-        max_attempts = max(
-            1, int(getattr(get_settings(), "REPORT_JOB_MAX_ATTEMPTS", 3))
-        )
+        retryable = bool((report.parsed_content or {}).get("retryable")) if report else False
+        max_attempts = max(1, int(getattr(get_settings(), "REPORT_JOB_MAX_ATTEMPTS", 3)))
         now = _now()
         if not succeeded and retryable and job.attempt_count < max_attempts:
             job.status = "queued"
@@ -173,10 +162,7 @@ def main() -> None:
     client = get_mysql_client()
     client.create_tables()
     factory = sessionmaker(bind=client.engine)
-    lock_path = (
-        Path(get_settings().REPORT_FILES_DIR).expanduser().resolve().parent
-        / "healthflow-report-worker.lock"
-    )
+    lock_path = Path(get_settings().REPORT_FILES_DIR).expanduser().resolve().parent / "healthflow-report-worker.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

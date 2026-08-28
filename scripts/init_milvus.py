@@ -20,9 +20,7 @@ def _schema(collection_name: str) -> Any:
 
     from pymilvus import CollectionSchema, DataType, FieldSchema
 
-    primary = FieldSchema(
-        name="id", dtype=DataType.INT64, is_primary=True, auto_id=False
-    )
+    primary = FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=False)
     fields = [primary]
     if collection_name == "medical_reports":
         fields.extend(

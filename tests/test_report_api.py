@@ -107,9 +107,7 @@ def test_upload_report_endpoint(client, tmp_path):
         token = data["access_token"]
         headers = {"X-Report-Token": token}
         assert run_next_job(SessionLocal) is not None
-        parsed_response = client.get(
-            f"/api/health/report/{data['id']}", headers=headers
-        )
+        parsed_response = client.get(f"/api/health/report/{data['id']}", headers=headers)
         parsed = parsed_response.json()
         assert (
             client.get(
@@ -147,12 +145,7 @@ def test_upload_report_endpoint(client, tmp_path):
         assert source.content == fake_image
         stored = tmp_path / str(data["id"]) / "1.png"
         assert stored.is_file()
-        assert (
-            client.delete(
-                f"/api/health/report/{data['id']}", headers=headers
-            ).status_code
-            == 200
-        )
+        assert client.delete(f"/api/health/report/{data['id']}", headers=headers).status_code == 200
         assert not stored.exists()
 
 

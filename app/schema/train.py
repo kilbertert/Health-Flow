@@ -1,6 +1,5 @@
 """Training related schemas."""
 
-
 from pydantic import BaseModel, Field
 
 

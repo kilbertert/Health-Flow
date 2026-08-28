@@ -96,16 +96,8 @@ async def login(
     response: Response,
     db: Session = Depends(db_dependency),
 ):
-    account = (
-        db.query(UserAccount)
-        .filter(UserAccount.email == normalize_email(payload.email))
-        .first()
-    )
-    if (
-        account is None
-        or not account.is_active
-        or not verify_password(payload.password, account.password_hash)
-    ):
+    account = db.query(UserAccount).filter(UserAccount.email == normalize_email(payload.email)).first()
+    if account is None or not account.is_active or not verify_password(payload.password, account.password_hash):
         raise HTTPException(status_code=401, detail="邮箱或密码不正确")
     now = datetime.now()
     db.query(UserSession).filter(
@@ -173,9 +165,7 @@ async def report_history(request: Request, db: Session = Depends(db_dependency))
             metric_count=len(report.metrics),
             abnormal_count=_abnormal_metric_count(report),
             finding_count=(
-                len(report.evidence_result.get("findings") or [])
-                if isinstance(report.evidence_result, dict)
-                else 0
+                len(report.evidence_result.get("findings") or []) if isinstance(report.evidence_result, dict) else 0
             ),
         )
         for report in reports

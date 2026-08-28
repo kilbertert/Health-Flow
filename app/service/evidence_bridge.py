@@ -65,9 +65,7 @@ METRIC_ALIASES = {
 }
 _PARENTHETICAL_RE = re.compile(r"[（(][^）)]*[）)]")
 _NUMBER_RE = re.compile(r"(?<![\d.])-?\d+(?:\.\d+)?(?![\d.])")
-_RANGE_RE = re.compile(
-    r"(?P<low>-?\d+(?:\.\d+)?)\s*(?:-|~|至|到)\s*(?P<high>-?\d+(?:\.\d+)?)"
-)
+_RANGE_RE = re.compile(r"(?P<low>-?\d+(?:\.\d+)?)\s*(?:-|~|至|到)\s*(?P<high>-?\d+(?:\.\d+)?)")
 _UPPER_RE = re.compile(r"(?:<|<=|≤)\s*(?P<high>-?\d+(?:\.\d+)?)")
 _LOWER_RE = re.compile(r"(?:>|>=|≥)\s*(?P<low>-?\d+(?:\.\d+)?)")
 
@@ -94,10 +92,7 @@ def metric_code_for_name(name: str) -> str | None:
         suffix = normalized.removeprefix(alias) if normalized.startswith(alias) else ""
         if normalized == alias or (
             suffix
-            and (
-                suffix.startswith(("/", "／"))
-                or (suffix.isascii() and re.fullmatch(r"[a-z0-9%+._-]+", suffix))
-            )
+            and (suffix.startswith(("/", "／")) or (suffix.isascii() and re.fullmatch(r"[a-z0-9%+._-]+", suffix)))
         ):
             return code
     return normalized if normalized in set(METRIC_ALIASES.values()) else None
@@ -135,16 +130,10 @@ def build_observations_with_unmatched(
         value_text = metric.confirmed_value or metric.metric_value
         unit = metric.confirmed_unit or metric.unit
         code = metric.metric_code or metric_code_for_name(metric.metric_name or "")
-        evidence = (
-            getattr(metric, "confirmed_evidence_text", None) or metric.evidence_text
-        )
+        evidence = getattr(metric, "confirmed_evidence_text", None) or metric.evidence_text
         if not unit or not evidence or metric.page_number is None:
             reason = (
-                "missing_unit"
-                if not unit
-                else "missing_source_evidence"
-                if not evidence
-                else "missing_source_page"
+                "missing_unit" if not unit else "missing_source_evidence" if not evidence else "missing_source_page"
             )
             skipped.append(
                 {
@@ -190,9 +179,7 @@ def build_observations_with_unmatched(
                 }
             )
             continue
-        if reference_low is not None and not _evidence_contains_value(
-            evidence, reference_low
-        ):
+        if reference_low is not None and not _evidence_contains_value(evidence, reference_low):
             skipped.append(
                 {
                     "observation_id": f"health-flow-metric-{metric.id}",
@@ -200,9 +187,7 @@ def build_observations_with_unmatched(
                 }
             )
             continue
-        if reference_high is not None and not _evidence_contains_value(
-            evidence, reference_high
-        ):
+        if reference_high is not None and not _evidence_contains_value(evidence, reference_high):
             skipped.append(
                 {
                     "observation_id": f"health-flow-metric-{metric.id}",
@@ -235,8 +220,7 @@ def build_observations_with_unmatched(
                 "source_page": metric.page_number,
                 "source_id": metric.source_id,
                 "source_url": (
-                    f"/api/health/report/{metric.report_id}/files/"
-                    f"{metric.source_file_index}/pages/{metric.page_number}"
+                    f"/api/health/report/{metric.report_id}/files/{metric.source_file_index}/pages/{metric.page_number}"
                     if metric.report_id is not None
                     else None
                 ),
@@ -268,15 +252,12 @@ def build_observations_with_unmatched(
                 "source_page": metric.page_number,
                 "source_id": metric.source_id,
                 "source_url": (
-                    f"/api/health/report/{metric.report_id}/files/"
-                    f"{metric.source_file_index}/pages/{metric.page_number}"
+                    f"/api/health/report/{metric.report_id}/files/{metric.source_file_index}/pages/{metric.page_number}"
                     if metric.report_id is not None and metric.page_number is not None
                     else None
                 ),
                 "bbox": _coordinate_list(getattr(metric, "bbox", None)),
-                "bbox_normalized": _coordinate_list(
-                    getattr(metric, "bbox_normalized", None)
-                ),
+                "bbox_normalized": _coordinate_list(getattr(metric, "bbox_normalized", None)),
             }
         )
     return observations, skipped, unmatched
@@ -291,9 +272,7 @@ async def match_published_evidence(
     headers = _service_headers(settings, correlate=True)
     payload = {"schema_version": "3", "observations": observations}
     try:
-        async with httpx.AsyncClient(
-            timeout=settings.GENESIS_EVIDENCE_TIMEOUT_SECONDS
-        ) as client:
+        async with httpx.AsyncClient(timeout=settings.GENESIS_EVIDENCE_TIMEOUT_SECONDS) as client:
             response = await client.post(
                 settings.GENESIS_EVIDENCE_API_URL,
                 json=payload,
@@ -310,18 +289,14 @@ async def match_published_evidence(
     return result.model_dump(mode="json")
 
 
-async def fetch_metric_catalog(
-    *, settings: Settings | None = None
-) -> list[dict[str, str]]:
+async def fetch_metric_catalog(*, settings: Settings | None = None) -> list[dict[str, str]]:
     settings = settings or get_settings()
     url = settings.GENESIS_EVIDENCE_METRICS_URL.strip()
     if not url:
         url = settings.GENESIS_EVIDENCE_API_URL.rsplit("/api/evidence/matches", 1)[0]
         url = f"{url}/api/metrics"
     try:
-        async with httpx.AsyncClient(
-            timeout=settings.GENESIS_EVIDENCE_TIMEOUT_SECONDS
-        ) as client:
+        async with httpx.AsyncClient(timeout=settings.GENESIS_EVIDENCE_TIMEOUT_SECONDS) as client:
             response = await client.get(url, headers=_service_headers(settings))
     except httpx.HTTPError as exc:
         raise EvidenceBridgeError("指标目录服务暂不可用") from exc

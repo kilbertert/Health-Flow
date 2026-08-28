@@ -37,9 +37,33 @@ CONSISTENCY_RULES = [
 # 只比较含医学指标特征的名称，避免把「建议每3个月」「参考范围3.9」这类
 # 通用前缀/数值当成同一指标的取值变化（跨指标误报）。
 _METRIC_HINTS = (
-    "血糖", "血压", "血脂", "尿酸", "胆固醇", "甘油三酯", "心率", "肌酐", "尿素",
-    "转氨酶", "血红蛋白", "白细胞", "血小板", "红细胞", "糖化", "蛋白", "CEA", "AFP",
-    "CA199", "CA125", "TSH", "T3", "T4", "激素", "酮体", "胆红素", "尿蛋白",
+    "血糖",
+    "血压",
+    "血脂",
+    "尿酸",
+    "胆固醇",
+    "甘油三酯",
+    "心率",
+    "肌酐",
+    "尿素",
+    "转氨酶",
+    "血红蛋白",
+    "白细胞",
+    "血小板",
+    "红细胞",
+    "糖化",
+    "蛋白",
+    "CEA",
+    "AFP",
+    "CA199",
+    "CA125",
+    "TSH",
+    "T3",
+    "T4",
+    "激素",
+    "酮体",
+    "胆红素",
+    "尿蛋白",
 )
 
 
@@ -72,11 +96,7 @@ def _evidence_score(response: str, evidence: list[dict[str, Any]]) -> float | No
 def _deterministic_contradictions(state: FeedbackState) -> list[str]:
     history = state["conversation_history"]
     current = state["current_response"]
-    previous = "\n".join(
-        item.get("content", "")
-        for item in history[-8:]
-        if item.get("role") == "assistant"
-    )
+    previous = "\n".join(item.get("content", "") for item in history[-8:] if item.get("role") == "assistant")
     if not previous:
         return []
 
@@ -104,8 +124,7 @@ def detect_contradictions(state: FeedbackState) -> FeedbackState:
     if not contradictions and state["conversation_history"]:
         try:
             history = "\n".join(
-                f"{item.get('role')}: {item.get('content', '')}"
-                for item in state["conversation_history"][-5:]
+                f"{item.get('role')}: {item.get('content', '')}" for item in state["conversation_history"][-5:]
             )
             result = get_llm_client().chat_with_json(
                 messages=[
@@ -114,7 +133,7 @@ def detect_contradictions(state: FeedbackState) -> FeedbackState:
                         "role": "user",
                         "content": (
                             f"历史对话：\n{history}\n\n当前回答：\n{state['current_response']}\n"
-                            "只输出 JSON：{\"has_contradiction\": false, \"contradictions\": []}"
+                            '只输出 JSON：{"has_contradiction": false, "contradictions": []}'
                         ),
                     },
                 ],
@@ -143,13 +162,9 @@ def refine_response(state: FeedbackState) -> FeedbackState:
         )
         return state
 
-    history = "\n".join(
-        f"{item.get('role')}: {item.get('content', '')}"
-        for item in state["conversation_history"][-5:]
-    )
+    history = "\n".join(f"{item.get('role')}: {item.get('content', '')}" for item in state["conversation_history"][-5:])
     evidence = "\n".join(
-        f"[{item.get('source_id', 'S?')}] {item.get('content', '')[:500]}"
-        for item in state.get("evidence", [])
+        f"[{item.get('source_id', 'S?')}] {item.get('content', '')[:500]}" for item in state.get("evidence", [])
     )
     prompt = (
         "修正医疗辅助回答中的逻辑冲突。保留有证据的事实，不进行诊断或处方；"
