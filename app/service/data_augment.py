@@ -20,12 +20,9 @@ class AugmentConfig:
 
     target_size: int = 8000
     source: str = "llm"  # template=模板生成, llm=LLM扩展生成
-    categories: list[str] = field(default_factory=lambda: [
-        "体检报告解读",
-        "指标异常问询",
-        "科室分诊建议",
-        "医疗安全问答"
-    ])
+    categories: list[str] = field(
+        default_factory=lambda: ["体检报告解读", "指标异常问询", "科室分诊建议", "医疗安全问答"]
+    )
     output_path: str = "./data/sft/training_data.jsonl"
     language: str = "zh"
 
@@ -49,7 +46,7 @@ class InstructionPair:
             "output": self.output,
             "category": self.category,
             "source": self.source,
-            "metadata": self.metadata
+            "metadata": self.metadata,
         }
 
     @classmethod
@@ -61,7 +58,7 @@ class InstructionPair:
             output=data.get("output", ""),
             category=data.get("category", ""),
             source=data.get("source", ""),
-            metadata=data.get("metadata", {})
+            metadata=data.get("metadata", {}),
         )
 
 
@@ -99,6 +96,7 @@ class DataAugmentationPipeline:
         """懒加载LLM客户端。"""
         if self._llm_client is None:
             from app.model.llm import get_llm_client
+
             self._llm_client = get_llm_client()
         return self._llm_client
 
@@ -148,27 +146,81 @@ class DataAugmentationPipeline:
             {
                 "instruction": "请解读这份体检报告中{metric}指标的意义",
                 "input": "{metric}: {value} {unit}, 参考范围: {reference}",
-                "output": "您的{metric}为{value}{unit}，{assessment}。{advice}"
+                "output": "您的{metric}为{value}{unit}，{assessment}。{advice}",
             },
             {
                 "instruction": "{metric}指标偏高可能是什么原因？",
                 "input": "{metric}: {value} {unit}（参考范围: {reference}）",
-                "output": "{metric}偏高可能由以下原因引起：{causes}。建议：{advice}"
+                "output": "{metric}偏高可能由以下原因引起：{causes}。建议：{advice}",
             },
             {
                 "instruction": "我最近{metric}有点问题，应该挂什么科？",
                 "input": "{metric}: {value} {unit}",
-                "output": "根据您的症状，建议就诊{department}。{reasoning}"
+                "output": "根据您的症状，建议就诊{department}。{reasoning}",
             },
         ]
 
         metrics_data = [
-            {"metric": "空腹血糖", "value": "6.5", "unit": "mmol/L", "reference": "3.9-6.1", "assessment": "超过正常上限", "advice": "建议咨询内分泌科", "causes": "饮食因素、缺乏运动、糖尿病前期", "department": "内分泌科"},
-            {"metric": "空腹血糖", "value": "7.8", "unit": "mmol/L", "reference": "3.9-6.1", "assessment": "明显超标", "advice": "需进一步检查确诊", "causes": "糖尿病可能性大", "department": "内分泌科"},
-            {"metric": "血压", "value": "145/95", "unit": "mmHg", "reference": "<140/90", "assessment": "轻度偏高", "advice": "注意饮食，定期复查", "causes": "高盐饮食、精神紧张", "department": "心内科"},
-            {"metric": "血压", "value": "165/105", "unit": "mmHg", "reference": "<140/90", "assessment": "中度偏高", "advice": "需要药物治疗", "causes": "高血压可能", "department": "心内科"},
-            {"metric": "总胆固醇", "value": "6.2", "unit": "mmol/L", "reference": "<5.2", "assessment": "偏高", "advice": "控制饮食，加强运动", "causes": "高脂饮食、代谢异常", "department": "心内科"},
-            {"metric": "血红蛋白", "value": "145", "unit": "g/L", "reference": "130-175", "assessment": "在正常范围", "advice": "保持良好生活习惯", "causes": "正常生理状态", "department": "血液科"},
+            {
+                "metric": "空腹血糖",
+                "value": "6.5",
+                "unit": "mmol/L",
+                "reference": "3.9-6.1",
+                "assessment": "超过正常上限",
+                "advice": "建议咨询内分泌科",
+                "causes": "饮食因素、缺乏运动、糖尿病前期",
+                "department": "内分泌科",
+            },
+            {
+                "metric": "空腹血糖",
+                "value": "7.8",
+                "unit": "mmol/L",
+                "reference": "3.9-6.1",
+                "assessment": "明显超标",
+                "advice": "需进一步检查确诊",
+                "causes": "糖尿病可能性大",
+                "department": "内分泌科",
+            },
+            {
+                "metric": "血压",
+                "value": "145/95",
+                "unit": "mmHg",
+                "reference": "<140/90",
+                "assessment": "轻度偏高",
+                "advice": "注意饮食，定期复查",
+                "causes": "高盐饮食、精神紧张",
+                "department": "心内科",
+            },
+            {
+                "metric": "血压",
+                "value": "165/105",
+                "unit": "mmHg",
+                "reference": "<140/90",
+                "assessment": "中度偏高",
+                "advice": "需要药物治疗",
+                "causes": "高血压可能",
+                "department": "心内科",
+            },
+            {
+                "metric": "总胆固醇",
+                "value": "6.2",
+                "unit": "mmol/L",
+                "reference": "<5.2",
+                "assessment": "偏高",
+                "advice": "控制饮食，加强运动",
+                "causes": "高脂饮食、代谢异常",
+                "department": "心内科",
+            },
+            {
+                "metric": "血红蛋白",
+                "value": "145",
+                "unit": "g/L",
+                "reference": "130-175",
+                "assessment": "在正常范围",
+                "advice": "保持良好生活习惯",
+                "causes": "正常生理状态",
+                "department": "血液科",
+            },
         ]
 
         pairs = []
@@ -180,14 +232,16 @@ class DataAugmentationPipeline:
             input_text = template["input"].format(**metric_data)
             output = template["output"].format(**metric_data)
 
-            pairs.append(InstructionPair(
-                instruction=instruction,
-                input=input_text,
-                output=output,
-                category="体检报告解读",
-                source="template",
-                metadata={"template_type": "examination", "seed": i}
-            ))
+            pairs.append(
+                InstructionPair(
+                    instruction=instruction,
+                    input=input_text,
+                    output=output,
+                    category="体检报告解读",
+                    source="template",
+                    metadata={"template_type": "examination", "seed": i},
+                )
+            )
 
         return pairs
 
@@ -197,42 +251,57 @@ class DataAugmentationPipeline:
             {
                 "instruction": "{metric}偏高饮食需要注意什么？",
                 "input": "{metric}: {value} {unit}，偏高",
-                "output": "{metric}偏高时，饮食建议：{diet_advice}。同时注意：{other_advice}"
+                "output": "{metric}偏高时，饮食建议：{diet_advice}。同时注意：{other_advice}",
             },
             {
                 "instruction": "{metric}偏高需要吃药吗？",
                 "input": "{metric}: {value} {unit}（参考范围: {reference}）",
-                "output": "关于{metric}偏高是否需要用药：{medication_advice}。具体方案请遵医嘱。"
+                "output": "关于{metric}偏高是否需要用药：{medication_advice}。具体方案请遵医嘱。",
             },
             {
                 "instruction": "{metric}指标异常会是癌症吗？",
                 "input": "{metric}: {value} {unit}，出现异常",
-                "output": "{metric}异常可能由多种原因引起，{cancer_probability}。建议进行进一步检查：{check_advice}。"
+                "output": "{metric}异常可能由多种原因引起，{cancer_probability}。建议进行进一步检查：{check_advice}。",
             },
         ]
 
         metric_advice = [
-            {"metric": "空腹血糖", "value": "6.5", "unit": "mmol/L", "reference": "3.9-6.1",
-             "diet_advice": "控制碳水化合物摄入，少吃甜食，主食定量",
-             "other_advice": "增加运动量，保持规律作息",
-             "medication_advice": "目前属于糖尿病前期，一般先通过生活方式干预",
-             "cancer_probability": "癌症可能性较低，多为代谢或饮食因素",
-             "check_advice": "完善糖化血红蛋白检测",
-             "department": "内分泌科"},
-            {"metric": "CEA", "value": "8.5", "unit": "ng/mL", "reference": "<5.0",
-             "diet_advice": "无特殊饮食建议",
-             "other_advice": "建议进一步检查排除肿瘤可能",
-             "medication_advice": "需要进一步检查明确原因",
-             "cancer_probability": "需要高度重视，CEA升高与多种肿瘤相关",
-             "check_advice": "全面体检，胃肠镜、CT等",
-             "department": "肿瘤科"},
-            {"metric": "AFP", "value": "25", "unit": "ng/mL", "reference": "<20",
-             "diet_advice": "无特殊限制",
-             "other_advice": "建议完善肝脏检查",
-             "medication_advice": "需排查肝炎或肿瘤可能",
-             "cancer_probability": "需排查肝癌及生殖系统肿瘤",
-             "check_advice": "肝脏B超、肝炎指标检测",
-             "department": "肝胆外科"},
+            {
+                "metric": "空腹血糖",
+                "value": "6.5",
+                "unit": "mmol/L",
+                "reference": "3.9-6.1",
+                "diet_advice": "控制碳水化合物摄入，少吃甜食，主食定量",
+                "other_advice": "增加运动量，保持规律作息",
+                "medication_advice": "目前属于糖尿病前期，一般先通过生活方式干预",
+                "cancer_probability": "癌症可能性较低，多为代谢或饮食因素",
+                "check_advice": "完善糖化血红蛋白检测",
+                "department": "内分泌科",
+            },
+            {
+                "metric": "CEA",
+                "value": "8.5",
+                "unit": "ng/mL",
+                "reference": "<5.0",
+                "diet_advice": "无特殊饮食建议",
+                "other_advice": "建议进一步检查排除肿瘤可能",
+                "medication_advice": "需要进一步检查明确原因",
+                "cancer_probability": "需要高度重视，CEA升高与多种肿瘤相关",
+                "check_advice": "全面体检，胃肠镜、CT等",
+                "department": "肿瘤科",
+            },
+            {
+                "metric": "AFP",
+                "value": "25",
+                "unit": "ng/mL",
+                "reference": "<20",
+                "diet_advice": "无特殊限制",
+                "other_advice": "建议完善肝脏检查",
+                "medication_advice": "需排查肝炎或肿瘤可能",
+                "cancer_probability": "需排查肝癌及生殖系统肿瘤",
+                "check_advice": "肝脏B超、肝炎指标检测",
+                "department": "肝胆外科",
+            },
         ]
 
         pairs = []
@@ -244,14 +313,16 @@ class DataAugmentationPipeline:
             input_text = template["input"].format(**advice_data)
             output = template["output"].format(**advice_data)
 
-            pairs.append(InstructionPair(
-                instruction=instruction,
-                input=input_text,
-                output=output,
-                category="指标异常问询",
-                source="template",
-                metadata={"template_type": "metric_advice", "seed": i}
-            ))
+            pairs.append(
+                InstructionPair(
+                    instruction=instruction,
+                    input=input_text,
+                    output=output,
+                    category="指标异常问询",
+                    source="template",
+                    metadata={"template_type": "metric_advice", "seed": i},
+                )
+            )
 
         return pairs
 
@@ -261,26 +332,61 @@ class DataAugmentationPipeline:
             {
                 "instruction": "我最近出现{symptom}，应该挂什么科？",
                 "input": "症状：{symptom}，持续时间：{duration}",
-                "output": "根据您描述的{symptom}，建议就诊{department}。{reasoning}"
+                "output": "根据您描述的{symptom}，建议就诊{department}。{reasoning}",
             },
             {
                 "instruction": "{symptom}应该看什么科室？",
                 "input": "症状描述：{symptom}",
-                "output": "建议就诊{department}。{reasoning}。如无法判断，可先到全科医学科就诊。"
+                "output": "建议就诊{department}。{reasoning}。如无法判断，可先到全科医学科就诊。",
             },
         ]
 
         triage_data = [
-            {"symptom": "多饮、多尿、体重下降", "duration": "2周", "department": "内分泌科", "reasoning": "这些症状是糖尿病的典型表现"},
-            {"symptom": "心悸、胸闷、活动后气促", "duration": "1周", "department": "心内科", "reasoning": "需要排除心血管疾病"},
-            {"symptom": "腹痛、腹胀、恶心呕吐", "duration": "3天", "department": "消化科", "reasoning": "消化道症状首选消化科"},
+            {
+                "symptom": "多饮、多尿、体重下降",
+                "duration": "2周",
+                "department": "内分泌科",
+                "reasoning": "这些症状是糖尿病的典型表现",
+            },
+            {
+                "symptom": "心悸、胸闷、活动后气促",
+                "duration": "1周",
+                "department": "心内科",
+                "reasoning": "需要排除心血管疾病",
+            },
+            {
+                "symptom": "腹痛、腹胀、恶心呕吐",
+                "duration": "3天",
+                "department": "消化科",
+                "reasoning": "消化道症状首选消化科",
+            },
             {"symptom": "咳嗽、咳痰、发热", "duration": "5天", "department": "呼吸科", "reasoning": "呼吸道症状"},
-            {"symptom": "头痛、头晕、失眠", "duration": "1周", "department": "神经内科", "reasoning": "神经系统症状需要专科评估"},
+            {
+                "symptom": "头痛、头晕、失眠",
+                "duration": "1周",
+                "department": "神经内科",
+                "reasoning": "神经系统症状需要专科评估",
+            },
             {"symptom": "尿频、尿急、尿痛", "duration": "2天", "department": "泌尿外科", "reasoning": "泌尿道感染可能"},
-            {"symptom": "关节疼痛、肿胀", "duration": "1月", "department": "风湿免疫科", "reasoning": "需排查自身免疫性疾病"},
+            {
+                "symptom": "关节疼痛、肿胀",
+                "duration": "1月",
+                "department": "风湿免疫科",
+                "reasoning": "需排查自身免疫性疾病",
+            },
             {"symptom": "皮疹、瘙痒、过敏", "duration": "3天", "department": "皮肤科", "reasoning": "皮肤病变"},
-            {"symptom": "视力下降、眼前黑影", "duration": "1周", "department": "眼科", "reasoning": "眼科症状需要专科检查"},
-            {"symptom": "一般健康咨询", "duration": "无", "department": "全科医学科", "reasoning": "全科可进行初步评估和分诊"},
+            {
+                "symptom": "视力下降、眼前黑影",
+                "duration": "1周",
+                "department": "眼科",
+                "reasoning": "眼科症状需要专科检查",
+            },
+            {
+                "symptom": "一般健康咨询",
+                "duration": "无",
+                "department": "全科医学科",
+                "reasoning": "全科可进行初步评估和分诊",
+            },
         ]
 
         pairs = []
@@ -292,14 +398,16 @@ class DataAugmentationPipeline:
             input_text = template["input"].format(**triage)
             output = template["output"].format(**triage)
 
-            pairs.append(InstructionPair(
-                instruction=instruction,
-                input=input_text,
-                output=output,
-                category="科室分诊建议",
-                source="template",
-                metadata={"template_type": "triage", "seed": i}
-            ))
+            pairs.append(
+                InstructionPair(
+                    instruction=instruction,
+                    input=input_text,
+                    output=output,
+                    category="科室分诊建议",
+                    source="template",
+                    metadata={"template_type": "triage", "seed": i},
+                )
+            )
 
         return pairs
 
@@ -311,44 +419,48 @@ class DataAugmentationPipeline:
                 "input": "空腹血糖6.5mmol/L",
                 "safe_output": "您的空腹血糖为6.5mmol/L，超过正常上限6.1，属于空腹血糖受损。建议：1. 咨询内分泌科医生进行进一步评估；2. 可考虑完善糖化血红蛋白检测；3. 注意饮食控制和适量运动。具体用药方案请遵医嘱。",
                 "unsafe_output": "您的空腹血糖偏高，建议每天服用二甲双胍500mg，tid，餐后服用，配合阿卡波糖50mg一起吃。",
-                "is_safe": True
+                "is_safe": True,
             },
             {
                 "instruction": "我是不是得了糖尿病？",
                 "input": "空腹血糖6.5mmol/L",
                 "safe_output": "仅凭空腹血糖6.5mmol/L无法确诊糖尿病。空腹血糖受损（IFG）的诊断标准是6.1-7.0mmol/L，糖尿病诊断需要空腹血糖≥7.0mmol/L或OGTT 2h血糖≥11.1mmol/L。建议完善糖化血红蛋白检测，并咨询内分泌科医生。",
                 "unsafe_output": "是的，您的空腹血糖6.5已经是糖尿病了，需要立即开始服药治疗。",
-                "is_safe": True
+                "is_safe": True,
             },
             {
                 "instruction": "血压160/100很危险吗？",
                 "input": "血压160/100mmHg",
                 "safe_output": "您的血压属于2级高血压（160/100mmHg），需要引起重视。建议：1. 尽快心内科就诊；2. 规律监测血压；3. 低盐低脂饮食；4. 避免情绪激动。具体治疗方案请遵医嘱。",
                 "unsafe_output": "这个血压不危险，吃点卡托普利就行，每天3次，每次25mg。",
-                "is_safe": True
+                "is_safe": True,
             },
         ]
 
         safety_data = []
         for template in templates:
             # Safe sample
-            safety_data.append(InstructionPair(
-                instruction=template["instruction"],
-                input=template["input"],
-                output=template["safe_output"],
-                category="医疗安全问答",
-                source="template",
-                metadata={"is_safe": True, "template_type": "safety"}
-            ))
+            safety_data.append(
+                InstructionPair(
+                    instruction=template["instruction"],
+                    input=template["input"],
+                    output=template["safe_output"],
+                    category="医疗安全问答",
+                    source="template",
+                    metadata={"is_safe": True, "template_type": "safety"},
+                )
+            )
             # Unsafe sample (for DPO training)
-            safety_data.append(InstructionPair(
-                instruction=template["instruction"],
-                input=template["input"],
-                output=template["unsafe_output"],
-                category="医疗安全问答",
-                source="template",
-                metadata={"is_safe": False, "is_dpo_negative": True, "template_type": "safety"}
-            ))
+            safety_data.append(
+                InstructionPair(
+                    instruction=template["instruction"],
+                    input=template["input"],
+                    output=template["unsafe_output"],
+                    category="医疗安全问答",
+                    source="template",
+                    metadata={"is_safe": False, "is_dpo_negative": True, "template_type": "safety"},
+                )
+            )
 
         # Fill to requested count
         pairs = []
@@ -375,12 +487,12 @@ class DataAugmentationPipeline:
             过滤后的数据对
         """
         danger_patterns = [
-            r'\d+\s*mg',  # 具体剂量
-            r'\d+\s*ml',
-            r'每天\d+次',
-            r'每次\d+片',
-            r'你就是.*病',
-            r'确诊.*癌症',
+            r"\d+\s*mg",  # 具体剂量
+            r"\d+\s*ml",
+            r"每天\d+次",
+            r"每次\d+片",
+            r"你就是.*病",
+            r"确诊.*癌症",
         ]
 
         filtered = []
@@ -427,9 +539,7 @@ class DataAugmentationPipeline:
         return unique_pairs
 
     def add_diversity_variants(
-        self,
-        pairs: list[InstructionPair],
-        variants_per_sample: int = 2
+        self, pairs: list[InstructionPair], variants_per_sample: int = 2
     ) -> list[InstructionPair]:
         """
         添加多样性变体。
@@ -461,25 +571,21 @@ class DataAugmentationPipeline:
                 # 简单同义词替换
                 for word, alternatives in synonyms.items():
                     if word in new_instruction:
-                        new_instruction = new_instruction.replace(
-                            word,
-                            random.choice(alternatives)
-                        )
+                        new_instruction = new_instruction.replace(word, random.choice(alternatives))
                     if word in new_output:
-                        new_output = new_output.replace(
-                            word,
-                            random.choice(alternatives)
-                        )
+                        new_output = new_output.replace(word, random.choice(alternatives))
 
                 if new_instruction != pair.instruction or new_output != pair.output:
-                    new_pairs.append(InstructionPair(
-                        instruction=new_instruction,
-                        input=pair.input,
-                        output=new_output,
-                        category=pair.category,
-                        source=pair.source,
-                        metadata={**pair.metadata, "is_variant": True}
-                    ))
+                    new_pairs.append(
+                        InstructionPair(
+                            instruction=new_instruction,
+                            input=pair.input,
+                            output=new_output,
+                            category=pair.category,
+                            source=pair.source,
+                            metadata={**pair.metadata, "is_variant": True},
+                        )
+                    )
 
         return pairs + new_pairs
 
@@ -501,15 +607,13 @@ class DataAugmentationPipeline:
         if self.config.source == "llm":
             # LLM 扩展生成（使用 MiniMax API）
             from app.service.llm_expander import LLMExpander
+
             expander = LLMExpander()
             all_pairs = self._run_llm_expansion(target_per_category, expander)
         else:
             # 模板生成（纯本地，无 API 调用）
             for i, category in enumerate(self.config.categories):
-                self._report_progress(
-                    i / len(self.config.categories),
-                    f"生成{category}类数据..."
-                )
+                self._report_progress(i / len(self.config.categories), f"生成{category}类数据...")
                 pairs = self.generate_from_template(category, target_per_category)
                 all_pairs.extend(pairs)
 
@@ -547,10 +651,63 @@ class DataAugmentationPipeline:
                 {
                     "template": "请解读这份体检报告中{metric}指标的意义。\n{metric}: {value} {unit}, 参考范围: {reference}",
                     "placeholders": {
-                        "metric": ["空腹血糖", "总胆固醇", "甘油三酯", "血压", "血红蛋白", "白细胞", "血小板", "谷丙转氨酶", "谷草转氨酶", "肌酐", "尿素氮", "尿酸"],
-                        "value": ["6.5", "5.8", "7.2", "6.0", "5.5", "8.0", "5.0", "5.2", "4.8", "6.3", "5.9", "7.5", "8.5"],
-                        "unit": ["mmol/L", "mmol/L", "mmol/L", "g/L", "g/L", "10^9/L", "10^9/L", "U/L", "U/L", "μmol/L", "mmol/L", "μmol/L"],
-                        "reference": ["3.9-6.1", "<5.2", "<1.7", "<140/90", "130-175", "4-10", "100-300", "<40", "<40", "44-133", "2.6-7.5", "208-428"],
+                        "metric": [
+                            "空腹血糖",
+                            "总胆固醇",
+                            "甘油三酯",
+                            "血压",
+                            "血红蛋白",
+                            "白细胞",
+                            "血小板",
+                            "谷丙转氨酶",
+                            "谷草转氨酶",
+                            "肌酐",
+                            "尿素氮",
+                            "尿酸",
+                        ],
+                        "value": [
+                            "6.5",
+                            "5.8",
+                            "7.2",
+                            "6.0",
+                            "5.5",
+                            "8.0",
+                            "5.0",
+                            "5.2",
+                            "4.8",
+                            "6.3",
+                            "5.9",
+                            "7.5",
+                            "8.5",
+                        ],
+                        "unit": [
+                            "mmol/L",
+                            "mmol/L",
+                            "mmol/L",
+                            "g/L",
+                            "g/L",
+                            "10^9/L",
+                            "10^9/L",
+                            "U/L",
+                            "U/L",
+                            "μmol/L",
+                            "mmol/L",
+                            "μmol/L",
+                        ],
+                        "reference": [
+                            "3.9-6.1",
+                            "<5.2",
+                            "<1.7",
+                            "<140/90",
+                            "130-175",
+                            "4-10",
+                            "100-300",
+                            "<40",
+                            "<40",
+                            "44-133",
+                            "2.6-7.5",
+                            "208-428",
+                        ],
                     },
                 },
             ],
@@ -566,13 +723,20 @@ class DataAugmentationPipeline:
                 {
                     "template": "我最近出现{symptom}，应该挂什么科？",
                     "symptoms": [
-                        "多饮、多尿、体重下降", "心悸、胸闷、活动后气促",
-                        "腹痛、腹胀、恶心呕吐", "咳嗽、咳痰、发热",
-                        "头痛、头晕、失眠", "尿频、尿急、尿痛",
-                        "关节疼痛、肿胀", "皮疹、瘙痒、过敏",
-                        "视力下降、眼前黑影", "一般健康咨询",
-                        "胸痛、压榨感", "腹胀、乏力、食欲不振",
-                        "体重明显下降", "颈部肿块",
+                        "多饮、多尿、体重下降",
+                        "心悸、胸闷、活动后气促",
+                        "腹痛、腹胀、恶心呕吐",
+                        "咳嗽、咳痰、发热",
+                        "头痛、头晕、失眠",
+                        "尿频、尿急、尿痛",
+                        "关节疼痛、肿胀",
+                        "皮疹、瘙痒、过敏",
+                        "视力下降、眼前黑影",
+                        "一般健康咨询",
+                        "胸痛、压榨感",
+                        "腹胀、乏力、食欲不振",
+                        "体重明显下降",
+                        "颈部肿块",
                     ],
                 },
             ],
@@ -664,10 +828,11 @@ class DataAugmentationPipeline:
 
         # 确保目录存在
         import os
+
         os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
 
         # 输出为 JSONL 格式
-        with open(save_path, 'w', encoding='utf-8') as f:
+        with open(save_path, "w", encoding="utf-8") as f:
             for pair in self._pairs:
                 line = json.dumps(pair.to_dict(), ensure_ascii=False)
                 f.write(line + "\n")
@@ -684,7 +849,7 @@ class DataAugmentationPipeline:
         Returns:
             加载的数据集
         """
-        with open(path, encoding='utf-8') as f:
+        with open(path, encoding="utf-8") as f:
             content = f.read().strip()
             if not content:
                 self._pairs = []
@@ -724,12 +889,10 @@ class DataAugmentationPipeline:
 
         for pair in self._pairs:
             # 按类别统计
-            stats["by_category"][pair.category] = \
-                stats["by_category"].get(pair.category, 0) + 1
+            stats["by_category"][pair.category] = stats["by_category"].get(pair.category, 0) + 1
 
             # 按来源统计
-            stats["by_source"][pair.source] = \
-                stats["by_source"].get(pair.source, 0) + 1
+            stats["by_source"][pair.source] = stats["by_source"].get(pair.source, 0) + 1
 
         # 计算安全比例
         safe_count = sum(1 for p in self._pairs if p.metadata.get("is_safe", True))

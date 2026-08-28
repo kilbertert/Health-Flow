@@ -92,9 +92,7 @@ class MilvusClient:
         if not (len(report_ids) == len(texts) == len(embeddings)):
             raise ValueError("report_ids、texts 和 embeddings 长度必须一致")
         data = []
-        for index, (report_id, text, embedding) in enumerate(
-            zip(report_ids, texts, embeddings, strict=True)
-        ):
+        for index, (report_id, text, embedding) in enumerate(zip(report_ids, texts, embeddings, strict=True)):
             data.append(
                 {
                     "id": int(report_id),

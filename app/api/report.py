@@ -133,9 +133,7 @@ def _persist_report_files(
     files: list[tuple[int, str, str, bytes]],
     db: Session,
 ) -> None:
-    report_dir = Path(get_settings().REPORT_FILES_DIR).expanduser().resolve() / str(
-        report_id
-    )
+    report_dir = Path(get_settings().REPORT_FILES_DIR).expanduser().resolve() / str(report_id)
     report_dir.mkdir(parents=True, exist_ok=True)
     for file_index, filename, media_type, content in files:
         suffix = Path(filename).suffix.casefold()
@@ -276,9 +274,7 @@ async def upload_report(
             chunks.append(chunk)
         content = b"".join(chunks)
         if not content:
-            raise HTTPException(
-                status_code=400, detail=f"第 {file_index} 个报告文件内容为空"
-            )
+            raise HTTPException(status_code=400, detail=f"第 {file_index} 个报告文件内容为空")
         accepted_files.append((file_index, filename, _media_type(filename), content))
 
     access_token = secrets.token_urlsafe(32)
@@ -364,9 +360,7 @@ def _parse_report(
         ]
         unique_metrics: dict[tuple[object, ...], MetricRecord] = {}
         for item in parsed_metrics:
-            identity = " ".join(
-                (item.evidence_text or item.metric_name).split()
-            ).casefold()
+            identity = " ".join((item.evidence_text or item.metric_name).split()).casefold()
             key = (
                 item.source_file_index,
                 item.page_number,
@@ -388,30 +382,18 @@ def _parse_report(
             ),
         )
         if not parsed_metrics:
-            errors = "; ".join(
-                f"{filename}: {error}"
-                for _, filename, _, error in parsed_reports
-                if error
-            )
+            errors = "; ".join(f"{filename}: {error}" for _, filename, _, error in parsed_reports if error)
             raise ValueError(errors or "未提取到可确认的指标")
 
         with factory() as db:
             report = db.get(ReportModel, report_id)
             if report is None:
                 return False
-            db.query(MetricModel).filter(MetricModel.report_id == report_id).delete(
-                synchronize_session=False
-            )
+            db.query(MetricModel).filter(MetricModel.report_id == report_id).delete(synchronize_session=False)
             report.parsed_content = {
                 "report_type": successful_reports[0][2].report_type,
-                "raw_text": "\n".join(
-                    parsed.raw_text
-                    for _, _, parsed, _ in parsed_reports
-                    if parsed.raw_text
-                ),
-                "page_count": sum(
-                    parsed.page_count for _, _, parsed, _ in parsed_reports
-                ),
+                "raw_text": "\n".join(parsed.raw_text for _, _, parsed, _ in parsed_reports if parsed.raw_text),
+                "page_count": sum(parsed.page_count for _, _, parsed, _ in parsed_reports),
                 "metric_count": len(parsed_metrics),
                 "file_results": [
                     {
@@ -423,16 +405,10 @@ def _parse_report(
                     for file_index, filename, _, error in parsed_reports
                 ],
             }
-            warnings = [
-                f"{filename}: {error}"
-                for _, filename, _, error in parsed_reports
-                if error
-            ]
+            warnings = [f"{filename}: {error}" for _, filename, _, error in parsed_reports if error]
             if warnings:
                 report.parsed_content["warnings"] = warnings
-                report.parsed_content["retryable"] = any(
-                    _retryable_error(warning) for warning in warnings
-                )
+                report.parsed_content["retryable"] = any(_retryable_error(warning) for warning in warnings)
             first_trace = next(
                 (parsed for _, _, parsed, _ in parsed_reports if parsed.run_id),
                 parsed_reports[0][2],
@@ -445,10 +421,7 @@ def _parse_report(
             provider_runs = [
                 run_id
                 for _, _, parsed, _ in parsed_reports
-                for run_id in (
-                    parsed.provider_run_ids
-                    or ((parsed.provider_run_id,) if parsed.provider_run_id else ())
-                )
+                for run_id in (parsed.provider_run_ids or ((parsed.provider_run_id,) if parsed.provider_run_id else ()))
                 if run_id
             ]
             report.provider_run_id = provider_runs[0] if provider_runs else None
@@ -536,9 +509,7 @@ def _report_response(
                 "original_filename": item.original_filename,
                 "media_type": item.media_type,
                 "page_count": item.page_count,
-                "source_url": (
-                    f"/api/health/report/{report.id}/files/{item.file_index}/pages/1"
-                ),
+                "source_url": (f"/api/health/report/{report.id}/files/{item.file_index}/pages/1"),
             }
             for item in sorted(report.files, key=lambda value: value.file_index)
         ],
@@ -632,17 +603,12 @@ async def confirm_report(
             status_code=409,
             detail="报告仍有文件未完成解析，请重新上传或先修复失败文件",
         )
-    if (
-        report.subject_consistency != "same"
-        and confirmation.subject_consistency != "same"
-    ):
+    if report.subject_consistency != "same" and confirmation.subject_consistency != "same":
         raise HTTPException(status_code=422, detail="请先确认所有文件属于同一主体")
     metrics = _ordered_metrics(db, report_id).all()
     by_id = {metric.id: metric for metric in metrics}
     supplied = {item.metric_id: item for item in confirmation.observations}
-    if len(supplied) != len(confirmation.observations) or not set(supplied) <= set(
-        by_id
-    ):
+    if len(supplied) != len(confirmation.observations) or not set(supplied) <= set(by_id):
         raise HTTPException(status_code=422, detail="确认列表包含重复或未知指标")
     try:
         metric_catalog = await fetch_metric_catalog()
@@ -665,37 +631,23 @@ async def confirm_report(
             excluded_ids.append(metric.id)
             continue
         requested_code = (item.metric_code or metric.metric_code or "").strip()
-        code = (
-            requested_code
-            if requested_code in canonical_codes
-            else metric_code_for_name(metric.metric_name or "")
-        )
+        code = requested_code if requested_code in canonical_codes else metric_code_for_name(metric.metric_name or "")
         if item.decision == "corrected":
             if not item.value or not item.unit:
-                raise HTTPException(
-                    status_code=422, detail=f"指标 {metric.id} 的修正值不完整"
-                )
+                raise HTTPException(status_code=422, detail=f"指标 {metric.id} 的修正值不完整")
             try:
                 corrected_value = float(item.value)
             except (TypeError, ValueError) as exc:
-                raise HTTPException(
-                    status_code=422, detail=f"指标 {metric.id} 的修正值必须是单个数字"
-                ) from exc
+                raise HTTPException(status_code=422, detail=f"指标 {metric.id} 的修正值必须是单个数字") from exc
             if not math.isfinite(corrected_value):
-                raise HTTPException(
-                    status_code=422, detail=f"指标 {metric.id} 的修正值无效"
-                )
+                raise HTTPException(status_code=422, detail=f"指标 {metric.id} 的修正值无效")
         if code not in canonical_codes:
             # Confirmed unknown anomalies stay auditable but never cross the
             # evidence boundary; assessment reports them as unmatched.
             metric.metric_code = None
             metric.confirmation_status = item.decision
-            metric.confirmed_value = (
-                item.value if item.decision == "corrected" else metric.metric_value
-            )
-            metric.confirmed_unit = (
-                item.unit if item.decision == "corrected" else metric.unit
-            )
+            metric.confirmed_value = item.value if item.decision == "corrected" else metric.metric_value
+            metric.confirmed_unit = item.unit if item.decision == "corrected" else metric.unit
             metric.confirmed_reference_range = (
                 item.reference_range
                 if item.decision == "corrected" and item.reference_range is not None
@@ -703,18 +655,12 @@ async def confirm_report(
             )
             metric.confirmed_evidence_text = item.evidence_text or metric.evidence_text
             metric.confirmed_at = now
-            (corrected_ids if item.decision == "corrected" else confirmed_ids).append(
-                metric.id
-            )
+            (corrected_ids if item.decision == "corrected" else confirmed_ids).append(metric.id)
             continue
         metric.metric_code = code
         metric.confirmation_status = item.decision
-        metric.confirmed_value = (
-            item.value if item.decision == "corrected" else metric.metric_value
-        )
-        metric.confirmed_unit = (
-            item.unit if item.decision == "corrected" else metric.unit
-        )
+        metric.confirmed_value = item.value if item.decision == "corrected" else metric.metric_value
+        metric.confirmed_unit = item.unit if item.decision == "corrected" else metric.unit
         metric.confirmed_reference_range = (
             item.reference_range
             if item.decision == "corrected" and item.reference_range is not None
@@ -722,13 +668,9 @@ async def confirm_report(
         )
         metric.confirmed_evidence_text = item.evidence_text or metric.evidence_text
         metric.confirmed_at = now
-        (corrected_ids if item.decision == "corrected" else confirmed_ids).append(
-            metric.id
-        )
+        (corrected_ids if item.decision == "corrected" else confirmed_ids).append(metric.id)
     report.status = "confirmed"
-    report.subject_consistency = (
-        confirmation.subject_consistency or report.subject_consistency or "same"
-    )
+    report.subject_consistency = confirmation.subject_consistency or report.subject_consistency or "same"
     report.evidence_result = None
     _audit(
         db,
@@ -781,19 +723,11 @@ async def _assess_report(report: ReportModel, db: Session) -> MedicalReportRespo
     if _processing_warnings(report):
         raise EvidenceBridgeError("报告仍有文件未完成解析")
     metrics = _ordered_metrics(db, report.id).all()
-    observations, local_skipped, local_unmatched = build_observations_with_unmatched(
-        metrics
-    )
-    typed_result = EvidenceMatchResponse.model_validate(
-        await match_published_evidence(observations)
-    )
+    observations, local_skipped, local_unmatched = build_observations_with_unmatched(metrics)
+    typed_result = EvidenceMatchResponse.model_validate(await match_published_evidence(observations))
     source_by_id = {
         observation["observation_id"]: SourceObservation.model_validate(
-            {
-                key: value
-                for key, value in observation.items()
-                if key != "confirmation_status"
-            }
+            {key: value for key, value in observation.items() if key != "confirmation_status"}
         )
         for observation in observations
     }
@@ -802,10 +736,7 @@ async def _assess_report(report: ReportModel, db: Session) -> MedicalReportRespo
             update={
                 "unmatched": [
                     item.model_copy(
-                        update={
-                            "source_observation": item.source_observation
-                            or source_by_id.get(item.observation_id)
-                        }
+                        update={"source_observation": item.source_observation or source_by_id.get(item.observation_id)}
                     )
                     for item in typed_result.unmatched
                 ]
@@ -833,8 +764,7 @@ async def _assess_report(report: ReportModel, db: Session) -> MedicalReportRespo
         finding_count = len(typed_result.findings)
         unmatched_count = len(typed_result.unmatched)
         summary = (
-            f"发现 {finding_count} 个可能相关健康问题；"
-            f"另有 {unmatched_count} 条指标与健康问题关联暂无已审核知识卡。"
+            f"发现 {finding_count} 个可能相关健康问题；另有 {unmatched_count} 条指标与健康问题关联暂无已审核知识卡。"
             if finding_count
             else f"发现 {unmatched_count} 个异常指标，但暂无已审核内容。"
         )
@@ -885,9 +815,7 @@ async def get_report_metrics(
         owner_id=_owner_id(request),
         session_authenticated=account is not None,
     )
-    return [
-        _metric_response(metric) for metric in _ordered_metrics(db, report_id).all()
-    ]
+    return [_metric_response(metric) for metric in _ordered_metrics(db, report_id).all()]
 
 
 @router.get("/metric-catalog", response_model=list[dict[str, str]])
@@ -936,9 +864,7 @@ async def get_report_page(
         import fitz
 
         with fitz.open(path) as document:
-            image = document.load_page(page_number - 1).get_pixmap(
-                matrix=fitz.Matrix(2, 2)
-            )
+            image = document.load_page(page_number - 1).get_pixmap(matrix=fitz.Matrix(2, 2))
             return Response(content=image.tobytes("png"), media_type="image/png")
     except Exception as exc:
         raise HTTPException(status_code=422, detail="报告原文页无法渲染") from exc

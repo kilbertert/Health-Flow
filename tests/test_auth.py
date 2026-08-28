@@ -196,9 +196,7 @@ def test_report_endpoints_require_account_when_enabled(account_client):
     assert client.post("/api/health/report/upload").status_code in {401, 422}
 
 
-def test_upload_uses_account_owner_and_isolated_from_second_account(
-    account_client, tmp_path
-):
+def test_upload_uses_account_owner_and_isolated_from_second_account(account_client, tmp_path):
     client, SessionLocal = account_client
     from app.config import get_settings
 

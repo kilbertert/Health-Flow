@@ -58,12 +58,7 @@ def _session_from_request(db: Session, request: ChatRequest, department: str) ->
 def _history(db: Session, session_id: int, include_history: bool) -> list[dict[str, str]]:
     if not include_history:
         return []
-    messages = (
-        db.query(ChatMessage)
-        .filter(ChatMessage.session_id == session_id)
-        .order_by(ChatMessage.created_at)
-        .all()
-    )
+    messages = db.query(ChatMessage).filter(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at).all()
     return [{"role": item.role, "content": item.content} for item in messages]
 
 
@@ -196,9 +191,7 @@ async def chat_stream(request: ChatRequest, db: Session = Depends(db_dependency)
             )
             db.commit()
 
-            for chunk in (
-                safe_reply[index : index + 80] for index in range(0, len(safe_reply), 80)
-            ):
+            for chunk in (safe_reply[index : index + 80] for index in range(0, len(safe_reply), 80)):
                 yield f"data: {json.dumps({'type': 'delta', 'content': chunk}, ensure_ascii=False)}\n\n"
             payload = {
                 "type": "done",

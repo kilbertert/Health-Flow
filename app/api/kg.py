@@ -3,7 +3,6 @@
 提供知识图谱查询接口。
 """
 
-
 from fastapi import APIRouter, HTTPException, Path, Query
 
 router = APIRouter()
@@ -18,8 +17,7 @@ def _get_neo4j_client():
 
 @router.post("/kg/query")
 def query_knowledge_graph(
-    entity: str = Query(..., description="实体名称"),
-    limit: int = Query(10, description="返回结果数量")
+    entity: str = Query(..., description="实体名称"), limit: int = Query(10, description="返回结果数量")
 ):
     """
     通用知识图谱查询。
@@ -37,19 +35,13 @@ def query_knowledge_graph(
 
     try:
         results = neo4j_client.query_by_entity(entity, limit=limit)
-        return {
-            "entity": entity,
-            "results": results,
-            "count": len(results)
-        }
+        return {"entity": entity, "results": results, "count": len(results)}
     except Exception:
         raise HTTPException(status_code=503, detail="知识图谱服务不可用，请稍后重试") from None
 
 
 @router.get("/kg/symptoms/{disease}")
-def get_disease_symptoms(
-    disease: str = Path(..., description="疾病名称")
-):
+def get_disease_symptoms(disease: str = Path(..., description="疾病名称")):
     """
     查询疾病相关症状。
 
@@ -63,19 +55,13 @@ def get_disease_symptoms(
 
     try:
         symptoms = neo4j_client.get_related_symptoms(disease)
-        return {
-            "disease": disease,
-            "symptoms": symptoms,
-            "count": len(symptoms)
-        }
+        return {"disease": disease, "symptoms": symptoms, "count": len(symptoms)}
     except Exception:
         raise HTTPException(status_code=503, detail="知识图谱服务不可用，请稍后重试") from None
 
 
 @router.get("/kg/drugs/{disease}")
-def get_disease_drugs(
-    disease: str = Path(..., description="疾病名称")
-):
+def get_disease_drugs(disease: str = Path(..., description="疾病名称")):
     """
     查询疾病相关药品。
 
@@ -89,19 +75,13 @@ def get_disease_drugs(
 
     try:
         drugs = neo4j_client.get_related_drugs(disease)
-        return {
-            "disease": disease,
-            "drugs": drugs,
-            "count": len(drugs)
-        }
+        return {"disease": disease, "drugs": drugs, "count": len(drugs)}
     except Exception:
         raise HTTPException(status_code=503, detail="知识图谱服务不可用，请稍后重试") from None
 
 
 @router.get("/kg/examinations/{disease}")
-def get_disease_examinations(
-    disease: str = Path(..., description="疾病名称")
-):
+def get_disease_examinations(disease: str = Path(..., description="疾病名称")):
     """
     查询疾病相关检查项目。
 
@@ -115,19 +95,13 @@ def get_disease_examinations(
 
     try:
         examinations = neo4j_client.get_related_examinations(disease)
-        return {
-            "disease": disease,
-            "examinations": examinations,
-            "count": len(examinations)
-        }
+        return {"disease": disease, "examinations": examinations, "count": len(examinations)}
     except Exception:
         raise HTTPException(status_code=503, detail="知识图谱服务不可用，请稍后重试") from None
 
 
 @router.get("/kg/department/{symptom}")
-def get_symptom_department(
-    symptom: str = Path(..., description="症状名称")
-):
+def get_symptom_department(symptom: str = Path(..., description="症状名称")):
     """
     查询症状所属科室。
 
@@ -141,19 +115,13 @@ def get_symptom_department(
 
     try:
         department = neo4j_client.get_department(symptom)
-        return {
-            "symptom": symptom,
-            "department": department,
-            "source": "knowledge_graph"
-        }
+        return {"symptom": symptom, "department": department, "source": "knowledge_graph"}
     except Exception:
         raise HTTPException(status_code=503, detail="知识图谱服务不可用，请稍后重试") from None
 
 
 @router.post("/kg/diagnosis")
-def find_diagnosis(
-    symptoms: list[str] = Query(..., description="症状列表")
-):
+def find_diagnosis(symptoms: list[str] = Query(..., description="症状列表")):
     """
     根据症状查找可能的疾病。
 
@@ -173,11 +141,7 @@ def find_diagnosis(
 
     try:
         diagnosis_paths = neo4j_client.find_diagnosis_path(symptoms)
-        return {
-            "input_symptoms": symptoms,
-            "possible_diagnoses": diagnosis_paths,
-            "count": len(diagnosis_paths)
-        }
+        return {"input_symptoms": symptoms, "possible_diagnoses": diagnosis_paths, "count": len(diagnosis_paths)}
     except Exception:
         raise HTTPException(status_code=503, detail="知识图谱服务不可用，请稍后重试") from None
 
@@ -194,11 +158,7 @@ def kg_health_check():
 
     try:
         connected = neo4j_client.connect()
-        return {
-            "status": "healthy" if connected else "disconnected",
-            "service": "neo4j",
-            "uri": neo4j_client.uri
-        }
+        return {"status": "healthy" if connected else "disconnected", "service": "neo4j", "uri": neo4j_client.uri}
     except Exception:
         return {
             "status": "error",

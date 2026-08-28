@@ -80,6 +80,7 @@ class TestVLMTuner:
 
         with patch.object(VLMTuner, "_setup_model", fake_setup):
             from app.service.vlm_tuner import VLMTunerConfig
+
             cfg = VLMTunerConfig(use_qlora=True)
             tuner = VLMTuner(cfg)
             tuner._setup_model()
@@ -105,11 +106,13 @@ class TestVLMTuner:
             self._processor = mock_processor
             self._tokenizer = mock_tokenizer
 
-        with patch.object(VLMTuner, "_setup_model", fake_setup), \
-             patch("datasets.load_dataset", return_value=mock_dataset), \
-             patch("transformers.set_seed"), \
-             patch("transformers.TrainingArguments") as mock_ta, \
-             patch("trl.trainer.sft_trainer.SFTTrainer", return_value=mock_trainer_instance):
+        with (
+            patch.object(VLMTuner, "_setup_model", fake_setup),
+            patch("datasets.load_dataset", return_value=mock_dataset),
+            patch("transformers.set_seed"),
+            patch("transformers.TrainingArguments") as mock_ta,
+            patch("trl.trainer.sft_trainer.SFTTrainer", return_value=mock_trainer_instance),
+        ):
             mock_ta.return_value = MagicMock()
             cfg = VLMTunerConfig(use_qlora=False, disable_gradient_checkpointing=True)
             tuner = VLMTuner(cfg)
@@ -193,11 +196,13 @@ class TestSafetyDPOTrainer:
             self._ref_model = mock_model
             self._processor = mock_processor
 
-        with patch.object(SafetyDPOTrainer, "_setup_model", fake_setup), \
-             patch("datasets.load_dataset", return_value=mock_dataset), \
-             patch("transformers.set_seed"), \
-             patch("trl.trainer.dpo_trainer.DPOConfig", return_value=MagicMock()), \
-             patch("trl.trainer.dpo_trainer.DPOTrainer", return_value=mock_trainer_instance):
+        with (
+            patch.object(SafetyDPOTrainer, "_setup_model", fake_setup),
+            patch("datasets.load_dataset", return_value=mock_dataset),
+            patch("transformers.set_seed"),
+            patch("trl.trainer.dpo_trainer.DPOConfig", return_value=MagicMock()),
+            patch("trl.trainer.dpo_trainer.DPOTrainer", return_value=mock_trainer_instance),
+        ):
             trainer = SafetyDPOTrainer()
             stats = trainer.train()
 

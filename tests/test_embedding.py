@@ -14,11 +14,7 @@ def test_embedding_client_init():
 
 def test_embedding_client_custom_params():
     """Test EmbeddingClient with custom parameters."""
-    client = EmbeddingClient(
-        model_name="custom-model",
-        device="cuda",
-        normalize=False
-    )
+    client = EmbeddingClient(model_name="custom-model", device="cuda", normalize=False)
     assert client.model_name == "custom-model"
     assert client.device == "cuda"
     assert client.normalize is False

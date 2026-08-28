@@ -42,7 +42,7 @@ def test_mysql_url_property():
         MYSQL_PORT=3306,
         MYSQL_USER="admin",
         MYSQL_PASSWORD="secret",
-        MYSQL_DATABASE="testdb"
+        MYSQL_DATABASE="testdb",
     )
     expected = "mysql+pymysql://admin:secret@db.example.com:3306/testdb"
     assert settings.mysql_url == expected

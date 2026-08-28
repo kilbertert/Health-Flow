@@ -24,12 +24,7 @@ def test_vllm_client_init():
 
 def test_vllm_client_custom_params():
     """Test vLLMClient with custom parameters."""
-    client = vLLMClient(
-        model="custom-model",
-        api_base="http://custom:8000/v1",
-        temperature=0.5,
-        max_tokens=1024
-    )
+    client = vLLMClient(model="custom-model", api_base="http://custom:8000/v1", temperature=0.5, max_tokens=1024)
     assert client.model == "custom-model"
     assert client.api_base == "http://custom:8000/v1"
     assert client.temperature == 0.5
@@ -68,15 +63,12 @@ def test_responses_api_maps_json_and_image_inputs():
         ],
     }
 
-    with patch("app.model.llm.get_settings", return_value=settings), patch(
-        "app.model.llm.httpx.post", return_value=response
-    ) as post:
+    with (
+        patch("app.model.llm.get_settings", return_value=settings),
+        patch("app.model.llm.httpx.post", return_value=response) as post,
+    ):
         client = VLMClient()
-        assert client.chat_with_json(
-            [{"role": "user", "content": "extract"}], {"type": "object"}
-        ) == {
-            "metrics": []
-        }
+        assert client.chat_with_json([{"role": "user", "content": "extract"}], {"type": "object"}) == {"metrics": []}
         client.chat_with_image(
             [
                 {
@@ -112,18 +104,15 @@ def test_chat_with_image_uses_report_parse_timeout_for_chat_api():
         OPENAI_RESPONSES_URL="",
         REPORT_PARSE_TIMEOUT_SECONDS=180,
     )
-    response = SimpleNamespace(
-        choices=[SimpleNamespace(message=SimpleNamespace(content='{"metrics": []}'))]
-    )
+    response = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{"metrics": []}'))])
     openai_client = MagicMock()
     openai_client.chat.completions.create.return_value = response
 
-    with patch("app.model.llm.get_settings", return_value=settings), patch(
-        "openai.OpenAI", return_value=openai_client
-    ) as openai_factory:
+    with (
+        patch("app.model.llm.get_settings", return_value=settings),
+        patch("openai.OpenAI", return_value=openai_client) as openai_factory,
+    ):
         client = VLMClient()
-        client.chat_with_image(
-            [{"role": "user", "content": [{"type": "text", "text": "extract"}]}]
-        )
+        client.chat_with_image([{"role": "user", "content": [{"type": "text", "text": "extract"}]}])
 
     assert openai_factory.call_args.kwargs["timeout"] == 180

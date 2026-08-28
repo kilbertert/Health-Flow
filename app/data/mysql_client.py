@@ -75,19 +75,10 @@ class MySQLClient:
                 existing = {column["name"] for column in inspector.get_columns(table)}
                 for name, definition in columns.items():
                     if name not in existing:
-                        connection.execute(
-                            text(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
-                        )
-            indexes = {
-                index["name"]
-                for index in inspect(connection).get_indexes("medical_reports")
-            }
+                        connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {definition}"))
+            indexes = {index["name"] for index in inspect(connection).get_indexes("medical_reports")}
             if "ix_medical_reports_owner_id" not in indexes:
-                connection.execute(
-                    text(
-                        "CREATE INDEX ix_medical_reports_owner_id ON medical_reports (owner_id)"
-                    )
-                )
+                connection.execute(text("CREATE INDEX ix_medical_reports_owner_id ON medical_reports (owner_id)"))
             connection.execute(
                 text(
                     "UPDATE medical_reports SET status = 'legacy_unclaimed' "

@@ -28,12 +28,9 @@ _training_tasks = {}
 def update_task_status(task_id: str, status: str, progress: float = 0.0, **kwargs):
     """更新训练任务状态。"""
     if task_id in _training_tasks:
-        _training_tasks[task_id].update({
-            "status": status,
-            "progress": progress,
-            "updated_at": datetime.now().isoformat(),
-            **kwargs
-        })
+        _training_tasks[task_id].update(
+            {"status": status, "progress": progress, "updated_at": datetime.now().isoformat(), **kwargs}
+        )
     else:
         _training_tasks[task_id] = {
             "task_id": task_id,
@@ -41,7 +38,7 @@ def update_task_status(task_id: str, status: str, progress: float = 0.0, **kwarg
             "progress": progress,
             "created_at": datetime.now().isoformat(),
             "updated_at": datetime.now().isoformat(),
-            **kwargs
+            **kwargs,
         }
 
 
@@ -64,12 +61,7 @@ def run_data_augmentation(task_id: str, request: DataAugmentRequest):
         config = AugmentConfig(
             target_size=request.target_size,
             source=request.source,
-            categories=request.categories or [
-                "体检报告解读",
-                "指标异常问询",
-                "科室分诊建议",
-                "医疗安全问答"
-            ]
+            categories=request.categories or ["体检报告解读", "指标异常问询", "科室分诊建议", "医疗安全问答"],
         )
         pipeline = DataAugmentationPipeline(config)
 
@@ -87,11 +79,7 @@ def run_data_augmentation(task_id: str, request: DataAugmentRequest):
         # 获取统计信息
         stats = pipeline.get_stats()
 
-        update_task_status(
-            task_id, "COMPLETED", 1.0,
-            output_path=output_path,
-            stats=stats
-        )
+        update_task_status(task_id, "COMPLETED", 1.0, output_path=output_path, stats=stats)
 
     except Exception as e:
         update_task_status(task_id, "FAILED", 0.0, error=str(e))
@@ -139,13 +127,15 @@ def run_finetune(task_id: str, request: FinetuneRequest):
         model_path = tuner.save_model()
 
         update_task_status(
-            task_id, "COMPLETED", 1.0,
+            task_id,
+            "COMPLETED",
+            1.0,
             model_path=str(model_path),
             stats={
                 "total_samples": stats.total_samples,
                 "trainable_params": stats.trainable_parameters,
-                "total_params": stats.total_parameters
-            }
+                "total_params": stats.total_parameters,
+            },
         )
 
     except Exception as e:
@@ -192,13 +182,15 @@ def run_dpo_training(task_id: str, request: DPORequest):
         model_path = trainer.save_model()
 
         update_task_status(
-            task_id, "COMPLETED", 1.0,
+            task_id,
+            "COMPLETED",
+            1.0,
             model_path=str(model_path),
             stats={
                 "total_pairs": stats.total_pairs,
                 "trainable_params": stats.trainable_parameters,
-                "total_params": stats.total_parameters
-            }
+                "total_params": stats.total_parameters,
+            },
         )
 
     except Exception as e:
@@ -206,10 +198,7 @@ def run_dpo_training(task_id: str, request: DPORequest):
 
 
 @router.post("/augment", response_model=DataAugmentResponse)
-async def trigger_data_augmentation(
-    request: DataAugmentRequest,
-    background_tasks: BackgroundTasks
-):
+async def trigger_data_augmentation(request: DataAugmentRequest, background_tasks: BackgroundTasks):
     """
     触发数据增强任务。
 
@@ -228,12 +217,7 @@ async def trigger_data_augmentation(
     # 添加后台任务
     background_tasks.add_task(run_data_augmentation, task_id, request)
 
-    return DataAugmentResponse(
-        task_id=task_id,
-        status="QUEUED",
-        progress=0.0,
-        output_path=None
-    )
+    return DataAugmentResponse(task_id=task_id, status="QUEUED", progress=0.0, output_path=None)
 
 
 @router.get("/augment/{task_id}", response_model=DataAugmentResponse)
@@ -253,18 +237,12 @@ async def get_augment_status(task_id: str):
     task = _training_tasks[task_id]
 
     return DataAugmentResponse(
-        task_id=task_id,
-        status=task["status"],
-        progress=task["progress"],
-        output_path=task.get("output_path")
+        task_id=task_id, status=task["status"], progress=task["progress"], output_path=task.get("output_path")
     )
 
 
 @router.post("/finetune", response_model=FinetuneResponse)
-async def trigger_finetune(
-    request: FinetuneRequest,
-    background_tasks: BackgroundTasks
-):
+async def trigger_finetune(request: FinetuneRequest, background_tasks: BackgroundTasks):
     """
     触发模型微调任务。
 
@@ -283,12 +261,7 @@ async def trigger_finetune(
     # 添加后台任务
     background_tasks.add_task(run_finetune, task_id, request)
 
-    return FinetuneResponse(
-        task_id=task_id,
-        status="QUEUED",
-        progress=0.0,
-        model_path=None
-    )
+    return FinetuneResponse(task_id=task_id, status="QUEUED", progress=0.0, model_path=None)
 
 
 @router.get("/finetune/{task_id}", response_model=FinetuneResponse)
@@ -308,18 +281,12 @@ async def get_finetune_status(task_id: str):
     task = _training_tasks[task_id]
 
     return FinetuneResponse(
-        task_id=task_id,
-        status=task["status"],
-        progress=task["progress"],
-        model_path=task.get("model_path")
+        task_id=task_id, status=task["status"], progress=task["progress"], model_path=task.get("model_path")
     )
 
 
 @router.post("/dpo", response_model=DPOResponse)
-async def trigger_dpo(
-    request: DPORequest,
-    background_tasks: BackgroundTasks
-):
+async def trigger_dpo(request: DPORequest, background_tasks: BackgroundTasks):
     """
     触发DPO训练任务。
 
@@ -338,12 +305,7 @@ async def trigger_dpo(
     # 添加后台任务
     background_tasks.add_task(run_dpo_training, task_id, request)
 
-    return DPOResponse(
-        task_id=task_id,
-        status="QUEUED",
-        progress=0.0,
-        model_path=None
-    )
+    return DPOResponse(task_id=task_id, status="QUEUED", progress=0.0, model_path=None)
 
 
 @router.get("/dpo/{task_id}", response_model=DPOResponse)
@@ -363,10 +325,7 @@ async def get_dpo_status(task_id: str):
     task = _training_tasks[task_id]
 
     return DPOResponse(
-        task_id=task_id,
-        status=task["status"],
-        progress=task["progress"],
-        model_path=task.get("model_path")
+        task_id=task_id, status=task["status"], progress=task["progress"], model_path=task.get("model_path")
     )
 
 
@@ -378,10 +337,7 @@ async def list_tasks():
     Returns:
         任务列表
     """
-    return {
-        "tasks": list(_training_tasks.values()),
-        "count": len(_training_tasks)
-    }
+    return {"tasks": list(_training_tasks.values()), "count": len(_training_tasks)}
 
 
 @router.delete("/task/{task_id}")

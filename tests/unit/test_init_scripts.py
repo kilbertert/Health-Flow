@@ -62,11 +62,13 @@ class TestInitMilvus:
 
         mock_client = MagicMock()
 
-        with patch("pymilvus.MilvusClient", return_value=mock_client), \
-             patch("pymilvus.connections"), \
-             patch("scripts.init_milvus.create_medical_kb_collection") as mock_kb, \
-             patch("scripts.init_milvus.create_medical_entities_collection") as mock_entities, \
-             patch("scripts.init_milvus.create_reports_collection") as mock_reports:
+        with (
+            patch("pymilvus.MilvusClient", return_value=mock_client),
+            patch("pymilvus.connections"),
+            patch("scripts.init_milvus.create_medical_kb_collection") as mock_kb,
+            patch("scripts.init_milvus.create_medical_entities_collection") as mock_entities,
+            patch("scripts.init_milvus.create_reports_collection") as mock_reports,
+        ):
             init_milvus()
 
         mock_kb.assert_called_once_with(mock_client)
@@ -117,9 +119,7 @@ class TestInitNeo4j:
     @patch("scripts.init_neo4j.create_indexes")
     @patch("scripts.init_neo4j.create_constraints")
     @patch("neo4j.GraphDatabase")
-    def test_init_neo4j_full_flow(
-        self, mock_gdb_cls, mock_constraints, mock_indexes, mock_ontology
-    ) -> None:
+    def test_init_neo4j_full_flow(self, mock_gdb_cls, mock_constraints, mock_indexes, mock_ontology) -> None:
         from scripts.init_neo4j import init_neo4j
 
         mock_driver = MagicMock()
