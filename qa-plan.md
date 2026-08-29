@@ -67,13 +67,13 @@
 - 预期：使用当前 main，通过 controller/candidate/delivery 隔离完成审核且没有 blocked 标签。
 - 清理：关闭一次性 PR，删除临时分支和标签。
 
-AFK-B10：已通过，时间 `2026-08-30T03:09:18+08:00`，提交
-`ab83676bd9b537762dd127bffc9a7929bb35aa98`，Linux x86_64，Python
+AFK-B10：已通过，时间 `2026-08-30T03:31:15+08:00`，提交
+`de499d8d10b80fba7318a99c18b08fa68820b0b1`，Linux x86_64，Python
 3.13.13、Node v24.15.0、actionlint 1.7.12、ShellCheck 0.11.0。证据：`uv
 run pytest`（143 passed, 1 skipped）、`uv run ruff check .`、policy checker、
 actionlint、ShellCheck、`git diff --check` 全部通过；受管文件与模板逐字节一致。
 
-AFK-B11：已通过，复用模板提交 `7973f255059c4e71de67ae9375bc0fb28b584824` 的
+AFK-B11：已通过，复用模板提交 `84e9537c661f676f68951eb3e7480472b91ff728` 的
 `bash test/trusted-pr-delivery.sh`，覆盖 stale main、bundle 提交保留和远端竞态拒绝。
 
 AFK-B12：待模板合并后在 HealthFlow 在线 self-hosted runner 执行 owner-authored
