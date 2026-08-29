@@ -14,10 +14,6 @@ RUN apt-get update \
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh \
   && rm -rf /root/.cache
 
-# Playwright chromium + its OS deps for the frontend E2E suite.
-RUN PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright npx --yes playwright@1.62.1 install --with-deps chromium \
-  && rm -rf /var/lib/apt/lists/*
-
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
   | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
   && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
@@ -28,8 +24,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 
 RUN groupmod -o -g ${AGENT_GID} node \
   && usermod -o -u ${AGENT_UID} -g ${AGENT_GID} -d /home/agent -m -l agent node \
-  && mkdir -p /home/agent/.codex && chown -R ${AGENT_UID}:${AGENT_GID} /home/agent/.codex \
-  && mkdir -p /opt/ms-playwright && chown -R ${AGENT_UID}:${AGENT_GID} /opt/ms-playwright
+  && mkdir -p /home/agent/.codex && chown -R ${AGENT_UID}:${AGENT_GID} /home/agent/.codex
 
 RUN npm install --global @anthropic-ai/claude-code \
   && npm install --global @openai/codex@0.146.1 \
@@ -45,13 +40,6 @@ RUN npm install --global @anthropic-ai/claude-code \
   && chmod 755 /usr/local/bin/claude \
   && npm cache clean --force
 
-# code-review skill (two-axis Standards/Spec review via parallel sub-agents),
-# used by the review prompts. Source lives in .sandcastle/skills/code-review.
-COPY skills/code-review /opt/code-review
-RUN mkdir -p /home/agent/.claude/skills && cp -r /opt/code-review /home/agent/.claude/skills/code-review \
-  && chown -R ${AGENT_UID}:${AGENT_GID} /home/agent/.claude
-
 USER ${AGENT_UID}:${AGENT_GID}
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 WORKDIR /home/agent
 ENTRYPOINT ["sleep", "infinity"]
