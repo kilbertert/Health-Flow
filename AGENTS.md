@@ -1,18 +1,8 @@
-# Claude Code
+# Health-Flow agent instructions
 
-## Agent skills
-
-### Issue tracker
-
-Issues and specs live in GitHub Issues, managed with the `gh` CLI. See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-The five canonical triage roles use the default label strings. See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+Read the project-specific `CLAUDE.md`, `CONTEXT.md`, `docs/`, and applicable
+ADRs before changing code. Keep user-visible health language within the
+project's domain glossary and run the documented Python checks.
 
 <!-- afk-bootstrap:managed:start -->
 ## AFK workflow gate
