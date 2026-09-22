@@ -1,0 +1,26 @@
+[Unit]
+Description=HealthFlow Personal Report Application
+After=network-online.target genesis-evidence-portal.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=health-flow
+Group=health-flow
+WorkingDirectory=/opt/health-flow
+EnvironmentFile=/opt/health-flow/var/health-flow.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/health-flow/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 10007
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# ReadWritePaths must include data/: the application creates a relative data/
+# directory at startup whenever the database URL is SQLite, regardless of the
+# absolute path DATABASE_URL points at.
+ReadWritePaths=/opt/health-flow/var /opt/health-flow/data /var/log/health-flow
+
+[Install]
+WantedBy=multi-user.target
