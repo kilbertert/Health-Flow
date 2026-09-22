@@ -1,0 +1,23 @@
+[Unit]
+Description=HealthFlow Durable Report Extraction Worker
+After=network-online.target health-flow.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=health-flow
+Group=health-flow
+WorkingDirectory=/opt/health-flow
+EnvironmentFile=/opt/health-flow/var/health-flow.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/health-flow/.venv/bin/python -m app.service.report_worker
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/health-flow/var /var/log/health-flow
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,42 @@
+# health-flow 可访问主机声明
+#
+# 本文件是"项目侧"声明,由 dev-host 读取。与之配对的"主机侧"清单在
+# `~/.config/dev-host/hosts.toml`(库外 600),那里记角色、信任平面、
+# 归属、访问方式与主机公钥。
+#
+# 为什么分成两半:本文件进仓库、可被评审,所以**只写逻辑名与路径**;
+# 地址、指纹、凭据一律留在库外。这样本文件可以安全地进公开仓库。
+# 地址由 `ssh -G <alias>` 从 `~/.ssh/config` 解析,不在这里制造第二个真值来源。
+#
+# 用法:
+#   cd <repo> && dev-host show 36
+#   dev-host read 36 /opt/health-flow/var/health-flow.env
+#   dev-host exec 36 --allow-service-exec -- systemctl is-active health-flow
+#
+# 注意:36 是服务类主机,写入需要产物身份(`--artifact-sha256`),
+# `exec` 需要显式 `--allow-service-exec`;只读用 read/ls/find,不受限。
+# 执行前会断言主机公钥指纹,不符则**中止**。
+
+[[targets]]
+name        = "36"
+host        = "yidong-36"
+description = "移动云服务宿主。health-flow 迁移目标(见 #143/#145)。该机同时承载公司既有服务,以及同一宿主上的 genesis-evidence 证据服务;迁移只新增、不改动它们"
+
+[targets.paths]
+app      = "/opt/health-flow"
+logs     = "/var/log/health-flow"
+ops      = "/opt/health-flow/ops"
+var      = "/opt/health-flow/var"
+data     = "/opt/health-flow/data"
+frontend = "/opt/health-flow/frontend"
+backups  = "/var/backups/health-flow"
+
+# 备注(不进目标解析,给人看):
+#
+# - `data/` 与 `var/` **是两个目录**,不是笔误:代码在数据库为 SQLite 时会在
+#   工作目录下创建相对路径 `data/`,`ProtectSystem=strict` 下该目录必须可写,
+#   否则 unit 会崩溃重启。`var/` 是本项目的约定,`data/` 是代码的要求。
+# - health-flow 有**自己的**服务身份,与同机 genesis-evidence 的身份不是同一个,
+#   两者不共享任何组 —— 因此谁都读不到对方的凭据文件。这是刻意的。
+# - 只读探测(健康端点、监听、日志)不需要产物身份;任何写入都需要。
+# - 该机上**公司既有服务**与**另一个项目**都不在本项目射程内,既不读也不动。
