@@ -46,10 +46,25 @@ and is listed in `ReadWritePaths`. It is a separate path from `var/` because
 4. Extract the frontend bundle into `frontend/`, then re-own the tree.
 5. Install the wheel into the project virtualenv.
 6. Write `var/health-flow.env` from `examples/`, mode `640`, owned by the
-   identity. The evidence API key must **match** the evidence service's; read it
-   from that service's own file as root and pass it in, because the identity
-   cannot read the other project's secrets — by design.
-7. Install the units and `systemctl enable --now health-flow`.
+   identity. Two settings need care:
+
+   - The evidence API key must **match** the evidence service's; read it from
+     that service's own file as root and pass it in, because this identity
+     cannot read the other project's secrets — by design.
+   - `APP_ENV` stays `development` because `production` would make the
+     application select MySQL instead of the SQLite tenant. That means the two
+     settings normally inferred from `APP_ENV` must be set explicitly:
+     `REPORT_ACCOUNT_REQUIRED=true` and `AUTH_COOKIE_SECURE=true`. Omitting the
+     latter leaves session cookies without `Secure`, so a user's session token
+     could cross plaintext HTTP at any route in front of the app.
+
+   `OPENAI_API_KEY` (or `VLLM_API_KEY`) must be present for the report worker to
+   do anything. Without it the service still starts and accepts uploads, and
+   `/ready` reports `report_provider: unconfigured` — a configuration gap that
+   is invisible until the worker is enabled.
+
+7. Install the units and `systemctl enable --now health-flow`. Confirm
+   `/ready` reports `report_provider: configured` and `account_auth: required`.
 
 The report worker is installed but **left disabled**: report extraction stays
 paused under the same single-topic low-speed acceptance that the development
@@ -63,14 +78,21 @@ It is not built at deploy time on the target.
 
 ## Verification
 
-Two probes, both run as the service identity:
+Three probes, all run as the service identity, all exiting nonzero on mismatch:
 
-- `upload-probe.sh` — asserts the account boundary and the upload contract:
-  registration yields a session, a protected route is reachable with it, and an
-  upload returns `202 processing`. It exits nonzero on mismatch.
+- `upload-probe.sh` — asserts a protected route and the upload endpoint are
+  **refused without a session** (the negative case), that registration yields a
+  usable session, that the session cookie carries `Secure` and `HttpOnly`, and
+  that an upload returns `202 processing`.
+- `cookie-probe.sh` — asserts the session cookie's hardening attributes on their
+  own, printing attribute names only and never the token value.
 - `bridge-probe.py` — calls the same function the report API calls to reach the
   evidence service, so it proves the real cross-service path (configuration,
   key, loopback edge, response contract) rather than a synthetic request.
+
+A probe that cannot fail is not a verification. Each of these asserts against an
+expected value; the negative cases exist so that a deployment which let
+anonymous callers through would be caught rather than reported as healthy.
 
 To confirm the queue is durable rather than in-process, check that a job row is
 written while the worker is stopped: the report should sit at `processing` with
