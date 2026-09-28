@@ -17,6 +17,14 @@ The typed subject is deliberately *wider* than the stored column: ``owner_id``
 keeps holding a bare string for backward compatibility (no migration), while the
 subject carries which kind of identity it is, so audit rows and future callers
 stop guessing from the string's shape.
+
+**Audit rows written before this module keep their original vocabulary.** They
+are evidence of what happened, and rewriting an audit trail into a newer naming
+convention would edit the record rather than describe it; that is a separate,
+deliberate decision and not one this refactor should make in passing. So the
+column holds two conventions, separated in time: bare identifiers before, typed
+subjects after. A reader that needs to be certain which it has should use the
+row's timestamp, not the string's shape.
 """
 
 from __future__ import annotations
@@ -83,13 +91,14 @@ def resolve_owner(request: Request) -> ReportOwner:
     account_id = getattr(request.state, "account_id", None)
     if account_id:
         return ReportOwner(OwnerKind.ACCOUNT, str(account_id))
-    # Deliberately NOT stripped.  The value is compared against `owner_id` in
-    # stored rows with `hmac.compare_digest`, so normalising it here would stop
-    # matching every report that operator already owns.  A configured operator
-    # whose name carries surrounding whitespace is a configuration question, not
-    # a reason to silently strand their reports.
+    # The *value* is never normalised: it is compared against `owner_id` in
+    # stored rows with `hmac.compare_digest`, so stripping it would stop matching
+    # every report that operator already owns.  Only the emptiness *test* ignores
+    # surrounding whitespace, matching how the middleware already decides whether
+    # an operator is configured at all (`HEALTHFLOW_BASIC_USER.strip()`), so a
+    # whitespace-only name cannot become an owner literally named " ".
     operator = str(getattr(request.state, "owner_id", "") or "")
-    if operator and operator != UNOWNED_SENTINEL:
+    if operator.strip() and operator != UNOWNED_SENTINEL:
         return ReportOwner(OwnerKind.OPERATOR, operator)
     return ReportOwner(OwnerKind.UNOWNED, UNOWNED_SENTINEL)
 

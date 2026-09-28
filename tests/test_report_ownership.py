@@ -76,15 +76,16 @@ def test_operator_identity_is_not_normalised() -> None:
     assert owner.storage_id == "  ops user  "
 
 
-def test_whitespace_operator_is_an_identity_too() -> None:
-    """Whitespace is a name like any other here — normalising it is what breaks.
+def test_whitespace_only_owner_is_unowned_not_a_named_identity() -> None:
+    """A name that is nothing but spaces is the absence of an owner.
 
-    The mid-session default is the empty string, and that is what falls through
-    to unowned; a *spaced* name came from configuration and is matched verbatim
-    against stored rows.
+    The middleware only sets an operator when one is configured, and it tests
+    that with `.strip()` — so a whitespace-only value cannot arrive as a real
+    configured name, and treating it as one would mint an owner literally
+    called " ".
     """
 
-    assert resolve_owner(_Request(owner_id="   ")).kind is OwnerKind.OPERATOR
+    assert resolve_owner(_Request(owner_id="   ")).kind is OwnerKind.UNOWNED
     assert resolve_owner(_Request(owner_id="")).kind is OwnerKind.UNOWNED
 
 
