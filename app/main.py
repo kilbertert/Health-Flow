@@ -15,6 +15,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import get_settings
 from app.data.mysql_client import get_mysql_client
+from app.service.report_ownership import UNOWNED_SENTINEL, report_owner_kind
 
 
 @asynccontextmanager
@@ -62,8 +63,7 @@ def _valid_basic_auth(authorization: str, username: str, password: str) -> bool:
 async def basic_auth(request: Request, call_next):
     settings = get_settings()
     auth_configured = bool(settings.HEALTHFLOW_BASIC_USER.strip() and settings.HEALTHFLOW_BASIC_PASSWORD.strip())
-    request.state.owner_id = "anonymous"
-    request.state.basic_authenticated = False
+    request.state.owner_id = UNOWNED_SENTINEL
     auth_required = bool(settings.basic_auth_enabled and auth_configured)
     if (
         request.url.path not in {"/health", "/ready"}
@@ -81,7 +81,6 @@ async def basic_auth(request: Request, call_next):
         )
     if auth_required:
         request.state.owner_id = settings.HEALTHFLOW_BASIC_USER
-        request.state.basic_authenticated = True
     return await call_next(request)
 
 
@@ -121,8 +120,9 @@ async def readiness_check():
         and settings.HEALTHFLOW_BASIC_USER.strip()
         and settings.HEALTHFLOW_BASIC_PASSWORD.strip()
     )
-    report_owner = (
-        "account" if settings.report_account_required else "configured" if basic_auth_configured else "unconfigured"
+    report_owner = report_owner_kind(
+        account_required=settings.report_account_required,
+        operator_configured=basic_auth_configured,
     )
     return {
         "status": "ready" if db_ok and evidence_configured and provider_configured else "degraded",
