@@ -66,6 +66,34 @@ and is listed in `ReadWritePaths`. It is a separate path from `var/` because
 7. Install the units and `systemctl enable --now health-flow`. Confirm
    `/ready` reports `report_provider: configured` and `account_auth: required`.
 
+### Before deploying a revision that changes the evidence contract
+
+The bundled migration ships in the wheel as `health-flow-migrate-evidence`. Run it
+**before** switching the service to the new revision, because the new revision's
+response model is strict (`extra="forbid"`) and rejects the retired fields still
+stored in `medical_reports.evidence_result` — until it runs, those reports return
+an error instead of opening.
+
+```bash
+# Run as the service identity. A login shell does NOT inherit the unit's
+# EnvironmentFile, so load it explicitly — without DATABASE_URL the command would
+# silently target the default `./data/healthflow.db` instead of the live tenant.
+set -a; . /opt/health-flow/var/health-flow.env; set +a
+cd /opt/health-flow
+
+/opt/health-flow/.venv/bin/health-flow-migrate-evidence --dry-run
+# SQLite tenant: back up first
+cp /opt/health-flow/var/healthflow.db /opt/health-flow/var/healthflow.db.bak-$(date +%Y%m%d%H%M%S)
+/opt/health-flow/.venv/bin/health-flow-migrate-evidence
+```
+
+The executable lives in the project virtualenv (`/opt/health-flow/.venv/bin`), the
+same one the units use — the printed line starts with the resolved `database=` so a
+wrong target is visible before any write.
+
+It is idempotent — a second run reports `changed=0`. It never deletes a report and
+leaves payloads it cannot parse untouched, reporting them instead.
+
 The report worker is installed but **left disabled**: report extraction stays
 paused under the same single-topic low-speed acceptance that the development
 host is under. Uploading still works; jobs queue durably until the worker runs.

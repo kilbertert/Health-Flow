@@ -56,7 +56,6 @@ def test_evidence_v2_capability_fields_are_parsed_in_nested_response():
                     "content_layer": "context_only",
                     "action_status": "not_available",
                     "action_message": "当前证据确定性尚未达到具体行动建议门槛。",
-                    "product_status": "not_implemented",
                 },
                 "source_observation_ids": ["observation-1"],
                 "urgency": "routine",
@@ -78,7 +77,6 @@ def test_evidence_v2_capability_fields_are_parsed_in_nested_response():
                 "content_layer": "context_only",
                 "action_status": "not_available",
                 "action_message": "当前证据确定性尚未达到具体行动建议门槛。",
-                "product_status": "not_implemented",
             }
         ],
         "unmatched": [],
@@ -116,7 +114,6 @@ def test_evidence_v2_capability_fields_are_parsed_in_nested_response():
                     "content_layer": "context_only",
                     "action_status": "not_available",
                     "action_message": "当前证据确定性尚未达到具体行动建议门槛。",
-                    "product_status": "not_implemented",
                 }
             ],
             "unmatched_count": 0,
@@ -129,7 +126,6 @@ def test_evidence_v2_capability_fields_are_parsed_in_nested_response():
     assert finding.card.content_layer == "context_only"
     assert finding.action_status == "not_available"
     assert finding.card.action_message.startswith("当前证据")
-    assert result.patient_reply.findings[0].product_status == "not_implemented"
 
 
 def test_evidence_v3_groups_metric_items_under_one_condition():
@@ -156,7 +152,6 @@ def test_evidence_v3_groups_metric_items_under_one_condition():
         "content_layer": "context_only",
         "action_status": "not_available",
         "action_message": "当前证据确定性尚未达到具体行动建议门槛。",
-        "product_status": "not_implemented",
     }
     source = {
         "observation_id": "observation-ldl",
@@ -205,23 +200,6 @@ def test_evidence_v3_groups_metric_items_under_one_condition():
         "content_layer": "context_only",
         "action_status": "not_available",
         "action_message": "当前证据确定性尚未达到具体行动建议门槛。",
-        "product_status": "available",
-        "recommendations": [
-            {
-                "recommendation_id": "recommendation-1",
-                "product_id": "product-1",
-                "product_name": "郅臻堂®植物甾醇咀嚼片",
-                "nutrient": "植物甾醇",
-                "image_url": "/products/zhizhen-plant-sterol.png",
-                "reason": "可作为血脂相关营养管理的一种膳食补充方向考虑。",
-                "safety_message": "请结合个人情况咨询专业人士。",
-                "disclaimer": "本建议为健康管理参考，不构成医疗或用药指令。",
-                "evidence_links": ["classification:test.xlsx#血脂管理"],
-                "evidence_strength": "low",
-                "priority": 10,
-            }
-        ],
-        "recommendation_message": "以下为可考虑的健康管理建议",
     }
     patient_finding = {
         key: value
@@ -255,9 +233,6 @@ def test_evidence_v3_groups_metric_items_under_one_condition():
     assert result.findings[0].card is None
     assert result.findings[0].evidence_items[0].card.scope_key == "metric:ldl_c"
     assert result.patient_reply.findings[0].evidence_items[0].metric_code == "ldl_c"
-    assert result.findings[0].recommendations[0].product_id == "product-1"
-    assert result.findings[0].recommendations[0].image_url == "/products/zhizhen-plant-sterol.png"
-    assert result.findings[0].recommendation_message == "以下为可考虑的健康管理建议"
 
 
 def test_chat_request_validation():

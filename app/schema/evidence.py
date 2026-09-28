@@ -56,20 +56,6 @@ class ClaimSource(StrictModel):
     locator: str
 
 
-class ProductRecommendation(StrictModel):
-    recommendation_id: str = Field(min_length=1)
-    product_id: str = Field(min_length=1)
-    product_name: str = Field(min_length=1)
-    nutrient: str = Field(min_length=1)
-    reason: str = Field(min_length=1)
-    safety_message: str = Field(min_length=1)
-    disclaimer: str = Field(min_length=1)
-    image_url: str | None = Field(default=None, pattern=r"^/products/[A-Za-z0-9_-]+\.png$")
-    evidence_links: list[str] = Field(min_length=1)
-    evidence_strength: Literal["high", "moderate", "low", "very_low", "mixed"]
-    priority: int = Field(ge=0)
-
-
 class PublishedCard(StrictModel):
     id: str
     condition_code: str
@@ -81,12 +67,10 @@ class PublishedCard(StrictModel):
     evidence_profile_id: str
     patient_visible_body: str
     sources: list[ClaimSource] = Field(min_length=1)
-    # Evidence API v2 exposes capability metadata for the next product layer.
     # Defaults keep older test fixtures and cached responses readable.
     content_layer: Literal["context_only"] = "context_only"
     action_status: Literal["not_available"] = "not_available"
     action_message: str = ""
-    product_status: Literal["not_implemented", "available"] = "not_implemented"
 
 
 class EvidenceItem(StrictModel):
@@ -134,9 +118,6 @@ class Finding(StrictModel):
     content_layer: Literal["context_only"] = "context_only"
     action_status: Literal["not_available"] = "not_available"
     action_message: str = ""
-    product_status: Literal["not_implemented", "available"] = "not_implemented"
-    recommendations: list[ProductRecommendation] = Field(default_factory=list)
-    recommendation_message: str = "暂无推荐"
 
     @model_validator(mode="after")
     def require_metric_evidence_for_v3(self) -> "Finding":
@@ -194,9 +175,6 @@ class PatientFinding(StrictModel):
     content_layer: Literal["context_only"] = "context_only"
     action_status: Literal["not_available"] = "not_available"
     action_message: str = ""
-    product_status: Literal["not_implemented", "available"] = "not_implemented"
-    recommendations: list[ProductRecommendation] = Field(default_factory=list)
-    recommendation_message: str = "暂无推荐"
     evidence_items: list[EvidenceItem] = Field(default_factory=list)
 
     @model_validator(mode="after")
