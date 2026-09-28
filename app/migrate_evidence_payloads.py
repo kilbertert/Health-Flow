@@ -16,14 +16,17 @@ genesis-evidence 的 ADR 0006 把商品权威移到商城，证据响应不再�
 用法::
 
     # 预演：只报告将要改动什么（读配置里的 DATABASE_URL）
-    python scripts/migrate_evidence_payloads.py --dry-run
+    health-flow-migrate-evidence --dry-run
 
     # SQLite 部署先备份，再执行
     cp /opt/health-flow/var/healthflow.db /opt/health-flow/var/healthflow.db.bak-$(date +%Y%m%d%H%M%S)
-    python scripts/migrate_evidence_payloads.py
+    health-flow-migrate-evidence
 
     # 显式指定另一个库
-    python scripts/migrate_evidence_payloads.py --database sqlite:////tmp/copy.db --dry-run
+    health-flow-migrate-evidence --database sqlite:////tmp/copy.db --dry-run
+
+以 console script 形式分发（``pyproject.toml`` 的 ``[project.scripts]``），因此它随
+wheel 一起到达服务主机——服务主机只安装 wheel，不安装源码检出。
 
 退出码：0 = 无需改动或已成功；1 = 存在无法迁移的记录；2 = 用法错误。
 
@@ -41,15 +44,12 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from pathlib import Path
 
-repo_root = Path(__file__).resolve().parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import make_url
+from sqlalchemy.orm import Session
 
-from sqlalchemy import create_engine, text  # noqa: E402
-from sqlalchemy.engine import make_url  # noqa: E402
-from sqlalchemy.orm import Session  # noqa: E402
+from app.config import get_settings
 
 RETIRED_FIELDS = frozenset({"recommendations", "recommendation_message", "product_status"})
 
@@ -88,8 +88,6 @@ def _resolve_url(database: str | None) -> str:
 
     if database:
         return database
-    from app.config import get_settings
-
     return get_settings().database_url
 
 
@@ -123,13 +121,17 @@ def main(argv: list[str] | None = None) -> int:
             total_removed = 0
 
             for report_id, raw in rows:
+                # A JSON null (or any non-object) is an unassessed report, not a
+                # broken one: there is nothing to strip, so it is skipped rather
+                # than reported as malformed and failing the whole run.
+                if raw is None:
+                    continue
                 try:
                     payload = json.loads(raw) if not isinstance(raw, dict) else raw
                 except (TypeError, ValueError):
                     malformed.append(report_id)
                     continue
                 if not isinstance(payload, dict):
-                    malformed.append(report_id)
                     continue
                 payload, removed = migrate_payload(payload)
                 if removed == 0:

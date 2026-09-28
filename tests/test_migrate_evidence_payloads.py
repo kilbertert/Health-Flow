@@ -11,7 +11,7 @@ repo_root = Path(__file__).resolve().parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from scripts.migrate_evidence_payloads import main, migrate_payload  # noqa: E402
+from app.migrate_evidence_payloads import main, migrate_payload  # noqa: E402
 
 LEGACY_PAYLOAD = {
     "schema_version": "3",
@@ -145,6 +145,18 @@ def test_migration_rewrites_legacy_and_leaves_clean_rows_alone(tmp_path) -> None
     # second run is a no-op
     assert main(["--database", _url(database)]) == 0
     assert _read(database, 1) == migrated
+
+
+def test_json_null_payload_is_skipped_not_reported_malformed(tmp_path, capsys) -> None:
+    """An unassessed report stores JSON null; that is not a broken payload."""
+
+    database = tmp_path / "healthflow.db"
+    _seed(database, {1: "null", 2: json.dumps(LEGACY_PAYLOAD)})
+
+    assert main(["--database", _url(database)]) == 0
+    assert "cannot parse" not in capsys.readouterr().err
+    assert _read(database, 1) is None
+    assert "product_status" not in json.dumps(_read(database, 2))
 
 
 def test_malformed_payload_is_reported_and_left_intact(tmp_path, capsys) -> None:

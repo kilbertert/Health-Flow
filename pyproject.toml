@@ -58,6 +58,9 @@ dev = [
     "ruff>=0.1.0",
 ]
 
+[project.scripts]
+health-flow-migrate-evidence = "app.migrate_evidence_payloads:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
