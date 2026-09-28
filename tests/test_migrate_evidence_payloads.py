@@ -159,6 +159,16 @@ def test_json_null_payload_is_skipped_not_reported_malformed(tmp_path, capsys) -
     assert "product_status" not in json.dumps(_read(database, 2))
 
 
+def test_non_object_payload_is_reported_malformed(tmp_path, capsys) -> None:
+    """A JSON array does not satisfy the response model, so it must be surfaced."""
+
+    database = tmp_path / "healthflow.db"
+    _seed(database, {1: "[1, 2, 3]"})
+
+    assert main(["--database", _url(database)]) == 1
+    assert "cannot parse" in capsys.readouterr().err
+
+
 def test_malformed_payload_is_reported_and_left_intact(tmp_path, capsys) -> None:
     database = tmp_path / "healthflow.db"
     _seed(database, {1: "{not json"})

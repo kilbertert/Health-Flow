@@ -121,10 +121,11 @@ def main(argv: list[str] | None = None) -> int:
             total_removed = 0
 
             for report_id, raw in rows:
-                # A JSON null (or any non-object) is an unassessed report, not a
-                # broken one: there is nothing to strip, so it is skipped rather
-                # than reported as malformed and failing the whole run.
-                if raw is None:
+                # A JSON null is an unassessed report: nothing to strip, and the
+                # response model accepts null, so it is skipped rather than
+                # reported. Anything else that is not an object does NOT satisfy
+                # the response model — reporting it would otherwise be silent.
+                if raw is None or (isinstance(raw, str) and raw.strip() == "null"):
                     continue
                 try:
                     payload = json.loads(raw) if not isinstance(raw, dict) else raw
@@ -132,6 +133,7 @@ def main(argv: list[str] | None = None) -> int:
                     malformed.append(report_id)
                     continue
                 if not isinstance(payload, dict):
+                    malformed.append(report_id)
                     continue
                 payload, removed = migrate_payload(payload)
                 if removed == 0:

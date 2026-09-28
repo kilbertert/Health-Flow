@@ -75,12 +75,21 @@ stored in `medical_reports.evidence_result` — until it runs, those reports ret
 an error instead of opening.
 
 ```bash
-# as the service identity, with the service's own environment
-/opt/health-flow/venv/bin/health-flow-migrate-evidence --dry-run
+# Run as the service identity. A login shell does NOT inherit the unit's
+# EnvironmentFile, so load it explicitly — without DATABASE_URL the command would
+# silently target the default `./data/healthflow.db` instead of the live tenant.
+set -a; . /opt/health-flow/var/health-flow.env; set +a
+cd /opt/health-flow
+
+/opt/health-flow/.venv/bin/health-flow-migrate-evidence --dry-run
 # SQLite tenant: back up first
 cp /opt/health-flow/var/healthflow.db /opt/health-flow/var/healthflow.db.bak-$(date +%Y%m%d%H%M%S)
-/opt/health-flow/venv/bin/health-flow-migrate-evidence
+/opt/health-flow/.venv/bin/health-flow-migrate-evidence
 ```
+
+The executable lives in the project virtualenv (`/opt/health-flow/.venv/bin`), the
+same one the units use — the printed line starts with the resolved `database=` so a
+wrong target is visible before any write.
 
 It is idempotent — a second run reports `changed=0`. It never deletes a report and
 leaves payloads it cannot parse untouched, reporting them instead.
