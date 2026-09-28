@@ -104,6 +104,9 @@ function assessedResponse(account, reportUrl) {
 
       await page.getByRole('button', { name: '确认并生成健康提示' }).click();
       await expect(page.getByText('E2E 移动端确认完成。')).toBeVisible();
+      // 证据仍在最上层可见：风险名与证据正文来自契约，不随商品退役一起消失。
+      await expect(page.getByText('可能相关健康问题：血脂异常')).toBeVisible();
+      await expect(page.getByText('血脂异常')).toBeVisible();
       expect(confirmationBody).toBeTruthy();
       expect(
         confirmationBody.observations.some(

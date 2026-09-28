@@ -90,6 +90,10 @@ def test_migrate_payload_is_idempotent() -> None:
     assert twice == once
 
 
+def _url(database: Path) -> str:
+    return f"sqlite:///{database}"
+
+
 def _seed(database: Path, rows: dict[int, str]) -> None:
     connection = sqlite3.connect(database)
     try:
@@ -120,7 +124,7 @@ def test_dry_run_reports_without_writing(tmp_path) -> None:
     _seed(database, {1: json.dumps(LEGACY_PAYLOAD)})
     before = _read(database, 1)
 
-    assert main(["--database", str(database), "--dry-run"]) == 0
+    assert main(["--database", _url(database), "--dry-run"]) == 0
     assert _read(database, 1) == before
 
 
@@ -129,7 +133,7 @@ def test_migration_rewrites_legacy_and_leaves_clean_rows_alone(tmp_path) -> None
     database = tmp_path / "healthflow.db"
     _seed(database, {1: json.dumps(LEGACY_PAYLOAD), 2: json.dumps(clean)})
 
-    assert main(["--database", str(database)]) == 0
+    assert main(["--database", _url(database)]) == 0
 
     migrated = _read(database, 1)
     assert migrated["findings"][0] == {
@@ -139,7 +143,7 @@ def test_migration_rewrites_legacy_and_leaves_clean_rows_alone(tmp_path) -> None
     assert _read(database, 2) == clean
 
     # second run is a no-op
-    assert main(["--database", str(database)]) == 0
+    assert main(["--database", _url(database)]) == 0
     assert _read(database, 1) == migrated
 
 
@@ -147,7 +151,7 @@ def test_malformed_payload_is_reported_and_left_intact(tmp_path, capsys) -> None
     database = tmp_path / "healthflow.db"
     _seed(database, {1: "{not json"})
 
-    assert main(["--database", str(database)]) == 1
+    assert main(["--database", _url(database)]) == 1
     assert "cannot parse" in capsys.readouterr().err
     connection = sqlite3.connect(database)
     try:

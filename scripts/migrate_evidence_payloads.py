@@ -1,5 +1,10 @@
 """Strip the retired product fields from stored evidence payloads.
 
+Runs through the application's own database layer (``get_mysql_client()``), so it
+works with whatever ``DATABASE_URL`` is configured — SQLite in development and on
+the deployed service host, or a server URL in a MySQL deployment. Nothing here is
+SQLite-specific.
+
 genesis-evidence 的 ADR 0006 把商品权威移到商城，证据响应不再返回
 ``recommendations`` / ``recommendation_message`` / ``product_status``。本仓的响应模型是
 ``extra="forbid"``，因此**在删字段之前**持久化的 ``medical_reports.evidence_result``
@@ -10,12 +15,15 @@ genesis-evidence 的 ADR 0006 把商品权威移到商城，证据响应不再�
 
 用法::
 
-    # 预演：只报告将要改动什么
-    python scripts/migrate_evidence_payloads.py --database var/healthflow.db --dry-run
+    # 预演：只报告将要改动什么（读配置里的 DATABASE_URL）
+    python scripts/migrate_evidence_payloads.py --dry-run
 
-    # 执行（先备份）
-    cp var/healthflow.db var/healthflow.db.bak-$(date +%Y%m%d%H%M%S)
-    python scripts/migrate_evidence_payloads.py --database var/healthflow.db
+    # SQLite 部署先备份，再执行
+    cp /opt/health-flow/var/healthflow.db /opt/health-flow/var/healthflow.db.bak-$(date +%Y%m%d%H%M%S)
+    python scripts/migrate_evidence_payloads.py
+
+    # 显式指定另一个库
+    python scripts/migrate_evidence_payloads.py --database sqlite:////tmp/copy.db --dry-run
 
 退出码：0 = 无需改动或已成功；1 = 存在无法迁移的记录；2 = 用法错误。
 
@@ -32,9 +40,16 @@ from __future__ import annotations
 
 import argparse
 import json
-import sqlite3
 import sys
 from pathlib import Path
+
+repo_root = Path(__file__).resolve().parent.parent
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
+
+from sqlalchemy import create_engine, text  # noqa: E402
+from sqlalchemy.engine import make_url  # noqa: E402
+from sqlalchemy.orm import Session  # noqa: E402
 
 RETIRED_FIELDS = frozenset({"recommendations", "recommendation_message", "product_status"})
 
@@ -68,67 +83,81 @@ def migrate_payload(payload: dict) -> tuple[dict, int]:
     return payload, _strip(payload)
 
 
-def _iter_reports(connection: sqlite3.Connection):
-    return connection.execute(
-        "SELECT id, evidence_result FROM medical_reports WHERE evidence_result IS NOT NULL"
+def _resolve_url(database: str | None) -> str:
+    """Explicit URL wins; otherwise use the configured one."""
+
+    if database:
+        return database
+    from app.config import get_settings
+
+    return get_settings().database_url
+
+
+def _iter_reports(session: Session):
+    return session.execute(
+        text(
+            "SELECT id, evidence_result FROM medical_reports "
+            "WHERE evidence_result IS NOT NULL"
+        )
     ).fetchall()
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--database", required=True, help="Path to the SQLite database file")
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument(
+        "--database",
+        help="SQLAlchemy URL. Defaults to the configured DATABASE_URL.",
+    )
     parser.add_argument(
         "--dry-run", action="store_true", help="Report what would change without writing"
     )
     args = parser.parse_args(argv)
 
-    path = Path(args.database)
-    if not path.is_file():
-        print(f"error: {path} is not a file", file=sys.stderr)
-        return 2
-
-    connection = sqlite3.connect(path)
+    url = _resolve_url(args.database)
+    engine = create_engine(url)
     try:
-        rows = _iter_reports(connection)
-        changed = 0
-        malformed: list[int] = []
-        total_removed = 0
+        with Session(engine) as session:
+            rows = _iter_reports(session)
+            changed = 0
+            malformed: list[object] = []
+            total_removed = 0
 
-        for report_id, raw in rows:
-            try:
-                payload = json.loads(raw)
-            except (TypeError, ValueError):
-                malformed.append(report_id)
-                continue
-            if not isinstance(payload, dict):
-                malformed.append(report_id)
-                continue
-            payload, removed = migrate_payload(payload)
-            if removed == 0:
-                continue
-            changed += 1
-            total_removed += removed
-            if not args.dry_run:
-                connection.execute(
-                    "UPDATE medical_reports SET evidence_result = ? WHERE id = ?",
-                    (json.dumps(payload, ensure_ascii=False), report_id),
-                )
+            for report_id, raw in rows:
+                try:
+                    payload = json.loads(raw) if not isinstance(raw, dict) else raw
+                except (TypeError, ValueError):
+                    malformed.append(report_id)
+                    continue
+                if not isinstance(payload, dict):
+                    malformed.append(report_id)
+                    continue
+                payload, removed = migrate_payload(payload)
+                if removed == 0:
+                    continue
+                changed += 1
+                total_removed += removed
+                if not args.dry_run:
+                    session.execute(
+                        text(
+                            "UPDATE medical_reports SET evidence_result = :payload "
+                            "WHERE id = :id"
+                        ),
+                        {"payload": json.dumps(payload, ensure_ascii=False), "id": report_id},
+                    )
 
-        if not args.dry_run and changed:
-            connection.commit()
+            if not args.dry_run and changed:
+                session.commit()
 
-        verb = "would change" if args.dry_run else "changed"
-        print(
-            f"reports={len(rows)} {verb}={changed} "
-            f"fields_removed={total_removed} malformed={len(malformed)}"
-        )
-        for report_id in malformed:
-            print(f"  cannot parse evidence_result for report {report_id}", file=sys.stderr)
-        if malformed:
-            return 1
-        return 0
+            verb = "would change" if args.dry_run else "changed"
+            print(
+                f"database={make_url(url).get_backend_name()} reports={len(rows)} "
+                f"{verb}={changed} fields_removed={total_removed} malformed={len(malformed)}"
+            )
+            for report_id in malformed:
+                print(f"  cannot parse evidence_result for report {report_id}", file=sys.stderr)
+            return 1 if malformed else 0
     finally:
-        connection.close()
+        engine.dispose()
 
 
 if __name__ == "__main__":
