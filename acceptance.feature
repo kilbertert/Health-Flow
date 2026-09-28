@@ -1,30 +1,28 @@
-Feature: 体检报告健康管理建议
-  HealthFlow 展示 Genesis Evidence 对已确认健康风险返回的已发布产品推荐。
+Feature: 体检报告健康风险提示
+  HealthFlow 展示 Genesis Evidence 对已确认健康风险返回的已发布证据。
+  商品不在该契约内——商品权威已移到商城（genesis-evidence ADR 0006）。
 
-  Rule: 只有可发布的健康管理建议对患者可见
+  Rule: 只有已发布知识卡支撑的证据对患者可见
 
-    Scenario: 已确认异常项产生产品推荐
+    Scenario: 已确认异常项产生健康风险提示
       Given 一份体检报告已解析出带原文证据的异常指标
       And 患者确认该异常指标
-      And 对应健康风险存在已发布且无高风险宣称的产品推荐
+      And 对应健康风险存在已发布知识卡
       When HealthFlow 请求 Genesis Evidence 生成健康风险提示
-      Then 患者看到产品名、营养素、理由、安全提醒、免责声明和证据回链
-      And 每条推荐直接使用契约返回的真实产品图
-      And 页面说明该内容不构成医疗或用药指令
+      Then 患者看到风险名称、证据正文、原文回链与建议复查方向
+      And 页面说明该内容不构成诊断或治疗建议
 
-    Scenario: 健康风险没有可用产品推荐
-      Given 一个已确认健康风险没有已发布的安全产品推荐
+    Scenario: 没有已发布知识卡时不构造结论
+      Given 一个已确认异常指标没有已发布知识卡
       When HealthFlow 展示该健康风险提示
-      Then 患者看到“暂无推荐”
-      And 页面不显示未发布、已下架或带高风险宣称的产品
+      Then 该指标进入 `unmatched`，原因为 `no_published_knowledge_card`
+      And 页面不构造风险结论，也不以草稿内容补充
 
-  Rule: 跨系统契约完整保留推荐结果
-
-    Scenario: Evidence API 返回可用推荐
-      Given Genesis Evidence 返回 product_status available 和 recommendations
-      When HealthFlow 校验并持久化证据响应
-      Then 响应保持 recommendations 的全部患者可见字段
-      And 报告状态变为 assessed
+    Scenario: 响应中不出现任何商品字段
+      Given Genesis Evidence 返回已确认风险的证据响应
+      When HealthFlow 校验并持久化该响应
+      Then 响应不含 `recommendations`、`recommendation_message` 或 `product_status`
+      And 报告状态仍可进入 `assessed`
 
   Rule: AFK 拉取请求自动化使用可信控制面
 

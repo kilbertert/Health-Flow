@@ -1,44 +1,49 @@
-# 产品推荐链路 QA 计划
+# 证据链路 QA 计划
 
-## QA-REC-001 推荐契约透传
+关联：genesis-evidence #173 / ADR 0006。商品相关用例随商品能力退役一并删除——
+它们断言的行为（`product_status`、`recommendations[]`、产品图渲染）已不存在。
+证据侧用例在 genesis-evidence 的 `qa-plan.md`（`QA-EVID-001` ~ `004`）执行；
+本仓负责契约透传与渲染，用例如下。
+
+## QA-EV-001 证据契约透传
 
 - 环境：HealthFlow Python 测试环境。
-- 前置：Genesis Evidence v3 响应含 `product_status=available` 和一条已发布推荐。
-- 数据：血脂异常 finding 与植物甾醇推荐。
+- 前置：Genesis Evidence v3 响应含一个 finding 与 `evidence_items`，**不含商品字段**。
+- 数据：血脂异常 finding，含卡片正文、Claim 回链与原文证据片段。
 - 动作：使用 `EvidenceMatchResponse` 校验响应，并保存到报告评估结果。
-- 预期：推荐字段完整保留，报告可进入 `assessed`，无契约错误。
+- 预期：校验通过且报告进入 `assessed`；持久化后的 JSON 键名遍历不出现 `recommendations`、`recommendation_message`、`product_status`。
 - 清理：删除临时 SQLite 数据库。
 
-## QA-REC-002 患者可见推荐块
+## QA-EV-002 含商品字段的旧响应被拒
 
-- 环境：构建后的 HealthFlow 前端，桌面与 375px 移动视口。
-- 前置：报告评估响应含一条可用推荐和一条无推荐 finding。
-- 数据：产品名、营养素、理由、安全提醒、免责声明、证据链接。
-- 动作：打开报告结果页并检查两个 finding。
-- 预期：可用项展示完整推荐内容并渲染契约中的产品图；无推荐项显示“暂无推荐”；内容不溢出或重叠。
-- 清理：关闭一次性前端测试服务并删除临时数据。
+- 环境：同 `QA-EV-001`。
+- 前置：构造一份带 `recommendations`、`recommendation_message`、`product_status` 的响应体。
+- 数据：在合法响应上追加三个商品字段。
+- 动作：用 `EvidenceMatchResponse.model_validate` 校验该响应。
+- 预期：抛出 `ValidationError` 且指出多余字段；接口层把它转为 `EvidenceBridgeError`，报告评估返回 503 而不是静默吞掉。
+- 清理：同 `QA-EV-001`。
 
-## QA-E2E-003 真实报告阴性对照
+## QA-EV-003 真实报告阴性对照
 
-- 环境：隔离的 HealthFlow、Genesis Evidence API/Review API、SQLite 与本机 loopback 动态端口。
-- 前置：真实产品目录已迁移；真实 Excel 映射经审核；报告解析模型与 Evidence API 就绪。
-- 数据：`中英文双语完整版个人体检报告.pdf` 和 `2026-膳食补充剂-大健康人群功能分类.xlsx`。
+- 环境：隔离的 HealthFlow、Genesis Evidence API、SQLite 与本机 loopback 动态端口。
+- 前置：报告解析模型与 Evidence API 就绪。
+- 数据：`中英文双语完整版个人体检报告.pdf`。
 - 动作：上传 PDF，等待真实模型解析，检查全部结构化指标与异常判定。
-- 预期：68 条指标解析完成且无解析警告；报告内可识别数值均未越过参考范围，因此不产生虚假健康风险或产品推荐。
+- 预期：68 条指标解析完成且无解析警告；报告内可识别数值均未越过参考范围，因此不产生虚假健康风险。
 - 清理：停止临时服务，删除隔离数据库、报告文件与未脱敏日志。
 
-## QA-E2E-004 受控异常报告正向全链
+## QA-EV-004 受控异常报告正向全链
 
-- 环境：与 `QA-E2E-003` 相同，并使用真实报告解析模型。
-- 前置：`COND_DYSLIPIDEMIA` 存在已发布安全产品；确认请求包含完整原文证据和参考上限。
+- 环境：与 `QA-EV-003` 相同，并使用真实报告解析模型。
+- 前置：`COND_DYSLIPIDEMIA` 存在已发布知识卡；确认请求包含完整原文证据和参考上限。
 - 数据：明确标注为验收夹具的单页 LDL-C 报告，`4.20 mmol/L`，参考上限 `3.40 mmol/L`。
-- 动作：上传报告，等待解析，确认 LDL-C 异常项，请求评估，检查健康风险与产品推荐。
-- 预期：解析标记为 `H`；报告进入 `assessed`；匹配 `COND_DYSLIPIDEMIA`；返回植物甾醇推荐；`unmatched=[]` 且 `skipped=[]`。
+- 动作：上传报告，等待解析，确认 LDL-C 异常项，请求评估，检查健康风险提示。
+- 预期：解析标记为 `H`；报告进入 `assessed`；匹配 `COND_DYSLIPIDEMIA`；返回卡片正文与证据回链；`unmatched=[]` 且 `skipped=[]`；响应不含任何商品字段。
 - 清理：停止临时服务，删除隔离数据库、报告夹具与未脱敏日志。
 
 ## 结果记录
 
-执行后在 `artifacts/qa/product-recommendation-e2e.md` 记录提交、环境、时间戳、每个用例结果和保留的去标识化证据。
+执行后在 `artifacts/qa/` 下记录提交、环境、时间戳、每个用例结果与保留的去标识化证据。
 
 ## AFK-B10 可信工作流静态门
 
