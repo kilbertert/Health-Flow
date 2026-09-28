@@ -294,7 +294,7 @@ async def upload_report(
         report,
         "uploaded",
         {"file_count": len(accepted_files)},
-        actor=resolve_owner(request).storage_id,
+        actor=resolve_owner(request).subject,
     )
     db.add(ReportExtractionJob(report_id=report.id, status="queued"))
 
@@ -680,7 +680,7 @@ async def confirm_report(
             "excluded_metric_ids": excluded_ids,
             "subject_consistency": report.subject_consistency,
         },
-        actor=resolve_owner(request).storage_id,
+        actor=resolve_owner(request).subject,
     )
     db.commit()
     try:

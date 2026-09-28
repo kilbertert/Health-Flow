@@ -27,6 +27,7 @@ from app.service.auth import (
     session_hash,
     verify_password,
 )
+from app.service.report_ownership import OwnerKind, ReportOwner
 
 router = APIRouter()
 _ABNORMAL_FLAGS = frozenset({"H", "L", "A", "*", "HIGH", "LOW", "高", "低"})
@@ -148,9 +149,13 @@ async def update_profile(
 @router.get("/reports", response_model=list[ReportHistoryItem])
 async def report_history(request: Request, db: Session = Depends(db_dependency)):
     account = _account(request, db)
+    # Derived from the ownership module rather than repeating "an account's
+    # reports are the rows whose owner_id equals the account id". That equality
+    # is a property of the ownership model, and a second copy of it here is a
+    # second rule waiting to disagree with the first.
     reports = (
         db.query(MedicalReport)
-        .filter(MedicalReport.owner_id == account.id)
+        .filter(MedicalReport.owner_id == ReportOwner(OwnerKind.ACCOUNT, account.id).storage_id)
         .order_by(MedicalReport.created_at.desc())
         .all()
     )

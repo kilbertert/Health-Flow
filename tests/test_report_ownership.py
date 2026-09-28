@@ -63,10 +63,29 @@ def test_the_sentinel_is_not_an_operator_identity() -> None:
     assert owner.is_unowned
 
 
-def test_blank_operator_falls_back_to_unowned() -> None:
-    owner = resolve_owner(_Request(owner_id="   "))
+def test_operator_identity_is_not_normalised() -> None:
+    """A stored report's owner is compared verbatim, so this must not strip.
 
-    assert owner.kind is OwnerKind.UNOWNED
+    Trimming here would stop matching rows written with the untrimmed name and
+    return 404 to the operator who owns them.
+    """
+
+    owner = resolve_owner(_Request(owner_id="  ops user  "))
+
+    assert owner.kind is OwnerKind.OPERATOR
+    assert owner.storage_id == "  ops user  "
+
+
+def test_whitespace_operator_is_an_identity_too() -> None:
+    """Whitespace is a name like any other here — normalising it is what breaks.
+
+    The mid-session default is the empty string, and that is what falls through
+    to unowned; a *spaced* name came from configuration and is matched verbatim
+    against stored rows.
+    """
+
+    assert resolve_owner(_Request(owner_id="   ")).kind is OwnerKind.OPERATOR
+    assert resolve_owner(_Request(owner_id="")).kind is OwnerKind.UNOWNED
 
 
 def test_absent_state_is_unowned() -> None:

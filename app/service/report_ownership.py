@@ -83,7 +83,12 @@ def resolve_owner(request: Request) -> ReportOwner:
     account_id = getattr(request.state, "account_id", None)
     if account_id:
         return ReportOwner(OwnerKind.ACCOUNT, str(account_id))
-    operator = str(getattr(request.state, "owner_id", "") or "").strip()
+    # Deliberately NOT stripped.  The value is compared against `owner_id` in
+    # stored rows with `hmac.compare_digest`, so normalising it here would stop
+    # matching every report that operator already owns.  A configured operator
+    # whose name carries surrounding whitespace is a configuration question, not
+    # a reason to silently strand their reports.
+    operator = str(getattr(request.state, "owner_id", "") or "")
     if operator and operator != UNOWNED_SENTINEL:
         return ReportOwner(OwnerKind.OPERATOR, operator)
     return ReportOwner(OwnerKind.UNOWNED, UNOWNED_SENTINEL)
