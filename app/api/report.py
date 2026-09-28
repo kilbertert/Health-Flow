@@ -51,6 +51,7 @@ from app.service.evidence_bridge import (
     match_published_evidence,
     metric_code_for_name,
 )
+from app.service.report_ownership import resolve_owner
 from app.service.vision_encoder import ParsedReport, get_vision_encoder_service
 
 router = APIRouter()
@@ -75,12 +76,6 @@ _TRANSIENT_ERROR_MARKERS = (
 
 def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
-
-
-def _owner_id(request: Request) -> str:
-    if getattr(request.state, "account_id", None):
-        return str(request.state.account_id)
-    return str(getattr(request.state, "owner_id", "anonymous"))
 
 
 def _authorized_report(
@@ -286,7 +281,7 @@ async def upload_report(
         status="processing",
         subject_consistency="same" if len(accepted_files) == 1 else "uncertain",
         access_token_hash=_token_hash(access_token),
-        owner_id=_owner_id(request),
+        owner_id=resolve_owner(request).storage_id,
         exam_date=datetime.now(),
     )
     db.add(report)
@@ -299,7 +294,7 @@ async def upload_report(
         report,
         "uploaded",
         {"file_count": len(accepted_files)},
-        actor=_owner_id(request),
+        actor=resolve_owner(request).subject,
     )
     db.add(ReportExtractionJob(report_id=report.id, status="queued"))
 
@@ -309,6 +304,7 @@ async def upload_report(
         report,
         [],
         access_token=None if account is not None else access_token,
+        owned_by_account=account is not None,
     )
 
 
@@ -494,11 +490,13 @@ def _report_response(
     metrics: list[MetricModel],
     *,
     access_token: str | None = None,
+    owned_by_account: bool = False,
 ) -> MedicalReportResponse:
     extraction_job = getattr(report, "extraction_job", None)
     return MedicalReportResponse(
         id=report.id,
         patient_id=report.patient_id,
+        owned_by_account=owned_by_account,
         report_type=report.report_type,
         exam_date=report.exam_date,
         department=report.department,
@@ -573,11 +571,11 @@ async def get_report(
         db,
         report_id,
         x_report_token,
-        owner_id=_owner_id(request),
+        owner_id=resolve_owner(request).storage_id,
         session_authenticated=account is not None,
     )
     metrics = _ordered_metrics(db, report_id).all()
-    return _report_response(report, metrics)
+    return _report_response(report, metrics, owned_by_account=account is not None)
 
 
 @router.post("/report/{report_id}/confirm", response_model=MedicalReportResponse)
@@ -593,7 +591,7 @@ async def confirm_report(
         db,
         report_id,
         x_report_token,
-        owner_id=_owner_id(request),
+        owner_id=resolve_owner(request).storage_id,
         session_authenticated=account is not None,
     )
     if report.status not in {"pending_confirmation", "confirmed"}:
@@ -682,11 +680,11 @@ async def confirm_report(
             "excluded_metric_ids": excluded_ids,
             "subject_consistency": report.subject_consistency,
         },
-        actor=_owner_id(request),
+        actor=resolve_owner(request).subject,
     )
     db.commit()
     try:
-        return await _assess_report(report, db)
+        return await _assess_report(report, db, owned_by_account=account is not None)
     except EvidenceBridgeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -703,7 +701,7 @@ async def assess_report(
         db,
         report_id,
         x_report_token,
-        owner_id=_owner_id(request),
+        owner_id=resolve_owner(request).storage_id,
         session_authenticated=account is not None,
     )
     if report.status not in {"confirmed", "assessed"}:
@@ -714,12 +712,14 @@ async def assess_report(
             detail="报告仍有文件未完成解析，不能生成健康提示",
         )
     try:
-        return await _assess_report(report, db)
+        return await _assess_report(report, db, owned_by_account=account is not None)
     except EvidenceBridgeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
-async def _assess_report(report: ReportModel, db: Session) -> MedicalReportResponse:
+async def _assess_report(
+    report: ReportModel, db: Session, *, owned_by_account: bool = False
+) -> MedicalReportResponse:
     if _processing_warnings(report):
         raise EvidenceBridgeError("报告仍有文件未完成解析")
     metrics = _ordered_metrics(db, report.id).all()
@@ -797,7 +797,7 @@ async def _assess_report(report: ReportModel, db: Session) -> MedicalReportRespo
     db.commit()
     db.refresh(report)
     metrics = _ordered_metrics(db, report.id).all()
-    return _report_response(report, metrics)
+    return _report_response(report, metrics, owned_by_account=owned_by_account)
 
 
 @router.get("/report/{report_id}/metrics", response_model=list[MetricRecord])
@@ -812,7 +812,7 @@ async def get_report_metrics(
         db,
         report_id,
         x_report_token,
-        owner_id=_owner_id(request),
+        owner_id=resolve_owner(request).storage_id,
         session_authenticated=account is not None,
     )
     return [_metric_response(metric) for metric in _ordered_metrics(db, report_id).all()]
@@ -840,7 +840,7 @@ async def get_report_page(
         db,
         report_id,
         x_report_token,
-        owner_id=_owner_id(request),
+        owner_id=resolve_owner(request).storage_id,
         session_authenticated=account is not None,
     )
     source = (
@@ -882,7 +882,7 @@ async def delete_report(
         db,
         report_id,
         x_report_token,
-        owner_id=_owner_id(request),
+        owner_id=resolve_owner(request).storage_id,
         session_authenticated=account is not None,
     )
     # 先删数据库主记录；向量索引是尽力而为，放在 DB 成功之后，

@@ -90,6 +90,11 @@ class ReportExtractionJobResponse(BaseModel):
 class MedicalReportResponse(BaseModel):
     id: int
     patient_id: str
+    # Server-computed: whether this report belongs to the authenticated account.
+    # The client used to re-derive this by comparing `patient_id` against the
+    # account id, which silently reported "not this account" whenever an old
+    # client supplied its own label. Ownership is a server-side answer.
+    owned_by_account: bool = False
     report_type: str | None = None
     exam_date: datetime | None = None
     department: str | None = None

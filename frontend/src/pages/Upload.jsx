@@ -1195,7 +1195,7 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
       {result && (
         <Card title={<Space>解析结果 · 报告 #{result.id} {evidenceStatus(result.status)}</Space>}>
           <Descriptions column={{ xs: 1, sm: 2, md: 4 }} size="small" bordered style={{ marginBottom: 16 }}>
-            <Descriptions.Item label="账户">{result.patient_id === account?.id ? '当前账户' : result.patient_id}</Descriptions.Item>
+            <Descriptions.Item label="账户">{result.owned_by_account ? '当前账户' : result.patient_id}</Descriptions.Item>
             <Descriptions.Item label="报告类型">{result.report_type}</Descriptions.Item>
             <Descriptions.Item label="科室">{result.department || '—'}</Descriptions.Item>
           </Descriptions>

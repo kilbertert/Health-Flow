@@ -10,7 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.data.models import Base, MedicalReport, MetricRecord
+from app.data.models import Base, MedicalReport, MetricRecord, ReportAuditEvent
 from app.main import app
 
 
@@ -219,6 +219,17 @@ def test_upload_uses_account_owner_and_isolated_from_second_account(account_clie
             report = db.get(MedicalReport, report_id)
             assert report.owner_id is not None
             first_owner = report.owner_id
+            # The stored column keeps the bare id; the audit trail carries the
+            # typed form, so a reader can tell an account from an operator from
+            # a report nobody owns without guessing from the string's shape.
+            actor = (
+                db.query(ReportAuditEvent)
+                .filter(ReportAuditEvent.report_id == report_id)
+                .order_by(ReportAuditEvent.id)
+                .first()
+                .actor
+            )
+            assert actor == f"account:{first_owner}"
 
         client.post("/api/auth/logout")
         client.post(
