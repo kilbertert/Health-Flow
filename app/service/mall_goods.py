@@ -146,8 +146,9 @@ def label_pairs_for(condition_code: str) -> tuple[tuple[str, str], ...]:
     （`WebApiReadGoodsRequest` 只有 shopId/current/size），且金丝雀租户没有任何
     商品标签数据，所以这里如实返回空元组。空 → 过滤后为空 → 原因 `no_label_data`。
 
-    标签数据与端点入参到位后，这里接 `docs/condition-to-mall-tag.md` 的映射即可；
-    在那之前**不要伪造本地的标签-商品对应关系**让它看起来是绿的。
+    标签数据与端点入参到位后，这里接**语义映射**的取值即可。那份映射是
+    genesis-evidence 的交付物（`docs/condition-to-mall-tag.md`，交付给商城、由商城把
+    标签打到商品上），**不在本仓**；本仓只消费它的结果，不复制一份——复制就会漂移。
     """
     return EMPTY_LABELS
 
@@ -213,7 +214,9 @@ async def fetch_goods(
         return MallGoodsResult(items=(), reason="mall_unavailable")
     try:
         payload = response.json()
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        # 非 UTF-8 字节同样走降级：这是"商城返回了读不懂的东西"，不是本服务的错误。
+        # 漏掉 UnicodeDecodeError 会让它穿透到 500，而不是返回"暂无推荐"。
         logger.warning("商城只读端点返回非 JSON")
         return MallGoodsResult(items=(), reason="mall_unavailable")
 

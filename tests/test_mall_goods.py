@@ -399,3 +399,19 @@ def test_response_rejects_an_undeclared_reason():
 
     with pytest.raises(ValidationError):
         RecommendationResponse(items=[], reason="no_labels")
+
+
+@pytest.mark.asyncio
+async def test_non_utf8_body_degrades_instead_of_escaping():
+    """非 UTF-8 body 也曾穿透到 500：`response.json()` 抛的 UnicodeDecodeError
+    不是 `json.JSONDecodeError`，漏掉它页面就从一个"降级"变成一个"报错"。"""
+    from unittest.mock import AsyncMock
+
+    from app.service.mall_goods import fetch_goods
+
+    response = MagicMock(status_code=200)
+    response.json.side_effect = UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+    with patch("app.service.mall_goods.httpx.AsyncClient.post", new=AsyncMock(return_value=response)):
+        result = await fetch_goods(settings=_settings(), labels=())
+
+    assert result.reason == "mall_unavailable"

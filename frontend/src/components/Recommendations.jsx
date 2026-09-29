@@ -4,10 +4,13 @@ import { getReportRecommendations } from '../api.js';
 
 // 为空的三种情况必须能区分：把"商城不可达"和"没有对应商品"合并成一句，
 // 会让运维分不清该去修配置还是该去提醒租户上货。
+// 后端的三种 reason 由服务端给出；`session_expired` 是**客户端**的第四种，
+// 不对应服务端契约——它描述的是这次请求根本没到达取商品那一步。
 const EMPTY_REASONS = {
   no_published_card: '本次未能生成健康风险提示，因此没有可对应的商品。',
   no_label_data: '该健康方向暂无可推荐的已上架商品。',
   mall_unavailable: '商城暂时不可用，请稍后再试。',
+  session_expired: '登录状态已失效，请重新登录后查看推荐。',
 };
 
 function priceText(item) {
@@ -63,8 +66,16 @@ export default function Recommendations({ reportId, reportToken = '' }) {
       })
       .catch((err) => {
         // 取推荐失败不阻断报告页：如实说明，不伪造商品。
+        // 但**不能把所有失败都归给商城**：会话过期（或报告被删除后重开）会让这个请求
+        // 拿到 401/404，那是本服务自己的访问问题，说成"商城不可用"会把人引到错的排查方向。
         if (active) {
-          setState({ loading: false, items: [], reason: 'mall_unavailable', error: err.message });
+          const expired = /\b(401|404)\b/.test(err.message || '');
+          setState({
+            loading: false,
+            items: [],
+            reason: expired ? 'session_expired' : 'mall_unavailable',
+            error: err.message,
+          });
         }
       });
     return () => { active = false; };

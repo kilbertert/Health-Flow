@@ -408,6 +408,21 @@ button { cursor: pointer; }
     border-radius: 0;
   }
   .source-modal-wrap .ant-modal-header { flex: 0 0 auto; }
+  .source-modal-wrap .ant-modal-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+    overflow-y: auto;
+    padding: 12px;
+  }
+  .auth-page { width: min(100% - 24px, 440px); padding-top: 34px; }
+}
+
+@media (min-width: 701px) {
+  .home-page { padding-top: 58px; }
+  .home-hero { padding-top: 42px; }
+}
+
 .recommendations-card .recommendation-list .ant-list-item {
   align-items: flex-start;
 }
@@ -444,19 +459,4 @@ button { cursor: pointer; }
   display: flex;
   justify-content: center;
   padding: 24px 0;
-}
-
-  .source-modal-wrap .ant-modal-body {
-    flex: 1 1 auto;
-    min-height: 0;
-    max-height: none;
-    overflow-y: auto;
-    padding: 12px;
-  }
-  .auth-page { width: min(100% - 24px, 440px); padding-top: 34px; }
-}
-
-@media (min-width: 701px) {
-  .home-page { padding-top: 58px; }
-  .home-hero { padding-top: 42px; }
 }

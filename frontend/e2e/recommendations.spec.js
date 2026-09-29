@@ -61,6 +61,19 @@ test('命中时渲染商品卡片,且浏览器不请求商城域名', async ({ p
   expect(mallRequests).toEqual([]);
 });
 
+// 这条**不 mock**推荐端点：它回到真实服务端，验证端点契约与浏览器读到的是同一个形状。
+// 种子的 assessed 报告没有 findings，所以真实服务端应当返回 no_published_card，
+// 且**不调用商城**——渲染通过但两端形状不一致时，这条会红。
+test('真实端点契约下渲染空态（不 mock，回到服务端）', async ({ page, seed }) => {
+  const { reportId } = await openAssessedReport(page, seed);
+  await page.goto(`/#/report/${reportId}`);
+
+  const card = page.locator('.recommendations-card');
+  await expect(card).toContainText('暂无推荐');
+  await expect(card).toContainText('本次未能生成健康风险提示');
+  await expect(card.locator('.recommendation-item')).toHaveCount(0);
+});
+
 test('商城不可达时如实降级为"暂无推荐"且原因可区分', async ({ page, seed }) => {
   await stubRecommendations(page, { items: [], reason: 'mall_unavailable' });
   const { reportId } = await openAssessedReport(page, seed);
