@@ -71,6 +71,15 @@ class Settings(BaseSettings):
     MALL_WEBAPI_TIMEOUT_SECONDS: float = 10.0
     MALL_WEBAPI_PAGE_SIZE: int = 100
 
+    # 商城签发的登录票据（genesis-evidence #168 签发、#171 验签）。
+    # 公钥由商城侧离线交付；两项任一缺失都视为未配置，服务**拒绝启动**——
+    # 一个"验不了签但照常放行"的配置比没有这道门更危险，因为它看起来是有的。
+    MALL_TICKET_PUBLIC_KEY_PATH: str = ""
+    MALL_TICKET_AUDIENCE: str = ""
+    # 验签方强制的票据寿命上限。票面约定 120 秒，这里默认 10 分钟——比约定宽，
+    # 正常票据永远撞不到，但 `exp` 在三年后的票据会被拒。
+    MALL_TICKET_MAX_TTL_SECONDS: int = 600
+
     SERVE_FRONTEND: bool = False
     FRONTEND_DIST: str = "frontend/dist"
     # Basic Auth is an optional operator compatibility gate, not the patient login.
@@ -108,6 +117,11 @@ class Settings(BaseSettings):
         if self.OPENAI_RESPONSES_URL.strip():
             return self.OPENAI_RESPONSES_URL.rstrip("/").removesuffix("/responses")
         return f"http://{self.VLLM_HOST}:{self.VLLM_PORT}/v1"
+
+    @property
+    def mall_ticket_configured(self) -> bool:
+        """公钥路径与受众都配齐才算配置。缺一即未配置（服务应拒绝启动）。"""
+        return bool(self.MALL_TICKET_PUBLIC_KEY_PATH.strip() and self.MALL_TICKET_AUDIENCE.strip())
 
     @property
     def mall_webapi_configured(self) -> bool:
