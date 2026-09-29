@@ -76,6 +76,9 @@ class Settings(BaseSettings):
     # 一个"验不了签但照常放行"的配置比没有这道门更危险，因为它看起来是有的。
     MALL_TICKET_PUBLIC_KEY_PATH: str = ""
     MALL_TICKET_AUDIENCE: str = ""
+    # 验签方强制的票据寿命上限。票面约定 120 秒，这里默认 10 分钟——比约定宽，
+    # 正常票据永远撞不到，但 `exp` 在三年后的票据会被拒。
+    MALL_TICKET_MAX_TTL_SECONDS: int = 600
 
     SERVE_FRONTEND: bool = False
     FRONTEND_DIST: str = "frontend/dist"

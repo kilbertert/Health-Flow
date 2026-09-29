@@ -20,7 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.data.models import Base, TicketSubject
+from app.data.models import Base, TicketRedemption, TicketSubject
 from app.service.ticket_sessions import ensure_subject
 from app.service.tickets import (
     CLOCK_SKEW,
@@ -338,8 +338,12 @@ def test_subject_creation_survives_a_lost_race(db):
 # --- fail-closed 启动：双向测 ------------------------------------------------
 
 
-def _settings(path: str = "", audience: str = "") -> SimpleNamespace:
-    return SimpleNamespace(MALL_TICKET_PUBLIC_KEY_PATH=path, MALL_TICKET_AUDIENCE=audience)
+def _settings(path: str = "", audience: str = "", max_ttl: int = 600) -> SimpleNamespace:
+    return SimpleNamespace(
+        MALL_TICKET_PUBLIC_KEY_PATH=path,
+        MALL_TICKET_AUDIENCE=audience,
+        MALL_TICKET_MAX_TTL_SECONDS=max_ttl,
+    )
 
 
 def test_verifier_is_not_built_without_a_public_key(tmp_path):
@@ -400,3 +404,140 @@ def test_application_refuses_to_start_without_ticket_configuration():
 
     with pytest.raises(RuntimeError, match="拒绝启动"):
         asyncio.run(boot())
+
+
+# --- #171 review：兑换入口的安全不变量 -----------------------------------------
+
+
+def test_ticket_lifetime_has_an_upper_bound():
+    """票面写的是 120 秒。若验签方不设上界，「短有效期」在代码里就没有对应物——
+    一张 `exp` 在三年后的票据会被一路接受，而它的重放窗口就是三年。"""
+    private_key, public_key = _keypair()
+    now = datetime.now(UTC)
+    token = _make_ticket(
+        private_key,
+        issued_at=now,
+        expires_at=now + timedelta(days=365 * 3),
+    )
+
+    with pytest.raises(TicketError, match="寿命"):
+        verify_ticket(token, public_key=public_key, audience=AUDIENCE)
+
+
+def test_ordinary_short_ticket_is_within_the_bound():
+    """另一半：正常票据不能撞到上界，否则这道检查会变成误伤。"""
+    private_key, public_key = _keypair()
+    assert verify_ticket(_make_ticket(private_key), public_key=public_key, audience=AUDIENCE).jti
+
+
+def test_redeem_commits_so_a_later_rollback_cannot_unspend_the_ticket(db):
+    """**这是本 PR 最值得留档的一条不变量。**
+
+    兑换之后调用方还要建主体，而那条路径在并发落败时会 `rollback()`。如果消费只停在
+    `flush()`，那次回滚会连同消费行一起抹掉——`jti` 唯一约束防的重放，被同一个事务里
+    的另一个回滚撤销。所以 `redeem` 必须**提交**。
+
+    这里直接演示差别：兑换后回滚当前会话，再用**新会话**看消费行还在不在。
+    """
+    private_key, public_key = _keypair()
+    verifier = TicketVerifier(public_key=public_key, audience=AUDIENCE)
+    token = _make_ticket(private_key)
+
+    verifier.redeem(db, token)
+    db.rollback()  # 模拟调用方后续的并发落败回滚
+
+    with sessionmaker(bind=db.get_bind(), expire_on_commit=False)() as fresh:
+        assert fresh.query(TicketRedemption).count() == 1
+        with pytest.raises(TicketError, match="已被使用"):
+            verifier.redeem(fresh, token)
+
+
+def test_same_ticket_redeems_only_once_on_the_full_entry_path(db):
+    """在**端到端入口**（兑换 → 建主体）上断言一次性，而不只是 `redeem` 单独调用。
+
+    路径里多了一个会 `rollback()` 的主体创建，所以「只成功一次」必须在组合之后仍然成立。
+    """
+    private_key, public_key = _keypair()
+    verifier = TicketVerifier(public_key=public_key, audience=AUDIENCE)
+    token = _make_ticket(private_key)
+
+    first = verifier.redeem_and_ensure_subject(db, token)
+    assert first.created is True
+
+    with pytest.raises(TicketError, match="已被使用"):
+        verifier.redeem_and_ensure_subject(db, token)
+    with sessionmaker(bind=db.get_bind(), expire_on_commit=False)() as fresh:
+        assert fresh.query(TicketSubject).count() == 1
+
+
+def test_full_entry_path_survives_a_lost_race_without_respending(db):
+    """并发场景下走完整入口：落败方的回滚**不能**让票据重新可用。
+
+    两个请求同时到达时，一个建成主体、另一个走恢复路径。关键是第二个请求结束之后，
+    票据仍然是「已消费」的。
+    """
+    private_key, public_key = _keypair()
+    verifier = TicketVerifier(public_key=public_key, audience=AUDIENCE)
+    token = _make_ticket(private_key)
+
+    # 第一个请求正常完成。
+    verifier.redeem_and_ensure_subject(db, token)
+
+    # 第二个请求（另一会话）必须被拒，且这不取决于它是否能读到主体表。
+    other = sessionmaker(bind=db.get_bind(), expire_on_commit=False)()
+    try:
+        with pytest.raises(TicketError, match="已被使用"):
+            verifier.redeem_and_ensure_subject(other, token)
+    finally:
+        other.close()
+
+
+def test_reader_session_is_closed_after_a_lost_race(db):
+    """并发落败时开的那个一次性读会话必须被关闭——不关就漏连接，反复失败会耗干池。"""
+    private_key, public_key = _keypair()
+    claims = verify_ticket(_make_ticket(private_key), public_key=public_key, audience=AUDIENCE)
+
+    # 让那行先由另一个会话提交，再把本会话的首次读取弄瞎（真实竞态的形状）。
+    other = sessionmaker(bind=db.get_bind(), expire_on_commit=False)()
+    other.add(
+        TicketSubject(
+            id="winner",
+            tenant_id=claims.tenant_id,
+            external_subject=claims.subject,
+            display_name="商城用户",
+            created_at=datetime.now(UTC),
+        )
+    )
+    other.commit()
+    other.close()
+
+    from sqlalchemy.orm import Session as _Session
+
+    closed: list[bool] = []
+
+    class _TrackedSession(_Session):
+        def close(self):
+            closed.append(True)
+            return super().close()
+
+    real_query = _Session.query
+    state = {"blinded": False}
+
+    def blinded_query(self, *args, **kwargs):
+        query = real_query(self, *args, **kwargs)
+        if self is db and not state["blinded"]:
+            state["blinded"] = True
+            return _BlindFirst(query)
+        return query
+
+    def tracked_new_session(inner):
+        return _TrackedSession(bind=inner.get_bind(), expire_on_commit=False)
+
+    with (
+        patch.object(_Session, "query", blinded_query),
+        patch("app.service.ticket_sessions._new_session", side_effect=tracked_new_session),
+    ):
+        identity = ensure_subject(db, claims)
+
+    assert identity.subject_id == "winner"
+    assert closed, "并发落败时打开的读会话没有被关闭"

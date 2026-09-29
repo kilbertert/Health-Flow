@@ -64,9 +64,14 @@ def _existing_subject(db: Session, claims: TicketClaims) -> TicketSubject | None
     并发落败方需要重读，而入库失败后当前事务已经不可用（失败的那条 INSERT 还在它
     里面），所以这里必须先 `rollback()` 再用一个干净的会话读。用 `_new_session(db)`
     而不是直接 `db.query`，是为了让这条重读路径在测试里也能被驱动到。
+
+    **那个新会话必须关掉。** 它是一次性的，用完就丢；不关的话每次并发落败都漏一个
+    连接，反复失败时把连接池耗干——而并发落败恰恰是高峰时才会发生的事。用 `with`
+    而不是手动 `close()`：异常路径也要关。
     """
     db.rollback()
-    return _new_session(db).query(TicketSubject).filter(*_identity_filter(claims)).one()
+    with _new_session(db) as reader:
+        return reader.query(TicketSubject).filter(*_identity_filter(claims)).one()
 
 
 def _new_session(db: Session) -> Session:
