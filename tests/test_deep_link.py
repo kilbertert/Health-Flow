@@ -39,11 +39,15 @@ def _settings(**overrides) -> SimpleNamespace:
 
 
 def _verify(url_query: dict[str, str], secret: str, path: str = ROUTE) -> bool:
-    """按契约在「商城侧」复算签名，用来独立验证签发端。"""
+    """按契约在「商城侧」复算签名，用来独立验证签发端。
+
+    **这里刻意按契约字面写：「除 sig 外的全部参数按键名升序」，`path` 不特殊化。**
+    如果签发端把 `path` 单独提到最前，这里就会算出不同的串——这正是要测出来的。
+    """
     supplied = url_query["sig"]
-    pairs = [(("path"), path)]
-    pairs.extend(sorted((k, v) for k, v in url_query.items() if k not in {"sig", "path"}))
-    signing_input = "&".join(f"{k}={v}" for k, v in pairs)
+    items = {k: v for k, v in url_query.items() if k != "sig"}
+    items["path"] = path
+    signing_input = "&".join(f"{k}={items[k]}" for k in sorted(items))
     expected = hmac.new(secret.encode(), signing_input.encode(), hashlib.sha256).hexdigest()
     return hmac.compare_digest(supplied, expected)
 
@@ -236,3 +240,45 @@ def test_endpoint_reports_an_unbuildable_link_instead_of_returning_a_broken_one(
     body = response.json()
     assert body["url"] is None
     assert body["reason"] == "link_unavailable"
+
+
+# --- review 修正：签名顺序与落点 ---------------------------------------------
+
+
+def test_signature_order_matches_the_contract_literal():
+    """**固定向量**：给定输入，签名必须是这个确定的十六进制串。
+
+    这是发现「顺序错」的唯一手段——`_verify` 是按契约字面（全部按键名升序、`path`
+    不特殊化）写的，而只断言「不同 path → 不同签名」看不出顺序差别。契约已合并进
+    genesis 的 `main`，商城侧只会按它的字面实现；本仓把 `path` 单独提到最前的话，
+    **每一次签名都会被判不匹配**。
+    """
+    payload = {"tenant_id": "t", "spu_id": "spu-1", "id": "spu-1",
+               "quantity": 1, "detection_id": "det-1", "exp": 1000600}
+    signing_input = "detection_id=det-1&exp=1000600&id=spu-1&path=/p&quantity=1&spu_id=spu-1&tenant_id=t"
+    expected = hmac.new(b"k", signing_input.encode(), hashlib.sha256).hexdigest()
+
+    assert sign_payload(payload, "k", path="/p") == expected
+
+
+def test_link_carries_both_spu_id_and_the_page_alias_id():
+    """契约参数 `spu_id` 与页面参数 `id` 都要在。
+
+    H5 商品详情页只认 `id`；只带 `spu_id` 会落到一个**打不开商品的空页面**
+    （实测过的行为差异）。而 `spu_id` 是已交付契约的载荷，商城侧要验的就是它。
+    """
+    link = build_deep_link(spu_id="spu-9", detection_id="det-1", settings=_settings(), now=1_000_000)
+    query = _query(link.url)
+
+    assert query["spu_id"] == "spu-9"
+    assert query["id"] == "spu-9"
+    assert _verify(query, SECRET)
+
+
+def test_query_string_is_ordered_like_the_signed_string():
+    """查询串按签名键名升序，与待签串同序——排障时肉眼可比，不必心算顺序。"""
+    link = build_deep_link(spu_id="spu-1", detection_id="det-1", settings=_settings(), now=1_000_000)
+    keys = list(_query(link.url))
+
+    assert keys[:-1] == sorted(keys[:-1])
+    assert keys[-1] == "sig"

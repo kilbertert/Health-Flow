@@ -44,20 +44,21 @@ class DeepLink:
 def sign_payload(payload: dict[str, object], secret: str, *, path: str) -> str:
     """按契约签名：HMAC-SHA256，十六进制小写。
 
-    待签串 = `path=<入口路径>` 之后接**除 `sig` 外的全部参数**按键名 ASCII 升序拼
-    `k=v`，以 `&` 连接；**不做 URL 编码**（契约如此约定，商城侧按同一规则算）。
+    待签串 = **除 `sig` 外的全部参与项**（含 `path`）按键名 **ASCII 升序**拼 `k=v`，
+    以 `&` 连接；**不做 URL 编码**（契约如此约定，商城侧按同一规则算）。
     值先 `trim`，空值不参与拼接。
+
+    **`path` 参与统一升序，不特殊放在最前。** 契约的字面是「全部参数按键名升序」，
+    而商城侧只会按契约实现——本仓若把 `path` 单独提到最前，两边算出的串不同，
+    **每一次签名都会被判不匹配**。契约是给对方的承诺，实现要符合它，不是反过来。
     """
     if not secret:
         raise DeepLinkError("深链签名密钥未配置")
 
-    pairs: list[tuple[str, str]] = [(PATH_SIGNING_KEY, path.strip())]
-    pairs.extend(
-        sorted(
-            (name, str(value).strip())
-            for name, value in payload.items()
-            if name not in {"sig", PATH_SIGNING_KEY} and value is not None and str(value).strip()
-        )
+    pairs = sorted(
+        (name, str(value).strip())
+        for name, value in {**payload, PATH_SIGNING_KEY: path}.items()
+        if name != "sig" and value is not None and str(value).strip()
     )
     signing_input = "&".join(f"{name}={value}" for name, value in pairs)
     return hmac.new(secret.encode("utf-8"), signing_input.encode("utf-8"), hashlib.sha256).hexdigest()
@@ -99,13 +100,21 @@ def build_deep_link(
     expires_at = int(now if now is not None else time.time()) + LINK_TTL_SECONDS
     payload: dict[str, object] = {
         "tenant_id": settings.MALL_WEBAPI_TENANT_ID.strip(),
+        # 契约参数：商城侧要验签的就是这些。
         "spu_id": spu_id.strip(),
+        # 页面级别名：商城 H5 的商品详情页只认 `id`，不认 `spu_id`。**两个都带**——
+        # 少了 `id`，落到详情页会是一个打不开商品的空页面（这是实测过的行为差异，
+        # 不是猜测）；少了 `spu_id`，则与已交付的契约不一致。
+        # 它同样参与签名（契约规则是「除 sig 外的全部参数」），所以两边算得一致。
+        "id": spu_id.strip(),
         "quantity": quantity,
         "detection_id": detection_id.strip(),
         "exp": expires_at,
     }
     signature = sign_payload(payload, secret, path=route)
-    query = urlencode({**payload, "sig": signature})
+    # 查询串按**签名键名升序**排列，与待签串同序——不是为了美观，而是让
+    # 「收到的 URL」与「被签的串」肉眼可比，排障时不必再心算一遍顺序。
+    query = urlencode({**dict(sorted(payload.items())), "sig": signature})
     return DeepLink(
         url=f"{base}{route}?{query}",
         detection_id=str(payload["detection_id"]),
@@ -125,6 +134,15 @@ def _demo() -> None:
         MALL_WEBAPI_TENANT_ID="tenant-from-config",
     )
     link = build_deep_link(spu_id="spu-1", detection_id="det-1", settings=settings, now=1_000_000)
+
+    # 0) 固定向量：按契约字面的升序手算一遍，锁住串的构成与顺序。
+    #    这是发现「顺序错」的唯一手段——只断言「不同 path → 不同签名」看不出顺序。
+    fixed = {"spu_id": "spu-1", "quantity": 1, "detection_id": "det-1", "exp": 1000600,
+             "tenant_id": "t"}
+    expected = hmac.new(b"k", (
+        b"detection_id=det-1&exp=1000600&path=/p&quantity=1&spu_id=spu-1&tenant_id=t"
+    ), hashlib.sha256).hexdigest()
+    assert sign_payload(fixed, "k", path="/p") == expected, sign_payload(fixed, "k", path="/p")
 
     # 1) 签名绑定路径：同一组参数换一个入口，签名必须不同。
     same = {
