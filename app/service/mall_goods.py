@@ -227,6 +227,9 @@ async def fetch_goods(
         logger.warning("商城只读端点返回结构无法解析")
         return MallGoodsResult(items=(), reason="mall_unavailable")
 
+    # 调用成功之后的每一种"空"都是 no_label_data：可能是没有标签可查（映射还没建），
+    # 也可能是标签查到了但商品没挂——两者的修复动作都在商城侧，对患者是同一种沉默。
+    # 真正要区分的是**没调到**商城（mall_unavailable），那在 `fetch_goods` 里。
     filtered = filter_by_labels(items, labels or EMPTY_LABELS)
     if not filtered:
         return MallGoodsResult(items=(), reason="no_label_data")
