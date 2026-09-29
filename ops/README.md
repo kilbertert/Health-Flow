@@ -55,7 +55,7 @@ frontend, because the mall gateway returns a CORS header combination browsers
 reject for credentialed requests. The browser therefore never calls the mall
 domain. This side does not hold goods, does not decide sellability (the mall
 applies its own filter) and does not write any mall state — see
-`docs/adr/0004-mall-goods-are-read-server-side.md`.
+`docs/adr/0005-mall-goods-are-read-server-side.md`.
 
 ## Evidence boundary
 

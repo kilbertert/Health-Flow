@@ -1,6 +1,6 @@
 """#174 检测页商品：服务端代理取货、空态归因与降级边界。
 
-边界（ADR 0006 + docs/adr/0004）：本服务不自持商品、不做可售性判断、不写商城状态；
+边界（ADR 0006 + docs/adr/0005）：本服务不自持商品、不做可售性判断、不写商城状态；
 浏览器不得直接调商城。这三种"空"必须可区分，否则运维分不清该修配置还是提醒租户上货。
 """
 
@@ -99,15 +99,45 @@ def test_single_record_maps_price_and_keeps_null_stock():
     assert items[0].stock is None
 
 
-def test_labels_gate_returns_empty_today():
-    """标签接缝今天如实为空：没有映射就不该凭空返回商品。
+LABELS = (("慢病风险", "血脂异常风险评估"),)
 
-    即使调用方**传了**标签，端点返回的商品也不带标签字段可比对，判据不存在，
-    因此结果仍为空——这正是"不放宽过滤"的具体形状。
-    """
+
+def test_labels_gate_returns_empty_when_nothing_to_filter_by():
+    """无标签可查 → 空，且**不退回"全都要"**：那是这道闸门要防的事。"""
     assert label_pairs_for("COND_DYSLIPIDEMIA") == ()
     assert filter_by_labels((MallGoodsItem(id="1"),), ()) == ()
-    assert filter_by_labels((MallGoodsItem(id="1"),), (("慢病风险", "血脂异常风险评估"),)) == ()
+
+
+def test_labels_gate_is_an_intersection_not_a_guard():
+    """有标签时做真交集——判据是商品自己的标签，不是"函数忽略输入"。
+
+    商城端点今天不返回商品的标签字段，所以现实里过滤结果为空；但那是**数据**的空。
+    这里用带标签的商品证明过滤逻辑本身是通的：命中保留、未命中剔除、部分命中只留命中项。
+    """
+    tagged = MallGoodsItem(id="hit", labels=frozenset(LABELS))
+    other = MallGoodsItem(id="miss", labels=frozenset({("慢病风险", "骨质疏松症风险评估")}))
+    bare = MallGoodsItem(id="bare")
+
+    assert [item.id for item in filter_by_labels((tagged,), LABELS)] == ["hit"]
+    assert filter_by_labels((other, bare), LABELS) == ()
+    assert [item.id for item in filter_by_labels((tagged, other, bare), LABELS)] == ["hit"]
+
+
+def test_items_without_a_label_field_have_no_labels():
+    """端点今天不返回标签字段 → 每件商品标签为空集（数据的空，不是解析失败）。"""
+    items = parse_items({"code": 0, "data": [LIVE_RECORD]})
+
+    assert items[0].labels == frozenset()
+    assert filter_by_labels(items, LABELS) == ()
+
+
+def test_label_field_is_parsed_when_the_endpoint_supplies_it():
+    labelled = dict(LIVE_RECORD, labels=[{"labelName": "慢病风险", "optionName": "血脂异常风险评估"}])
+
+    items = parse_items({"code": 0, "data": [labelled]})
+
+    assert items[0].labels == frozenset(LABELS)
+    assert [item.id for item in filter_by_labels(items, LABELS)] == [items[0].id]
 
 
 @pytest.mark.asyncio
@@ -282,3 +312,65 @@ def test_endpoint_serializes_hit_items_without_touching_stock():
     assert body["reason"] is None
     assert body["items"][0]["price_down"] == "36.5"
     assert body["items"][0]["stock"] is None
+
+
+def test_readiness_reports_unconfigured_mall_in_development(client_unused=None):
+    """开发环境未配商城是合法形态：字段说 unconfigured，status 不因此 degraded。"""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with patch(
+        "app.main.get_settings",
+        return_value=SimpleNamespace(
+            mall_webapi_configured=False,
+            APP_ENV="development",
+            GENESIS_EVIDENCE_API_URL="http://127.0.0.1:8125/api/evidence/matches",
+            GENESIS_EVIDENCE_API_KEY="x" * 32,
+            VLLM_API_KEY="k",
+            OPENAI_API_KEY="",
+            llm_api_base="http://127.0.0.1:8000/v1",
+            VLLM_MODEL="m",
+            basic_auth_enabled=False,
+            HEALTHFLOW_BASIC_USER="healthflow",
+            HEALTHFLOW_BASIC_PASSWORD="",
+            report_account_required=False,
+            database_url="sqlite://",
+        ),
+    ), patch("app.main.get_mysql_client") as mysql:
+        mysql.return_value.engine.connect.return_value.__enter__.return_value.execute.return_value = None
+        body = TestClient(app).get("/ready").json()
+
+    assert body["mall_goods"] == "unconfigured"
+    assert body["status"] == "ready"
+
+
+def test_readiness_flags_missing_mall_config_in_production():
+    """生产环境未配商城是配置事故：字段说 missing，status 必须 degraded。"""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with patch(
+        "app.main.get_settings",
+        return_value=SimpleNamespace(
+            mall_webapi_configured=False,
+            APP_ENV="production",
+            GENESIS_EVIDENCE_API_URL="http://127.0.0.1:8125/api/evidence/matches",
+            GENESIS_EVIDENCE_API_KEY="x" * 32,
+            VLLM_API_KEY="k",
+            OPENAI_API_KEY="",
+            llm_api_base="http://127.0.0.1:8000/v1",
+            VLLM_MODEL="m",
+            basic_auth_enabled=False,
+            HEALTHFLOW_BASIC_USER="healthflow",
+            HEALTHFLOW_BASIC_PASSWORD="",
+            report_account_required=False,
+            database_url="sqlite://",
+        ),
+    ), patch("app.main.get_mysql_client") as mysql:
+        mysql.return_value.engine.connect.return_value.__enter__.return_value.execute.return_value = None
+        body = TestClient(app).get("/ready").json()
+
+    assert body["mall_goods"] == "missing"
+    assert body["status"] == "degraded"

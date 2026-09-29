@@ -6,7 +6,6 @@ import { getReportRecommendations } from '../api.js';
 // 会让运维分不清该去修配置还是该去提醒租户上货。
 const EMPTY_REASONS = {
   no_published_card: '本次未能生成健康风险提示，因此没有可对应的商品。',
-  no_labels: '该健康方向尚未配置对应的商城商品标签。',
   no_label_data: '该健康方向暂无可推荐的已上架商品。',
   mall_unavailable: '商城暂时不可用，请稍后再试。',
 };

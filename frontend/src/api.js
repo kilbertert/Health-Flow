@@ -54,7 +54,7 @@ export const assessReport = (id, token) => request(`/health/report/${id}/assess`
   headers: reportHeaders(token),
 });
 
-// 推荐商品由本服务端代理取回（浏览器不直接调商城，见 docs/adr/0004）。
+// 推荐商品由本服务端代理取回（浏览器不直接调商城，见 docs/adr/0005）。
 export const getReportRecommendations = (id, token = '') => request(
   `/health/report/${id}/recommendations`,
   { headers: reportHeaders(token) },

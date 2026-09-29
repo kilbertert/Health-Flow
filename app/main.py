@@ -124,11 +124,24 @@ async def readiness_check():
         account_required=settings.report_account_required,
         operator_configured=basic_auth_configured,
     )
+    # 商城配置缺失在**开发环境合法**（推荐区块安静地不出现），但在生产是配置事故：
+    # 一个上线了的部署不该把"货架永远是空的"当作正常。所以按环境区分，而不是一律
+    # degraded——否则一个刻意不接商城的开发部署会永远报 degraded，真故障被淹没。
+    #
+    # 这里**不做商城连通性探测**。readiness 是廉价、本地的信号，把第三方拉进来会让
+    # 商城的一次抖动把本服务摘出负载均衡——而它只影响一个装饰性区块，报告解读不受影响。
+    # 「配置了但商城当前不可达」由 recommendation 端点如实返回的 `mall_unavailable`
+    # 与日志表达，那是按需观测，不是每次探针都去打一遍别人的服务。
+    configured = settings.mall_webapi_configured
+    production = settings.APP_ENV.casefold() in {"prod", "production"}
+    mall_status = "configured" if configured else ("unconfigured" if not production else "missing")
+
+    core_ready = db_ok and evidence_configured and provider_configured
     return {
-        "status": "ready" if db_ok and evidence_configured and provider_configured else "degraded",
+        "status": "degraded" if (not core_ready or mall_status == "missing") else "ready",
         "database": "ok" if db_ok else "unavailable",
         "evidence_service": "configured" if evidence_configured else "unconfigured",
-        "mall_goods": "configured" if settings.mall_webapi_configured else "unconfigured",
+        "mall_goods": mall_status,
         "report_provider": "configured" if provider_configured else "unconfigured",
         "report_owner": report_owner,
         "account_auth": "required" if settings.report_account_required else "optional",

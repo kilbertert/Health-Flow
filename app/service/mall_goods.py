@@ -28,7 +28,7 @@ from app.config import Settings, get_settings
 logger = logging.getLogger(__name__)
 
 # 空标签集：今天商城端点没有标签入参，且金丝雀租户没有任何商品标签数据。
-# 这里的空是**事实的空**，不是未实现的空——见 docs/adr/0004 与 qa-plan.md
+# 这里的空是**事实的空**，不是未实现的空——见 docs/adr/0005 与 qa-plan.md
 # 中未通过的那条用例。标签数据与端点入参就绪后，本表由 semantic mapping 填充。
 EMPTY_LABELS: tuple[tuple[str, str], ...] = ()
 
@@ -54,6 +54,10 @@ class MallGoodsItem(BaseModel):
     # **不是 0**——渲染成 0 或"缺货"都是伪造。
     stock: int | None = None
     shop_id: str | None = None
+    # 商品挂的（标签名，标签值）对。**商城端点今天不返回它**，因此恒为空；
+    # 它在这里是因为按标签取货必须有一个可比的判据，而判据一旦存在就必须是
+    # 商品自己的属性（不是本地维护的一张对应表）。端点加上该字段后自动生效。
+    labels: frozenset[tuple[str, str]] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -104,11 +108,32 @@ def parse_items(payload: object) -> tuple[MallGoodsItem, ...]:
                     price_up=record.get("priceUp"),
                     stock=record.get("stock"),
                     shop_id=record.get("shopId"),
+                    labels=parse_labels(record),
                 )
             )
         except ValidationError as exc:
             raise MallGoodsError("商城返回格式无效") from exc
     return tuple(items)
+
+
+def parse_labels(record: dict[str, object]) -> frozenset[tuple[str, str]]:
+    """取该商品挂的（标签名，标签值）对。
+
+    商城端点今天不返回这个字段，所以现实里恒为空集——**这是数据的空，不是解析的失败**。
+    字段出现后（形如 `[{labelName, optionName}]`）无需改这里。
+    """
+    raw = record.get("labels") or record.get("goodsSpuLabelList")
+    if not isinstance(raw, list):
+        return frozenset()
+    pairs = set()
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("labelName")
+        value = entry.get("optionName")
+        if name and value:
+            pairs.add((str(name), str(value)))
+    return frozenset(pairs)
 
 
 def label_pairs_for(condition_code: str) -> tuple[tuple[str, str], ...]:
@@ -128,16 +153,20 @@ def filter_by_labels(
     items: tuple[MallGoodsItem, ...],
     labels: tuple[tuple[str, str], ...],
 ) -> tuple[MallGoodsItem, ...]:
-    """按标签对过滤商品。
+    """按标签交集取货：只保留命中任一 (标签名, 标签值) 的商品。
 
-    商城端点今天不返回商品的标签，因此无法在服务端做真实匹配：无标签时结果必然
-    为空。这里保留显式签名而不是删掉，是为了让"过滤发生在哪、依据是什么"留在代码里，
-    而不是消失在一句"暂时不需要"里。
+    判据是**商品自己的 `labels`**，不是本地维护的一张商品-标签对应表——后者是商城的
+    数据在本仓的第二份副本，必然漂移。商城端点今天不返回该字段，于是每件商品的
+    `labels` 都是空集，交集因此为空；**这个空由数据产生，不由函数忽略输入产生**，
+    端点补上字段后本函数无需修改即生效。
 
-    两个入参今天都用不上：返回项里没有标签字段可比对，端点也不接受标签入参。既然两种
-    判据都不存在，函数就不假装它们存在——`items` 与 `labels` 都未参与判定，结果恒为空。
+    无标签可查时直接返回空，不退回"全都要"：把该租户全部商品推给任意健康风险，
+    正是这道闸门要防的事。
     """
-    return ()
+    wanted = set(labels)
+    if not wanted:
+        return ()
+    return tuple(item for item in items if item.labels & wanted)
 
 
 async def fetch_goods(
