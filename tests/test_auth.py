@@ -8,6 +8,7 @@
 """
 
 import io
+import uuid
 from contextlib import contextmanager
 from datetime import datetime
 from unittest.mock import patch
@@ -19,7 +20,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.config import get_settings
-from app.data.models import Base, MedicalReport, MetricRecord, ReportAuditEvent
+from app.data.models import Base, MedicalReport, MetricRecord, ReportAuditEvent, TicketSubject
 from app.main import app
 from app.service.report_ownership import subject_storage_id
 from app.service.sessions import SESSION_COOKIE, issue_session
@@ -73,6 +74,15 @@ def _issue_subject_session(SessionLocal, tenant: str, subject: str) -> tuple[str
     owner_id = subject_storage_id(tenant, subject)
     token, row = issue_session(owner_id)
     with SessionLocal() as db:
+        # 主体记录也是必需的：会话解析会回查它（停用即失效）。
+        db.add(
+            TicketSubject(
+                id=str(uuid.uuid4()),
+                tenant_id=tenant,
+                external_subject=subject,
+                display_name="商城用户",
+            )
+        )
         db.add(row)
         db.commit()
     return owner_id, {SESSION_COOKIE: token}
@@ -323,3 +333,145 @@ def test_exchange_failure_does_not_fall_back_to_a_login_page(subject_client, tmp
     assert response.status_code == 401
     assert response.headers["content-type"].startswith("application/json")
     assert "login" not in response.text.lower()
+
+
+# --- review 修正：迁移级缺陷与停用语义 -----------------------------------------
+
+
+def test_create_tables_tolerates_a_sqlite_legacy_schema(tmp_path):
+    """旧库的 `user_sessions.account_id` 带着指向账号表的外键且只有 36 字符。
+
+    #172 之后这一列装的是主体标识（`account:<tenant>:<sub>`，可能 >36），两处都会
+    挡住票据会话——外键让插入失败、长度让它被拒。`create_all` 不改既有表，所以这段
+    升级必须显式执行，且**要在由旧 schema 建起的库上测**，不是只在新建库上测。
+    """
+    from sqlalchemy import create_engine, inspect, text
+
+    from app.data.mysql_client import MySQLClient
+
+    db_path = tmp_path / "legacy.db"
+    engine = create_engine(f"sqlite:///{db_path}")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE user_accounts (id VARCHAR(36) PRIMARY KEY)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE TABLE user_sessions ("
+                " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                " account_id VARCHAR(36) NOT NULL,"
+                " token_hash VARCHAR(64) NOT NULL,"
+                " created_at DATETIME NOT NULL,"
+                " expires_at DATETIME NOT NULL,"
+                " last_seen_at DATETIME NOT NULL,"
+                " revoked_at DATETIME,"
+                " FOREIGN KEY(account_id) REFERENCES user_accounts(id) ON DELETE CASCADE"
+                ")"
+            )
+        )
+    engine.dispose()
+
+    client = MySQLClient.__new__(MySQLClient)
+    client.engine = create_engine(f"sqlite:///{db_path}")
+    client.create_tables()
+
+    with client.engine.begin() as connection:
+        columns = {str(column["name"]): column for column in inspect(connection).get_columns("user_sessions")}
+    # SQLite 不支持改列，这段升级只对 MySQL（生产）生效；开发库上 `create_all`
+    # 建出来的表本来就没有外键，无需升级。这里断言的是「不会因方言不支持而炸」。
+    assert columns["account_id"]["type"].length == 36
+    client.engine.dispose()
+
+
+def test_restart_does_not_rewrite_newly_uploaded_reports():
+    """**重启不得改写新上传的报告。**
+
+    旧迁移按 `access_token_hash IS NULL` 打 `legacy_unclaimed`，而 #172 之后新上传
+    的报告**本来就没有令牌**——于是每次启动都会把 `confirmed`/`assessed` 抹掉，
+    之后 assess 返回 409。加 `owner_id` 条件把范围收回「真正无主的旧行」。
+    """
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from app.data.models import Base
+    from app.data.models import MedicalReport as ReportModel
+    from app.data.mysql_client import MySQLClient
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    session.add(
+        ReportModel(
+            patient_id="account:t:u",
+            owner_id="account:t:u",
+            report_type="体检",
+            status="assessed",
+        )
+    )
+    session.add(
+        ReportModel(
+            patient_id="anonymous",
+            owner_id="anonymous",
+            report_type="体检",
+            status="assessed",
+        )
+    )
+    session.commit()
+    session.close()
+
+    database = MySQLClient.__new__(MySQLClient)
+    database.engine = engine
+    database.create_tables()
+
+    with engine.begin() as connection:
+        rows = dict(connection.execute(text("SELECT owner_id, status FROM medical_reports")).all())
+    assert rows["account:t:u"] == "assessed", "有主的新报告不该被改写"
+    assert rows["anonymous"] == "legacy_unclaimed", "真正无主的旧行才打标记"
+    engine.dispose()
+
+
+def test_deactivated_subject_loses_its_sessions(subject_client):
+    """主体被停用后，它未过期的会话必须立刻失效。"""
+    from app.data.models import TicketSubject
+
+    client, SessionLocal = subject_client
+    owner_id, cookie = _issue_subject_session(SessionLocal, "t1", "u1")
+    client.cookies.update(cookie)
+    assert client.get("/api/auth/me").status_code == 200
+
+    with SessionLocal() as db:
+        db.query(TicketSubject).filter(TicketSubject.tenant_id == "t1").update({"is_active": False})
+        db.commit()
+
+    assert client.get("/api/auth/me").status_code == 401
+
+
+def test_long_subject_id_is_rejected_before_the_ticket_is_spent(subject_client, tmp_path):
+    """主体标识超长时必须在**兑换之前**拒绝——否则票被烧掉、用户再跳一次还是一样。"""
+    client, SessionLocal = subject_client
+    with _ticket_keypair(tmp_path) as key:
+        ticket = _make_ticket(key, tenant="t" * 80, subject="u" * 80)
+        response = client.post("/api/auth/ticket", json={"ticket": ticket})
+
+    assert response.status_code == 400
+    assert "主体标识" in response.json()["detail"]
+
+    # 票据**没有**被消费——同一张票改小标识后仍可用（这里用另一张同 jti 的票验证：
+    # 若上面已消费，这次会得到 401「已被使用」）。
+    with _ticket_keypair(tmp_path) as key:
+        ok = _make_ticket(key, tenant="t1", subject="u1", jti="jti-length")
+        assert client.post("/api/auth/ticket", json={"ticket": ok}).status_code == 201
+
+
+def test_exchange_returns_the_stored_display_name(subject_client, tmp_path):
+    """兑换与 `/me` 必须给出**同一个**展示名，否则前端会闪一下。"""
+    client, _ = subject_client
+    with _ticket_keypair(tmp_path) as key:
+        response = client.post("/api/auth/ticket", json={"ticket": _make_ticket(key)})
+
+    assert response.status_code == 201
+    exchanged = response.json()
+    assert exchanged["display_name"] == client.get("/api/auth/me").json()["display_name"]

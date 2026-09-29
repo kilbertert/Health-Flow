@@ -70,7 +70,7 @@ class MedicalReport(Base):
     __tablename__ = "medical_reports"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    patient_id = Column(String(64), nullable=False, index=True)
+    patient_id = Column(String(128), nullable=False, index=True)
     report_type = Column(String(32))
     file_url = Column(String(512))
     parsed_content = Column(JSON)
@@ -196,7 +196,7 @@ class ChatSession(Base):
     __tablename__ = "chat_sessions"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    patient_id = Column(String(64), nullable=False, index=True)
+    patient_id = Column(String(128), nullable=False, index=True)
     current_department = Column(String(64))
     agent_type = Column(String(64))
     conversation_summary = Column(Text)

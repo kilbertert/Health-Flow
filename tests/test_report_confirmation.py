@@ -59,11 +59,22 @@ def _subject_session(session_factory):
     #172 之后没有账号与密码，上传/确认都必须带主体会话；这里构造的正是
     「票据已兑换」之后的状态。
     """
+    import uuid as _uuid
+
+    from app.data.models import TicketSubject
     from app.service.report_ownership import subject_storage_id
     from app.service.sessions import SESSION_COOKIE, issue_session
 
     with session_factory() as session:
         owner_id = subject_storage_id("test-tenant", "test-user")
+        session.add(
+            TicketSubject(
+                id=str(_uuid.uuid4()),
+                tenant_id="test-tenant",
+                external_subject="test-user",
+                display_name="商城用户",
+            )
+        )
         token, row = issue_session(owner_id)
         session.add(row)
         session.commit()

@@ -250,10 +250,21 @@ export default function App() {
     // 说明「请从商城入口进入」。
     const params = new URLSearchParams(window.location.search);
     const ticket = params.get('ticket');
-    const bootstrap = ticket
+    // **票据是一次性的，绝不能被同一个页面加载花两次。** React StrictMode 在开发态
+    // 会把 effect 跑两遍，两次请求里第二次必定失败；若它的 rejection 后到，
+    // `setAccount(null)` 会把刚建好的会话盖掉。这里用一个模块级标记保证
+    // 「同一张票在本页只兑换一次」（生产也可能因用户重试/重复挂载遇到同一形状）。
+    const ticketKey = ticket ? `healthflow.ticket.spent.${ticket.slice(-12)}` : '';
+    const alreadySpent = ticketKey && window.sessionStorage.getItem(ticketKey);
+    if (alreadySpent) {
+      params.delete('ticket');
+      window.history.replaceState({}, '', `${window.location.pathname}${params.toString() ? `?${params}` : ''}${window.location.hash}`);
+    }
+    const bootstrap = ticket && !alreadySpent
       ? exchangeTicket(ticket)
         .then((subject) => {
           // 票据是一次性的：留在地址栏里会让用户刷新时拿到一个已被消费的票。
+          if (ticketKey) window.sessionStorage.setItem(ticketKey, '1');
           params.delete('ticket');
           const query = params.toString();
           window.history.replaceState({}, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`);

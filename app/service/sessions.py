@@ -66,9 +66,41 @@ def session_owner_id(request, db: Session) -> str | None:
     )
     if session is None:
         return None
+    # **主体被停用后，它的会话必须立刻失效。** 只校验会话本身不够：`TicketSubject`
+    # 上有一个 `is_active`，而停用它的理由（风控、注销、误建）恰恰要求「当前这次
+    # 访问就不该继续」。这里解析出主体标识后回查一次主体记录；查不到就按不可用处理
+    # ——票据主体记录是身份的唯一来源，读不到它意味着这条会话没有可验证的主体。
+    if not _subject_is_active(db, session.account_id):
+        return None
     session.last_seen_at = datetime.now()
     request.state.account_id = session.account_id
     return session.account_id
+
+
+def _subject_is_active(db: Session, storage_id: str) -> bool:
+    """该主体标识对应的主体是否仍然可用。
+
+    只有票据主体的形状（`account:<tenant>:<sub>`）能查到记录；退役期的历史会话
+    （`account:<uuid>`）没有主体行，那是既有的、只读的历史身份，**不因查不到而失效**
+    ——否则所有历史会话会在这次改动后同时断掉，而票面只授权退役、未授权清空历史。
+    """
+    parts = storage_id.split(":", 2)
+    if len(parts) != 3 or parts[0] != "account":
+        return True
+    _, tenant_id, external_subject = parts
+    from app.data.models import TicketSubject
+
+    subject = (
+        db.query(TicketSubject)
+        .filter(
+            TicketSubject.tenant_id == tenant_id,
+            TicketSubject.external_subject == external_subject,
+        )
+        .first()
+    )
+    if subject is None:
+        return False
+    return bool(subject.is_active)
 
 
 def revoke_session(request, db: Session) -> bool:

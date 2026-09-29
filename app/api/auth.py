@@ -14,6 +14,7 @@ from app.api.deps import db_dependency, session_owner_dependency
 from app.config import get_settings
 from app.data.models import MedicalReport
 from app.schema.auth import ReportHistoryItem, SessionSubjectResponse, TicketExchangeRequest
+from app.service.report_ownership import subject_storage_id
 from app.service.sessions import SESSION_COOKIE, revoke_session
 from app.service.tickets import TicketError, build_verifier
 
@@ -64,9 +65,19 @@ async def me(
     展示名从**主体记录**里取（它是票据兑换时建的），查不到就用默认值——退役期的
     历史会话没有主体记录，那是正常的，不是错误分支。
     """
-    from app.data.models import TicketSubject
 
     storage_id = _require_owner(owner_id)
+    return _subject_response(db, storage_id)
+
+
+def _subject_response(db: Session, storage_id: str) -> SessionSubjectResponse:
+    """主体标识 → 响应体，带上记录里的展示名（若有）。
+
+    兑换端点与 `/me` **共用这一处**：否则两条路径会给出不同的展示名——兑换时回默认值、
+    刷新后才变成记录里的名字，用户会看到名字闪一下。
+    """
+    from app.data.models import TicketSubject
+
     response = SessionSubjectResponse.from_storage_id(storage_id)
     if response.tenant_id:
         subject = (
@@ -133,6 +144,10 @@ async def exchange_ticket(
     """
     from app.service.sessions import issue_session
 
+    # **先做长度校验，再兑换。** 主体标识超出 `owner_id` 列宽时，
+    # `subject_storage_id` 会在**票据已被消费之后**抛错——那张票就白烧了，
+    # 而且用户再跳一次还是同样结果。长度只取决于票据里的两个标识，兑换前就能算，
+    # 所以把这道校验前置：要么明确报错（票据未被消费），要么放行。
     verifier = getattr(request.app.state, "ticket_verifier", None)
     if verifier is None:
         # 启动期（lifespan）已经建好验签器；这里是为**没有走 lifespan 的场景**
@@ -144,6 +159,19 @@ async def exchange_ticket(
         except TicketError as exc:
             raise HTTPException(status_code=503, detail=f"票据验签未就绪：{exc}") from exc
         request.app.state.ticket_verifier = verifier
+
+    # **先校验主体标识长度，再兑换。** 超出 `owner_id` 列宽时，`subject_storage_id()`
+    # 会在**票据已被消费之后**才抛错——那张票白烧了，用户再跳一次也是同样结果。
+    # 长度只取决于票据里的两个标识，验签通过就能算，所以前置：不合法就明确报错
+    # （此时票据**尚未**被消费）。
+    try:
+        claims = verifier.verify(payload.ticket)
+        subject_storage_id(claims.tenant_id, claims.subject)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"票据主体标识不可用：{exc}") from exc
+    except TicketError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
     try:
         identity = verifier.redeem_and_ensure_subject(db, payload.ticket)
     except TicketError as exc:
@@ -166,4 +194,4 @@ async def exchange_ticket(
         samesite="lax",
         path="/",
     )
-    return SessionSubjectResponse.from_storage_id(identity.storage_id)
+    return _subject_response(db, identity.storage_id)
