@@ -42,6 +42,7 @@ from app.schema.evidence import (
 from app.schema.report import (
     MedicalReportResponse,
     MetricRecord,
+    RecommendationResponse,
     ReportConfirmationRequest,
 )
 from app.service.evidence_bridge import (
@@ -51,6 +52,7 @@ from app.service.evidence_bridge import (
     match_published_evidence,
     metric_code_for_name,
 )
+from app.service.mall_goods import fetch_goods, label_pairs_for, serialized
 from app.service.report_ownership import resolve_owner
 from app.service.vision_encoder import ParsedReport, get_vision_encoder_service
 
@@ -485,6 +487,20 @@ def _parse_report(
         return False
 
 
+def _confirmed_condition_codes(report: ReportModel) -> list[str]:
+    """已确认健康风险的 condition_code，按出现顺序去重。
+
+    商品按这些风险的方向取货；没有风险就没有取货依据，不是"默认给点推荐"。
+    """
+    evidence = report.evidence_result or {}
+    codes: list[str] = []
+    for finding in evidence.get("findings") or []:
+        code = finding.get("condition_code") if isinstance(finding, dict) else None
+        if code and code not in codes:
+            codes.append(code)
+    return codes
+
+
 def _report_response(
     report: ReportModel,
     metrics: list[MetricModel],
@@ -798,6 +814,49 @@ async def _assess_report(
     db.refresh(report)
     metrics = _ordered_metrics(db, report.id).all()
     return _report_response(report, metrics, owned_by_account=owned_by_account)
+
+
+@router.get("/report/{report_id}/recommendations", response_model=RecommendationResponse)
+async def get_report_recommendations(
+    report_id: int,
+    request: Request,
+    db: Session = Depends(db_dependency),
+    x_report_token: str = Header(default=""),
+    account=Depends(report_account_dependency),
+):
+    """推荐商品（同源）。浏览器只与本服务通信，商城由服务端取。
+
+    为空时必须说明**为什么**为空，这些情况不得合并成一句「暂无推荐」：
+
+    - `no_published_card`：报告没有可据以取货的健康风险（本报告自身的事实，不调商城）；
+    - `no_label_data`：商城调用成功，但按标签过滤后没有商品——今天映射本身为空，
+      所以这条同时覆盖"还没映射标签"与"映射了但没货"，两者的修复动作都在商城侧；
+    - `mall_unavailable`：商城不可达/超时/返回业务错误/凭据未配置。
+
+    商城不可达**不报错**：返回空列表与原因，页面照常渲染「暂无推荐」。
+    """
+    report = _authorized_report(
+        db,
+        report_id,
+        x_report_token,
+        owner_id=resolve_owner(request).storage_id,
+        session_authenticated=account is not None,
+    )
+
+    conditions = _confirmed_condition_codes(report)
+    if not conditions:
+        return RecommendationResponse(items=[], reason="no_published_card")
+
+    labels: list[tuple[str, str]] = []
+    for condition_code in conditions:
+        labels.extend(label_pairs_for(condition_code))
+    # 无标签仍然**照常调用商城**（#174 的验收项就是"服务端经商城端点取货"）：
+    # 早起返回会让这条 AC 只剩测试里的 mock，且链路上最易失效的一段没有真实调用证据。
+    result = await fetch_goods(labels=tuple(labels))
+    return RecommendationResponse(
+        items=serialized(result.items),
+        reason=result.reason,
+    )
 
 
 @router.get("/report/{report_id}/metrics", response_model=list[MetricRecord])

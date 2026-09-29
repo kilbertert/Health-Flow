@@ -75,6 +75,27 @@ class ReportFileRecord(BaseModel):
     source_url: str
 
 
+class RecommendationItem(BaseModel):
+    """检测页商品卡片。字段是商城端点返回的展示子集，不含内部定价面。"""
+
+    id: str
+    name: str
+    image: str | None = None
+    # 价格保持十进制字符串：商城返回的是 BigDecimal，转成二进制浮点会抖动。
+    price_down: str | None = None
+    price_up: str | None = None
+    # null 表示商城未标注库存，**不等同于 0**；前端据此显示"未标注"。
+    stock: int | None = None
+    shop_id: str | None = None
+
+
+class RecommendationResponse(BaseModel):
+    """检测页推荐结果。为空时 `reason` 必须说明是哪一种空。"""
+
+    items: list[RecommendationItem] = Field(default_factory=list)
+    reason: Literal["no_published_card", "no_labels", "no_label_data", "mall_unavailable"] | None = None
+
+
 class ReportExtractionJobResponse(BaseModel):
     model_config = {"extra": "forbid"}
 

@@ -128,6 +128,7 @@ async def readiness_check():
         "status": "ready" if db_ok and evidence_configured and provider_configured else "degraded",
         "database": "ok" if db_ok else "unavailable",
         "evidence_service": "configured" if evidence_configured else "unconfigured",
+        "mall_goods": "configured" if settings.mall_webapi_configured else "unconfigured",
         "report_provider": "configured" if provider_configured else "unconfigured",
         "report_owner": report_owner,
         "account_auth": "required" if settings.report_account_required else "optional",
