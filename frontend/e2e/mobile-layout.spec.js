@@ -1,15 +1,6 @@
 // 移动端布局地基:E2E 断言覆盖首页/登录注册/个人中心三个视图,
 // 验证 375px 与 414px 下无横向溢出、固定导航不遮挡内容、页面底部完整可见。
-import { test, expect } from './fixtures.js';
-
-async function login(page, account) {
-  await page.goto('/');
-  await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
-  await page.getByLabel('邮箱').fill(account.email);
-  await page.getByLabel('密码').fill(account.password);
-  await page.getByRole('button', { name: /^登\s*录$/ }).click();
-  await expect(page.getByRole('heading', { name: '呵护您的健康' })).toBeVisible();
-}
+import { test, expect, loginWithSeed } from './fixtures.js';
 
 function horizontalExcess(page) {
   return page.evaluate(
@@ -30,9 +21,12 @@ function headerClearsContent(page, selector) {
   test.describe(`移动端 ${width}px`, () => {
     test.use({ viewport: { width, height: 667 } });
 
-    test('登录注册视图无横向溢出且卡片完整落在视口内', async ({ page }) => {
+    test('无会话视图无横向溢出且卡片完整落在视口内', async ({ page, seed }) => {
+      // #172:登录注册页整体退役,未建立会话时展示的是「请从商城入口进入」页。
+      // 这条用例断言的布局约束没变(无横向溢出、卡片落在视口内),换的是那个页面。
+      await seed({ reports: ['assessed'] });
       await page.goto('/');
-      await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
+      await expect(page.getByRole('heading', { name: '请从商城入口进入' })).toBeVisible();
       expect(await horizontalExcess(page)).toBeLessThanOrEqual(0);
 
       const card = page.locator('.auth-card');
@@ -44,8 +38,8 @@ function headerClearsContent(page, selector) {
     });
 
     test('首页与个人中心无横向溢出，固定导航不遮挡，底部退出按钮可见', async ({ page, seed }) => {
-      const { account } = await seed({ reports: ['assessed'] });
-      await login(page, account);
+      const seeded = await seed({ reports: ['assessed'] });
+      await loginWithSeed(page, seeded);
 
       expect(await horizontalExcess(page)).toBeLessThanOrEqual(0);
       expect(await headerClearsContent(page, '.home-page')).toBeTruthy();
@@ -73,8 +67,8 @@ test.describe('桌面端', () => {
   test.use({ viewport: { width: 1280, height: 800 } });
 
   test('登录后首页保留桌面导航且无横向溢出', async ({ page, seed }) => {
-    const { account } = await seed();
-    await login(page, account);
+    const seeded = await seed();
+    await loginWithSeed(page, seeded);
 
     const nav = page.getByRole('navigation', { name: '健康服务' });
     await expect(nav).toBeVisible();

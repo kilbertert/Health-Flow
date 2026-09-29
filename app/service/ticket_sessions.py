@@ -32,6 +32,16 @@ class SubjectIdentity:
     external_subject: str
     created: bool
 
+    @property
+    def storage_id(self) -> str:
+        """该主体在 `owner_id` / 会话里的持久化形状：`account:<tenant>:<sub>`。
+
+        由 `subject_storage_id` 单点构造，不在这里另拼一份——两处拼接必然漂移。
+        """
+        from app.service.report_ownership import subject_storage_id
+
+        return subject_storage_id(self.tenant_id, self.external_subject)
+
 
 def _display_name(claims: TicketClaims) -> str:
     """展示名。**不含任何从票据推导出的个人信息**——票里只有标识符。

@@ -19,3 +19,21 @@ export const test = base.extend({
     await use(seedTestData);
   },
 });
+
+/**
+ * 建立会话并打开首页(#172)。
+ *
+ * 不再有登录页与密码:会话来自种子脚本建立的**主体会话**,把那张 cookie 直接种进
+ * 浏览器上下文即可,等价于「刚从商城跳进来兑换过一张票」。
+ */
+export async function loginWithSeed(page, seeded) {
+  await page.context().addCookies([
+    {
+      name: 'healthflow_session',
+      value: seeded.subject.session_token,
+      url: 'http://127.0.0.1:8137',
+    },
+  ]);
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: '呵护您的健康' })).toBeVisible();
+}

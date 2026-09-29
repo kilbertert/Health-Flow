@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import subprocess
@@ -15,9 +14,10 @@ import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
-from app.data.models import MedicalReport, MetricRecord, ReportFile, UserAccount
+from app.data.models import MedicalReport, MetricRecord, ReportFile, UserSession
 from app.schema.evidence import EvidenceMatchResponse
-from app.service.auth import verify_password
+from app.service.report_ownership import subject_storage_id
+from app.service.sessions import session_hash
 from scripts.e2e_seed import SEED_REPORT_STATUSES, main, seed_database
 
 
@@ -36,22 +36,28 @@ def _session(database_url):
         engine.dispose()
 
 
-def test_seed_creates_login_account(database_url):
+def test_seed_creates_a_ticket_subject_and_session(database_url):
+    """#172 之后种子不再建账号：主体由等价于「票据已兑换」的状态产生。
+
+    断言的是**主体标识的形状**与会话可用性——不再有任何密码可验（密码整体退役）。
+    """
     payload = seed_database(
         database_url,
-        email=" Seed@HealthFlow.test ",
-        password="e2e-pass-123",
+        tenant_id="seed-tenant",
+        external_subject="seed-user",
         display_name="种子用户",
     )
-    account = payload["account"]
-    assert account["email"] == "seed@healthflow.test"
-    assert account["display_name"] == "种子用户"
+    subject = payload["subject"]
+    assert subject["owner_id"] == subject_storage_id("seed-tenant", "seed-user")
+    assert subject["display_name"] == "种子用户"
 
     with _session(database_url) as session:
-        saved = session.scalar(select(UserAccount).where(UserAccount.email == account["email"]))
-    assert saved is not None
-    assert verify_password(account["password"], saved.password_hash)
-    assert saved.password_hash != account["password"]
+        saved = session.scalar(select(UserSession).where(UserSession.account_id == subject["owner_id"]))
+        assert saved is not None
+        assert saved.revoked_at is None
+        # 会话行里装的是主体标识，不是账号主键。
+        assert saved.token_hash == session_hash(subject["session_token"])
+        assert session.get(UserSession, saved.id).account_id == subject["owner_id"]
 
 
 def test_seed_creates_sqlite_database_directory(tmp_path):
@@ -59,33 +65,33 @@ def test_seed_creates_sqlite_database_directory(tmp_path):
     database_url = f"sqlite:///{database_dir / 'seed.db'}"
     payload = seed_database(
         database_url,
-        email="nested@healthflow.test",
-        password="e2e-pass-123",
+        tenant_id="nested-tenant",
+        external_subject="nested-user",
     )
 
     assert database_dir.is_dir()
     assert (database_dir / "seed.db").is_file()
-    assert payload["account"]["email"] == "nested@healthflow.test"
+    assert payload["subject"]["external_subject"] == "nested-user"
 
 
 def test_seed_creates_completed_and_pending_reports(database_url):
-    payload = seed_database(database_url, email="owner@healthflow.test", password="e2e-pass-123")
+    payload = seed_database(database_url, tenant_id="owner-tenant", external_subject="owner-user")
     statuses = [report["status"] for report in payload["reports"]]
     assert statuses == list(SEED_REPORT_STATUSES)
 
     with _session(database_url) as session:
-        account = session.scalar(select(UserAccount).where(UserAccount.email == "owner@healthflow.test"))
-        assert account is not None
+        owner_id = payload["subject"]["owner_id"]
         completed = next(item for item in payload["reports"] if item["status"] == "assessed")
         pending = next(item for item in payload["reports"] if item["status"] == "pending_confirmation")
 
         completed_row = session.get(MedicalReport, completed["id"])
         pending_row = session.get(MedicalReport, pending["id"])
-        for row, item in ((completed_row, completed), (pending_row, pending)):
+        for row in (completed_row, pending_row):
             assert row is not None
-            assert row.owner_id == account.id
-            assert row.patient_id == account.id
-            assert row.access_token_hash == hashlib.sha256(item["access_token"].encode("utf-8")).hexdigest()
+            assert row.owner_id == owner_id
+            assert row.patient_id == owner_id
+            # 令牌机制已退役：种子不再产出令牌，行里也不再有它的哈希。
+            assert row.access_token_hash is None
 
         # 已完成报告:契约合法的 evidence_result + 已确认指标。
         EvidenceMatchResponse.model_validate(completed_row.evidence_result)
@@ -116,8 +122,8 @@ def test_seed_creates_report_page_file_when_dir_provided(database_url, tmp_path)
     report_files_dir = tmp_path / "report-files"
     payload = seed_database(
         database_url,
-        email="files@healthflow.test",
-        password="e2e-pass-123",
+        tenant_id="files-tenant",
+        external_subject="files-user",
         reports=["assessed"],
         report_files_dir=str(report_files_dir),
     )
@@ -137,8 +143,8 @@ def test_seed_rejects_unknown_status(database_url):
     with pytest.raises(ValueError, match="不支持的种子报告状态"):
         seed_database(
             database_url,
-            email="x@healthflow.test",
-            password="e2e-pass-123",
+            tenant_id="x-tenant",
+            external_subject="x-user",
             reports=["archived"],
         )
 
@@ -148,15 +154,15 @@ def test_main_prints_json_payload(database_url, capsys):
         [
             "--database",
             database_url,
-            "--email",
-            "cli@healthflow.test",
-            "--password",
-            "e2e-pass-123",
+            "--tenant-id",
+            "cli-tenant",
+            "--external-subject",
+            "cli-user",
         ]
     )
     assert exit_code == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["account"]["email"] == "cli@healthflow.test"
+    assert payload["subject"]["external_subject"] == "cli-user"
     assert {item["status"] for item in payload["reports"]} == {
         "assessed",
         "pending_confirmation",
@@ -186,15 +192,15 @@ def test_script_help_runs_without_editable_install(tmp_path):
     assert "--database" in completed.stdout
 
 
-def test_main_rejects_duplicate_account(database_url, capsys):
+def test_main_rejects_duplicate_subject(database_url, capsys):
     args = [
         "--database",
         database_url,
-        "--email",
-        "dup@healthflow.test",
-        "--password",
-        "e2e-pass-123",
+        "--tenant-id",
+        "dup-tenant",
+        "--external-subject",
+        "dup-user",
     ]
     assert main(args) == 0
     assert main(args) == 1
-    assert "账户已存在" in capsys.readouterr().err
+    assert "主体已存在" in capsys.readouterr().err

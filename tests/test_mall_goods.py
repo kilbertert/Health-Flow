@@ -26,6 +26,7 @@ from app.service.mall_goods import (
     parse_items,
     sign_payload,
 )
+from app.service.sessions import SESSION_COOKIE, issue_session
 
 # 一次真实调用返回的记录形状（价格是十进制元的浮点、库存为 null）。
 # 租户标识**不写进测试**：夹具要的是形状，不是某个租户的业务数据。
@@ -63,7 +64,6 @@ def _settings(**overrides):
 
 def test_signature_uses_uppercase_hex_twice():
     """内层小写会被商城判"签名错误"（实测）；两层都必须大写。"""
-    import hashlib
 
     payload = {"appId": "app", "timeStamp": 1730000000000, "current": 1, "size": 100}
     joined = "appId=app&current=1&size=100&timeStamp=1730000000000&appSecret=s3cret"
@@ -211,16 +211,19 @@ def _report_client(evidence_result):
     )
     Base.metadata.create_all(engine)
     SessionLocal = sessionmaker(bind=engine)
+    owner_id = "account:goods-tenant:goods-user"
     with SessionLocal() as session:
         report = ReportModel(
             patient_id="P-goods",
             report_type="体检",
             status="assessed",
-            owner_id="account:acct-1",
-            access_token_hash=hashlib.sha256(b"report-token").hexdigest(),
+            owner_id=owner_id,
             evidence_result=evidence_result,
         )
         session.add(report)
+        # #172：访问必须带主体会话（报告令牌旁路已移除）。
+        token, session_row = issue_session(owner_id)
+        session.add(session_row)
         session.commit()
         report_id = report.id
 
@@ -230,12 +233,11 @@ def _report_client(evidence_result):
 
     with (
         patch("app.data.get_db", override_get_db),
-        patch("app.service.auth.account_for_request", return_value=SimpleNamespace(id="acct-1")),
-        patch("app.api.report.resolve_owner", return_value=SimpleNamespace(storage_id="account:acct-1")),
+        patch("app.api.report.resolve_owner", return_value=SimpleNamespace(storage_id=owner_id)),
     ):
         from app.main import app
 
-        yield TestClient(app), report_id, "report-token"
+        yield TestClient(app), report_id, {SESSION_COOKIE: token}
 
 
 def _finding(condition_code: str) -> dict:
@@ -243,12 +245,12 @@ def _finding(condition_code: str) -> dict:
 
 
 def test_endpoint_returns_condition_reasons():
-    with _report_client({"findings": [_finding("COND_DYSLIPIDEMIA")]}) as (client, report_id, token):
+    with _report_client({"findings": [_finding("COND_DYSLIPIDEMIA")]}) as (client, report_id, cookie):
         result = MallGoodsResult(items=(), reason="no_label_data")
         with patch("app.api.report.fetch_goods", return_value=result) as fetch:
             response = client.get(
                 f"/api/health/report/{report_id}/recommendations",
-                headers={"X-Report-Token": token},
+                cookies=cookie,
             )
 
     assert response.status_code == 200
@@ -263,12 +265,12 @@ def test_endpoint_returns_condition_reasons():
 def test_endpoint_reports_no_published_card_without_calling_mall():
     """没有健康风险就没有取货依据——不调商城，也不用营销内容填空。"""
     with (
-        _report_client({"findings": []}) as (client, report_id, token),
+        _report_client({"findings": []}) as (client, report_id, cookie),
         patch("app.api.report.fetch_goods") as fetch,
     ):
         response = client.get(
             f"/api/health/report/{report_id}/recommendations",
-            headers={"X-Report-Token": token},
+            cookies=cookie,
         )
 
     assert response.status_code == 200
@@ -277,13 +279,13 @@ def test_endpoint_reports_no_published_card_without_calling_mall():
 
 
 def test_endpoint_surfaces_mall_outage_as_reason_not_error():
-    with _report_client({"findings": [_finding("COND_DYSLIPIDEMIA")]}) as (client, report_id, token), patch(
+    with _report_client({"findings": [_finding("COND_DYSLIPIDEMIA")]}) as (client, report_id, cookie), patch(
         "app.api.report.fetch_goods",
         return_value=MallGoodsResult(items=(), reason="mall_unavailable"),
     ):
         response = client.get(
             f"/api/health/report/{report_id}/recommendations",
-            headers={"X-Report-Token": token},
+            cookies=cookie,
         )
 
     assert response.status_code == 200
@@ -300,13 +302,13 @@ def test_endpoint_serializes_hit_items_without_touching_stock():
         stock=None,
         shop_id="1582258389846802433",
     )
-    with _report_client({"findings": [_finding("COND_DYSLIPIDEMIA")]}) as (client, report_id, token), patch(
+    with _report_client({"findings": [_finding("COND_DYSLIPIDEMIA")]}) as (client, report_id, cookie), patch(
         "app.api.report.fetch_goods",
         return_value=MallGoodsResult(items=(hit,), reason=None),
     ):
         response = client.get(
             f"/api/health/report/{report_id}/recommendations",
-            headers={"X-Report-Token": token},
+            cookies=cookie,
         )
 
     body = response.json()

@@ -1,18 +1,9 @@
 // 报告解读流移动端布局:E2E 覆盖报告查看页在 375/414px 下无页面级横向溢出,
 // 技术元数据默认收起且可展开,原文溯源弹窗在移动端全屏且高亮区域可见。
-import { test, expect } from './fixtures.js';
+import { test, expect, loginWithSeed } from './fixtures.js';
 
-async function login(page, account) {
-  await page.goto('/');
-  await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
-  await page.getByLabel('邮箱').fill(account.email);
-  await page.getByLabel('密码').fill(account.password);
-  await page.getByRole('button', { name: /^登\s*录$/ }).click();
-  await expect(page.getByRole('heading', { name: '呵护您的健康' })).toBeVisible();
-}
-
-async function openAssessedReport(page, account) {
-  await login(page, account);
+async function openAssessedReport(page, seeded) {
+  await loginWithSeed(page, seeded);
   await page.getByRole('button', { name: '个人中心', exact: true }).click();
   await expect(page.getByRole('heading', { name: '个人中心' })).toBeVisible();
   await page.getByRole('button', { name: '查看' }).click();
@@ -31,8 +22,8 @@ function horizontalExcess(page) {
     test.use({ viewport: { width, height: 667 } });
 
     test('页面无横向溢出，技术详情默认收起可展开', async ({ page, seed }) => {
-      const { account } = await seed({ reports: ['assessed'] });
-      await openAssessedReport(page, account);
+      const seeded = await seed({ reports: ['assessed'] });
+      await openAssessedReport(page, seeded);
 
       await expect.poll(() => horizontalExcess(page)).toBeLessThanOrEqual(0);
       const knowledgeTitle = page.locator('.evidence-result-card .ant-card-head');
@@ -52,8 +43,8 @@ function horizontalExcess(page) {
     });
 
     test('原文溯源弹窗全屏且高亮区域可见', async ({ page, seed }) => {
-      const { account } = await seed({ reports: ['assessed'] });
-      await openAssessedReport(page, account);
+      const seeded = await seed({ reports: ['assessed'] });
+      await openAssessedReport(page, seeded);
 
       await page.getByRole('button', { name: '查看空腹血糖原文' }).click();
       const modal = page.locator('.source-modal-wrap .ant-modal');
@@ -93,8 +84,8 @@ test.describe('桌面端报告解读流', () => {
   test.use({ viewport: { width: 1280, height: 800 } });
 
   test('技术详情收起且原文弹窗保留 960px 宽度', async ({ page, seed }) => {
-    const { account } = await seed({ reports: ['assessed'] });
-    await openAssessedReport(page, account);
+    const seeded = await seed({ reports: ['assessed'] });
+    await openAssessedReport(page, seeded);
 
     await expect.poll(() => horizontalExcess(page)).toBeLessThanOrEqual(0);
     const technicalDetails = page.getByRole('button', { name: '技术详情' });

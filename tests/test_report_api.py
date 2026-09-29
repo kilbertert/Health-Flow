@@ -14,6 +14,7 @@ from app.data.models import Base, ReportExtractionJob
 from app.data.models import MetricRecord as MetricModel
 from app.schema.report import MetricRecord
 from app.service.report_worker import run_next_job
+from app.service.sessions import SESSION_COOKIE, issue_session
 
 
 class MockVisionService:
@@ -78,20 +79,34 @@ def test_upload_report_endpoint(client, tmp_path):
         REPORT_PARSE_WORKERS=4,
         REPORT_FILES_DIR=str(tmp_path),
     )
+    # #172：上传必须带主体会话（报告令牌旁路已移除）。这条会话等价于
+    # 「用户刚从商城跳进来兑换过一张票」。
+    owner_id = "account:api-tenant:api-user"
+    token, session_row = issue_session(owner_id)
+    with SessionLocal() as bootstrap:
+        bootstrap.add(session_row)
+        bootstrap.commit()
+
     with (
         patch(
             "app.api.report.get_vision_encoder_service",
             return_value=MockVisionService(),
         ),
         patch("app.api.report.get_settings", return_value=settings),
+        patch(
+            "app.api.report.resolve_owner",
+            return_value=SimpleNamespace(storage_id=owner_id, subject=f"account:{owner_id}"),
+        ),
         patch("app.data.get_db", override_get_db),
     ):
         fake_image = b"fake png content"
+        cookies = {SESSION_COOKIE: token}
 
         response = client.post(
             "/api/health/report/upload",
             data={"patient_id": "P001", "department": "内分泌科"},
             files={"file": ("test.png", io.BytesIO(fake_image), "text/html")},
+            cookies=cookies,
         )
 
         assert response.status_code == 202, response.text
@@ -104,18 +119,19 @@ def test_upload_report_endpoint(client, tmp_path):
         assert data["extraction_job"]["status"] == "queued"
         assert data["extraction_job"]["attempt_count"] == 0
         assert isinstance(data["metrics"], list)
-        token = data["access_token"]
-        headers = {"X-Report-Token": token}
+        # 响应里不再回显任何令牌字段（#172）——断言"没有"，而不是"删了就自然没有"。
+        assert "access_token" not in data
+        assert not [key for key in data if "token" in key.lower()]
         assert run_next_job(SessionLocal) is not None
-        parsed_response = client.get(f"/api/health/report/{data['id']}", headers=headers)
+        parsed_response = client.get(f"/api/health/report/{data['id']}", cookies=cookies)
         parsed = parsed_response.json()
-        assert (
-            client.get(
-                f"/api/health/report/{data['id']}",
-                headers={"X-Report-Token": "wrong-token"},
-            ).status_code
-            == 404
-        )
+        # 属于**另一个**主体的请求看不到（原来这条断言的是"带错令牌被拒"）。
+        # 不能用"不带会话"来测：本用例把 resolve_owner 打了桩，那条路径测不到。
+        with patch(
+            "app.api.report.resolve_owner",
+            return_value=SimpleNamespace(storage_id="account:api-tenant:someone-else"),
+        ):
+            assert client.get(f"/api/health/report/{data['id']}").status_code == 404
         assert parsed["status"] == "pending_confirmation"
         assert parsed["extraction_job"]["status"] == "completed"
         assert parsed["extraction_job"]["attempt_count"] == 1
@@ -140,12 +156,12 @@ def test_upload_report_endpoint(client, tmp_path):
                 "source_url": f"/api/health/report/{data['id']}/files/1/pages/1",
             }
         ]
-        source = client.get(parsed["files"][0]["source_url"], headers=headers)
+        source = client.get(parsed["files"][0]["source_url"], cookies=cookies)
         assert source.status_code == 200
         assert source.content == fake_image
         stored = tmp_path / str(data["id"]) / "1.png"
         assert stored.is_file()
-        assert client.delete(f"/api/health/report/{data['id']}", headers=headers).status_code == 200
+        assert client.delete(f"/api/health/report/{data['id']}", cookies=cookies).status_code == 200
         assert not stored.exists()
 
 

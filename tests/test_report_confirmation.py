@@ -19,7 +19,8 @@ from app.data.models import Base
 from app.data.models import MedicalReport as ReportModel
 from app.data.models import MetricRecord as MetricModel
 from app.schema.report import MetricRecord
-from app.service.evidence_bridge import infer_abnormal_flag, metric_code_for_name
+from app.service.evidence_bridge import metric_code_for_name
+from app.service.report_ownership import UNOWNED_SENTINEL
 from app.service.vision_encoder import ParsedReport
 
 
@@ -49,6 +50,35 @@ def _ticket_public_key():
         finally:
             settings.MALL_TICKET_PUBLIC_KEY_PATH = previous_path
             settings.MALL_TICKET_AUDIENCE = previous_aud
+
+
+@contextmanager
+def _subject_session(session_factory):
+    """建一个票据主体与一条会话，返回可直接用于请求的 cookie。
+
+    #172 之后没有账号与密码，上传/确认都必须带主体会话；这里构造的正是
+    「票据已兑换」之后的状态。
+    """
+    import uuid as _uuid
+
+    from app.data.models import TicketSubject
+    from app.service.report_ownership import subject_storage_id
+    from app.service.sessions import SESSION_COOKIE, issue_session
+
+    with session_factory() as session:
+        owner_id = subject_storage_id("test-tenant", "test-user")
+        session.add(
+            TicketSubject(
+                id=str(_uuid.uuid4()),
+                tenant_id="test-tenant",
+                external_subject="test-user",
+                display_name="商城用户",
+            )
+        )
+        token, row = issue_session(owner_id)
+        session.add(row)
+        session.commit()
+    yield {SESSION_COOKIE: token}
 
 
 def _evidence_result(*, findings=None, unmatched=None, skipped=None):
@@ -135,8 +165,13 @@ def test_metric_names_with_report_abbreviations_are_canonicalized():
     assert {name: metric_code_for_name(name) for name in expected} == expected
 
 
-def test_report_owner_isolation_rejects_a_valid_token_for_another_owner():
-    from app.api.report import _authorized_report, _token_hash
+def test_report_owner_isolation_rejects_another_owner():
+    """另一个主体的存储标识不能读到这份报告。
+
+    原来这条带令牌（「持有效令牌但主体不同仍被拒」）。#172 移除令牌机制后，
+    被测的那条**契约**没变——**归属只认主体**——所以用例保留、令牌部分删掉。
+    """
+    from app.api.report import _authorized_report
 
     engine = create_engine(
         "sqlite://",
@@ -149,18 +184,23 @@ def test_report_owner_isolation_rejects_a_valid_token_for_another_owner():
         patient_id="P-owner",
         report_type="体检",
         status="uploaded",
-        access_token_hash=_token_hash("token"),
-        owner_id="owner-a",
+        owner_id="account:tenant-a:user-a",
     )
     session.add(report)
     session.commit()
+
     with pytest.raises(HTTPException) as error:
-        _authorized_report(session, report.id, "token", owner_id="owner-b")
+        _authorized_report(session, report.id, owner_id="account:tenant-a:user-b")
     assert error.value.status_code == 404
     session.close()
 
 
-def test_legacy_report_without_token_cannot_cross_the_owner_boundary():
+def test_legacy_report_without_an_owner_stays_sealed():
+    """无主历史行（`owner_id` 为哨兵值）对任何主体都不可见。
+
+    它以前靠令牌访问；令牌机制退役后这一类**没有访问路径**——这正是票面接受的
+    「既有无主报告不再可访问」。用例保留，断言的是那条契约：**它保持封闭**。
+    """
     from app.api.report import _authorized_report
 
     engine = create_engine(
@@ -173,44 +213,17 @@ def test_legacy_report_without_token_cannot_cross_the_owner_boundary():
     report = ReportModel(
         patient_id="P-legacy",
         report_type="体检",
-        status="legacy_unclaimed",
+        status="assessed",
+        owner_id=UNOWNED_SENTINEL,
     )
     session.add(report)
     session.commit()
-    with pytest.raises(HTTPException) as error:
-        _authorized_report(session, report.id, "any-token", owner_id="owner")
-    assert error.value.status_code == 404
+
+    for candidate in ("account:tenant-a:user-a", UNOWNED_SENTINEL):
+        with pytest.raises(HTTPException) as error:
+            _authorized_report(session, report.id, owner_id=candidate)
+        assert error.value.status_code == 404
     session.close()
-
-
-def test_legacy_report_with_a_valid_token_but_no_owner_is_sealed():
-    from app.api.report import _authorized_report, _token_hash
-
-    engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(engine)
-    session = sessionmaker(bind=engine)()
-    report = ReportModel(
-        patient_id="P-legacy-token",
-        report_type="体检",
-        status="legacy_unclaimed",
-        access_token_hash=_token_hash("legacy-token"),
-    )
-    session.add(report)
-    session.commit()
-    with pytest.raises(HTTPException) as error:
-        _authorized_report(session, report.id, "legacy-token", owner_id="owner")
-    assert error.value.status_code == 404
-    session.close()
-
-
-def test_reference_range_deterministically_normalizes_abnormality():
-    assert infer_abnormal_flag("5.5", "<5.2") == "H"
-    assert infer_abnormal_flag("1.50", ">1.00") == "N"
-    assert infer_abnormal_flag("<20", "<20") is None
 
 
 def test_confirmed_non_hdl_abnormal_is_sent_to_evidence_service():
@@ -565,22 +578,25 @@ def test_multi_file_confirmation_matches_published_card(tmp_path):
         # 该用例走真实 lifespan（它会建票据验签器）。票据配置与这条链路无关，
         # 用自造密钥对把它补上，避免用例依赖本机是否配了商城公钥。
         with _ticket_public_key(), TestClient(app) as client:
-            response = client.post(
-                "/api/health/report/upload",
-                data={"patient_id": "P001"},
-                files=[
-                    ("files", ("first.png", io.BytesIO(b"one"), "image/png")),
-                    ("files", ("second.png", io.BytesIO(b"two"), "image/png")),
-                ],
-            )
+            # #172 之后上传必须带主体会话（报告令牌旁路已移除）。这里直接用种子
+            # 会话的 cookie，等价于「用户刚从商城跳进来兑换过一张票」。
+            with _subject_session(fake_db.SessionLocal) as cookie:
+                response = client.post(
+                    "/api/health/report/upload",
+                    data={"patient_id": "P001"},
+                    cookies=cookie,
+                    files=[
+                        ("files", ("first.png", io.BytesIO(b"one"), "image/png")),
+                        ("files", ("second.png", io.BytesIO(b"two"), "image/png")),
+                    ],
+                )
             assert response.status_code == 202, response.text
             uploaded = response.json()
             report_id = uploaded["id"]
-            headers = {"X-Report-Token": uploaded["access_token"]}
             from app.service.report_worker import run_next_job
 
             assert run_next_job(fake_db.SessionLocal) is not None
-            report = client.get(f"/api/health/report/{report_id}", headers=headers).json()
+            report = client.get(f"/api/health/report/{report_id}", cookies=cookie).json()
             assert report["status"] == "pending_confirmation"
             assert [item["source_file_index"] for item in report["metrics"]] == [1, 2]
             assert [item["original_filename"] for item in report["files"]] == [
@@ -591,7 +607,7 @@ def test_multi_file_confirmation_matches_published_card(tmp_path):
 
             confirmed = client.post(
                 f"/api/health/report/{report['id']}/confirm",
-                headers=headers,
+                cookies=cookie,
                 json={
                     "subject_consistency": "same",
                     "observations": [

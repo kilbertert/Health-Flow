@@ -143,7 +143,6 @@ class MedicalReportResponse(BaseModel):
     processing_error: str | None = None
     processing_warnings: list[str] = Field(default_factory=list)
     extraction_job: ReportExtractionJobResponse | None = None
-    access_token: str | None = None
     extraction_trace: dict[str, Any] | None = None
     audit_events: list[dict[str, Any]] = Field(default_factory=list)
 

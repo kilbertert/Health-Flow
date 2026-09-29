@@ -13,12 +13,12 @@ const execFileAsync = promisify(execFile);
 export const SEED_REPORT_STATUSES = ['assessed', 'pending_confirmation'];
 
 /**
- * 在本次运行的测试数据库中写入种子数据。
+ * 在本次运行的测试数据库中写入票据主体、会话与报告种子数据。
  *
  * @param {object} [options]
  * @param {string[]} [options.reports] 需要的报告状态,默认已完成 + 待确认各一份。
  * @param {string} [options.displayName] 账户昵称。
- * @returns {Promise<{account: {id: string, email: string, password: string, display_name: string}, reports: Array<{id: number, status: string, report_type: string, access_token: string}>}>}
+ * @returns {Promise<{subject: {owner_id: string, tenant_id: string, external_subject: string, display_name: string, session_token: string}, reports: Array<{id: number, status: string, report_type: string}>}>}
  */
 export async function seedTestData({
   reports = SEED_REPORT_STATUSES,
@@ -38,17 +38,19 @@ export async function seedTestData({
     }
   }
   const { command, prefixArgs } = resolvePython(repoRoot);
-  const email = `e2e-${randomUUID()}@healthflow.test`;
-  const password = `e2e-${randomUUID().replaceAll('-', '')}`;
+  // #172 之后不再有账号与密码：主体由「票据兑换」产生。种子直接构造等价的
+  // 主体标识与一条会话，用例之间用不同的 (tenant, sub) 保持互不共享。
+  const tenantId = `e2e-tenant-${randomUUID().slice(0, 8)}`;
+  const externalSubject = `e2e-user-${randomUUID().slice(0, 8)}`;
   const seedArgs = [
     ...prefixArgs,
     path.join(repoRoot, 'scripts', 'e2e_seed.py'),
     '--database',
     databaseUrl,
-    '--email',
-    email,
-    '--password',
-    password,
+    '--tenant-id',
+    tenantId,
+    '--external-subject',
+    externalSubject,
     '--display-name',
     displayName,
     ...reports.flatMap((status) => ['--report', status]),

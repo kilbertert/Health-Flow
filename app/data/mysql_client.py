@@ -79,12 +79,64 @@ class MySQLClient:
             indexes = {index["name"] for index in inspect(connection).get_indexes("medical_reports")}
             if "ix_medical_reports_owner_id" not in indexes:
                 connection.execute(text("CREATE INDEX ix_medical_reports_owner_id ON medical_reports (owner_id)"))
+            self._upgrade_session_owner_column(connection)
+            # **只在真正无主的旧行上打标记。** 这条原先按 `access_token_hash IS NULL`
+            # 判定，而 #172 之后新上传的报告**本来就不再有令牌**——于是每次启动都会把
+            # 新报告改写成 `legacy_unclaimed`（`confirmed`/`assessed` 会被抹掉，
+            # 之后 assess 返回 409）。加 `owner_id` 条件把范围收回「旧的无主行」。
             connection.execute(
                 text(
                     "UPDATE medical_reports SET status = 'legacy_unclaimed' "
-                    "WHERE access_token_hash IS NULL AND status <> 'legacy_unclaimed'"
-                )
+                    "WHERE access_token_hash IS NULL "
+                    "AND (owner_id IS NULL OR owner_id = :unowned) "
+                    "AND status <> 'legacy_unclaimed'"
+                ),
+                {"unowned": "anonymous"},
             )
+
+    @staticmethod
+    def _upgrade_session_owner_column(connection) -> None:
+        """把 `user_sessions.account_id` 从「账号外键」升级为「主体标识」。
+
+        #172 之后这一列装的是主体标识（`account:<tenant>:<sub>`），而既有库里它是
+        `VARCHAR(36)` **且带指向 `user_accounts.id` 的外键**。两处都会挡住票据会话：
+        外键让插入失败（主体不是账号行），长度让较长的主体标识被截断或拒收。
+
+        `create_all` **不会**改既有表——这就是为什么这段必须显式执行。它只做两件
+        幂等的事：丢外键（若存在）、把列宽扩到 128（若还窄）。在不带外键的 SQLite
+        上，第一件自然跳过。
+        """
+        inspector = inspect(connection)
+        if "user_sessions" not in inspector.get_table_names():
+            return
+        columns = {column["name"]: column for column in inspector.get_columns("user_sessions")}
+        owner_column = columns.get("account_id")
+        if owner_column is None:
+            return
+
+        # 方言不同，DDL 也不同：MySQL 用 `DROP FOREIGN KEY` / `MODIFY`，SQLite 不支持
+        # 改列（只能重建表）。这里只处理**需要升级的那种部署**（生产是 MySQL）；
+        # SQLite 上是开发库，`create_all` 建出来的表本来就没有外键，无需升级。
+        dialect = connection.dialect.name
+        if dialect == "mysql":
+            for foreign_key in inspector.get_foreign_keys("user_sessions"):
+                if foreign_key.get("constrained_columns") == ["account_id"]:
+                    name = foreign_key.get("name")
+                    if name:
+                        connection.execute(text(f"ALTER TABLE user_sessions DROP FOREIGN KEY {name}"))
+            length = getattr(owner_column["type"], "length", None)
+            if length is not None and length < 128:
+                connection.execute(text("ALTER TABLE user_sessions MODIFY account_id VARCHAR(128) NOT NULL"))
+
+            # `patient_id` 同样承载主体标识（上传时从它复制），旧库是 VARCHAR(64)。
+            report_columns = {column["name"]: column for column in inspector.get_columns("medical_reports")}
+            patient_column = report_columns.get("patient_id")
+            if patient_column is not None:
+                patient_length = getattr(patient_column["type"], "length", None)
+                if patient_length is not None and patient_length < 128:
+                    connection.execute(
+                        text("ALTER TABLE medical_reports MODIFY patient_id VARCHAR(128) NOT NULL")
+                    )
 
     def drop_tables(self) -> None:
         Base.metadata.drop_all(bind=self.engine)
