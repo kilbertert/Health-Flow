@@ -14,12 +14,41 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.config import get_settings
 from app.data.models import Base
 from app.data.models import MedicalReport as ReportModel
 from app.data.models import MetricRecord as MetricModel
 from app.schema.report import MetricRecord
 from app.service.evidence_bridge import infer_abnormal_flag, metric_code_for_name
 from app.service.vision_encoder import ParsedReport
+
+
+@contextmanager
+def _ticket_public_key():
+    """给走 lifespan 的用例提供一份临时 RSA 公钥（内容不被该用例使用）。"""
+    import tempfile
+    from pathlib import Path
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    settings = get_settings()
+    previous_path, previous_aud = settings.MALL_TICKET_PUBLIC_KEY_PATH, settings.MALL_TICKET_AUDIENCE
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "ticket.pub"
+        path.write_bytes(pem)
+        settings.MALL_TICKET_PUBLIC_KEY_PATH = str(path)
+        settings.MALL_TICKET_AUDIENCE = "health-flow-test"
+        try:
+            yield
+        finally:
+            settings.MALL_TICKET_PUBLIC_KEY_PATH = previous_path
+            settings.MALL_TICKET_AUDIENCE = previous_aud
 
 
 def _evidence_result(*, findings=None, unmatched=None, skipped=None):
@@ -533,7 +562,9 @@ def test_multi_file_confirmation_matches_published_card(tmp_path):
         mysql_client.close.return_value = None
         from app.main import app
 
-        with TestClient(app) as client:
+        # 该用例走真实 lifespan（它会建票据验签器）。票据配置与这条链路无关，
+        # 用自造密钥对把它补上，避免用例依赖本机是否配了商城公钥。
+        with _ticket_public_key(), TestClient(app) as client:
             response = client.post(
                 "/api/health/report/upload",
                 data={"patient_id": "P001"},

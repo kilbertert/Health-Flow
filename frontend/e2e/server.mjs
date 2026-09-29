@@ -1,5 +1,6 @@
 // E2E 服务器启动器:用真实构建产物(frontend/dist)+ 一次性测试数据库
 // 启动 HealthFlow FastAPI(uvicorn),由 playwright.config.js 注入运行参数。
+import { generateKeyPairSync } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -22,6 +23,27 @@ const frontendDist = requiredEnv('HEALTHFLOW_E2E_FRONTEND_DIST');
 const port = requiredEnv('HEALTHFLOW_E2E_PORT');
 const databaseUrl = requiredEnv('HEALTHFLOW_E2E_DATABASE_URL');
 const reportFilesDir = requiredEnv('HEALTHFLOW_E2E_REPORT_FILES_DIR');
+
+// 票据验签是启动前置（未配置即拒绝启动，见 app/service/tickets.py）。E2E 不覆盖票据
+// 链路，但仍需要一个自造的密钥对让服务能起来——生成在这里而不是提交进仓库，
+// 因为它是一次性的测试夹具，不是配置。
+function ensureTicketKeypair(dir) {
+  const keyPath = path.join(dir, 'e2e-ticket.pub.pem');
+  if (!fs.existsSync(keyPath)) {
+    const { publicKey } = generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+      publicKeyEncoding: { type: 'spki', format: 'pem' },
+      privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    });
+    fs.writeFileSync(keyPath, publicKey, { mode: 0o600 });
+  }
+  return keyPath;
+}
+
+// 目录此时可能还不存在（server.mjs 下面才 mkdir），所以按 runDir 放，先建好它。
+const runDir = requiredEnv('HEALTHFLOW_E2E_RUN_DIR');
+fs.mkdirSync(runDir, { recursive: true });
+const ticketPublicKeyPath = ensureTicketKeypair(runDir);
 
 if (!fs.existsSync(path.join(frontendDist, 'index.html'))) {
   console.error(
@@ -54,6 +76,8 @@ const server = spawn(
       SERVE_FRONTEND: 'true',
       FRONTEND_DIST: frontendDist,
       REPORT_FILES_DIR: reportFilesDir,
+      MALL_TICKET_PUBLIC_KEY_PATH: ticketPublicKeyPath,
+      MALL_TICKET_AUDIENCE: 'health-flow-e2e',
     },
   },
 );

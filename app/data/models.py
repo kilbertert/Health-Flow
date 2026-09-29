@@ -11,6 +11,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import declarative_base, relationship
@@ -221,3 +222,44 @@ class RoutingLog(Base):
     created_at = Column(DateTime, default=datetime.now)
 
     session = relationship("ChatSession", back_populates="routing_logs")
+
+
+class TicketRedemption(Base):
+    """商城登录票据的一次性消费记录。
+
+    一行 = 一张票据被兑换过一次。**唯一约束落在 `jti` 上**，这是「一次性」的实际
+    载体：两条并发请求可能同时通过「查过没有」，只有数据库能裁决谁先插入。
+
+    保留到 `purge_after`（= 票据 `exp`）即可清理——`exp` 已经封死重放窗口，
+    更长的保留没有安全收益，只是多留一份凭据标识。
+    """
+
+    __tablename__ = "ticket_redemptions"
+    __table_args__ = (UniqueConstraint("jti", name="uq_ticket_redemptions_jti"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    jti = Column(String(128), nullable=False, index=True)
+    tenant_id = Column(String(64), nullable=False)
+    subject = Column(String(128), nullable=False)
+    redeemed_at = Column(DateTime, nullable=False, default=datetime.now)
+    purge_after = Column(DateTime, nullable=False, index=True)
+
+
+class TicketSubject(Base):
+    """票据所声明的本地主体。
+
+    身份的唯一来源是 `(tenant_id, external_subject)`——**没有密码、没有邮箱**。
+    它只能由票据创建：本平台不提供注册入口，也不引入手机号等外部字段做对齐。
+    """
+
+    __tablename__ = "ticket_subjects"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "external_subject", name="uq_ticket_subjects_identity"),
+    )
+
+    id = Column(String(36), primary_key=True)
+    tenant_id = Column(String(64), nullable=False, index=True)
+    external_subject = Column(String(128), nullable=False)
+    display_name = Column(String(128), nullable=False, default="商城用户")
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.now)

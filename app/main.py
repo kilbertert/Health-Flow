@@ -16,10 +16,18 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.config import get_settings
 from app.data.mysql_client import get_mysql_client
 from app.service.report_ownership import UNOWNED_SENTINEL, report_owner_kind
+from app.service.tickets import TicketError, build_verifier
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 启动期先确认票据验签器可用。**未配置即拒绝启动**：一个「验不了签但照常放行」
+    # 的服务比没有这道门更危险，因为它看起来是有的。这里刻意不做「配不上就先不用」
+    # 的降级——那会把这个决定从部署者手里拿走。
+    try:
+        app.state.ticket_verifier = build_verifier()
+    except TicketError as exc:
+        raise RuntimeError(f"票据验签未就绪，拒绝启动：{exc}") from exc
     database = get_mysql_client()
     try:
         database.create_tables()
