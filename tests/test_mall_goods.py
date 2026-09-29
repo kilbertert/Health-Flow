@@ -27,7 +27,8 @@ from app.service.mall_goods import (
     sign_payload,
 )
 
-# 实测（2026-09-29）东宸药业返回的一条真实记录：价格是十进制元的浮点，库存为 null。
+# 一次真实调用返回的记录形状（价格是十进制元的浮点、库存为 null）。
+# 租户标识**不写进测试**：夹具要的是形状，不是某个租户的业务数据。
 LIVE_RECORD = {
     "id": "1610079554940235778",
     "name": "力蜚能 多糖铁复合物胶囊 0.15g*10粒",
@@ -45,7 +46,7 @@ def _settings(**overrides):
         "MALL_WEBAPI_GOODS_PATH": "/mallapi/webapi/goods/read",
         "MALL_WEBAPI_APP_ID": "healthflow-genesis-readonly",
         "MALL_WEBAPI_APP_SECRET": "s3cret",
-        "MALL_WEBAPI_TENANT_ID": "1578664130444005376",
+        "MALL_WEBAPI_TENANT_ID": "tenant-under-test",
         "MALL_WEBAPI_TIMEOUT_SECONDS": 5.0,
         "MALL_WEBAPI_PAGE_SIZE": 100,
     }
@@ -195,7 +196,7 @@ async def test_successful_call_without_labels_reports_no_label_data():
     # 无标签也照常调用商城：这条 AC 要的是"服务端真的发出去了"。
     assert post.call_count == 1
     sent = post.call_args.kwargs
-    assert sent["headers"]["tenant-id"] == "1578664130444005376"
+    assert sent["headers"]["tenant-id"] == "tenant-under-test"
     assert sent["headers"]["mall-app-id"] == "healthflow-genesis-readonly"
     assert sent["json"]["sign"].isupper()
 
