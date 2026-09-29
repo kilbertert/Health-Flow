@@ -60,6 +60,17 @@ class Settings(BaseSettings):
     GENESIS_EVIDENCE_METRICS_URL: str = ""
     GENESIS_EVIDENCE_API_KEY: str = ""
     GENESIS_EVIDENCE_TIMEOUT_SECONDS: float = 30.0
+
+    # 商城第三方只读商品端点（genesis-evidence #167）。密钥只从环境注入，不进仓库；
+    # 缺任一项即视为未配置，读取商品时降级为"暂无推荐"而不是发出无效请求。
+    MALL_WEBAPI_BASE_URL: str = ""
+    MALL_WEBAPI_GOODS_PATH: str = "/mallapi/webapi/goods/read"
+    MALL_WEBAPI_APP_ID: str = ""
+    MALL_WEBAPI_APP_SECRET: str = ""
+    MALL_WEBAPI_TENANT_ID: str = ""
+    MALL_WEBAPI_TIMEOUT_SECONDS: float = 10.0
+    MALL_WEBAPI_PAGE_SIZE: int = 100
+
     SERVE_FRONTEND: bool = False
     FRONTEND_DIST: str = "frontend/dist"
     # Basic Auth is an optional operator compatibility gate, not the patient login.
@@ -97,6 +108,19 @@ class Settings(BaseSettings):
         if self.OPENAI_RESPONSES_URL.strip():
             return self.OPENAI_RESPONSES_URL.rstrip("/").removesuffix("/responses")
         return f"http://{self.VLLM_HOST}:{self.VLLM_PORT}/v1"
+
+    @property
+    def mall_webapi_configured(self) -> bool:
+        """All four mall read settings present; anything less stays unconfigured."""
+        return all(
+            value.strip()
+            for value in (
+                self.MALL_WEBAPI_BASE_URL,
+                self.MALL_WEBAPI_APP_ID,
+                self.MALL_WEBAPI_APP_SECRET,
+                self.MALL_WEBAPI_TENANT_ID,
+            )
+        )
 
     @property
     def llm_api_key(self) -> str:

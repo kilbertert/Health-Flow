@@ -40,6 +40,22 @@ file; `var/` and `.env` are gitignored.
 - `GENESIS_EVIDENCE_API_URL`, `GENESIS_EVIDENCE_API_KEY` — the evidence service
   edge. The key must match the value the evidence service expects under the same
   name.
+- `MALL_WEBAPI_BASE_URL`, `MALL_WEBAPI_APP_ID`, `MALL_WEBAPI_APP_SECRET`,
+  `MALL_WEBAPI_TENANT_ID` — the mall's third-party read-only goods endpoint. All
+  four are required for recommendations; a partial block is treated as
+  unconfigured and the page degrades to "暂无推荐" rather than sending an
+  unsigned request. `MALL_WEBAPI_APP_SECRET` is a credential: it lives only in
+  this env file and is never logged.
+
+## Goods boundary
+
+The mall owns goods, pricing, stock and shelf state. Health-Flow reads the mall's
+third-party read-only endpoint **server-side** and forwards the result to its own
+frontend, because the mall gateway returns a CORS header combination browsers
+reject for credentialed requests. The browser therefore never calls the mall
+domain. This side does not hold goods, does not decide sellability (the mall
+applies its own filter) and does not write any mall state — see
+`docs/adr/0005-mall-goods-are-read-server-side.md`.
 
 ## Evidence boundary
 

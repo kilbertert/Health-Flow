@@ -24,6 +24,35 @@ Feature: 体检报告健康风险提示
       Then 响应不含 `recommendations`、`recommendation_message` 或 `product_status`
       And 报告状态仍可进入 `assessed`
 
+  Rule: 检测页商品由服务端读取商城，前端只与同源通信
+
+    Scenario: 命中商家商品时展示商品卡片
+      Given 一份已完成报告含一个已确认健康风险
+      And 商城只读端点对该租户返回在售商品
+      And 该健康风险已有对应的商城标签映射
+      When 患者打开该报告详情页
+      Then 页面显示商品图片、名称、价格与库存
+      And 浏览器不对商城域名发起任何请求
+
+    Scenario: 商城不可达时降级为暂无推荐
+      Given 一份已完成报告含一个已确认健康风险
+      And 商城只读端点不可达或返回业务错误
+      When 患者打开该报告详情页
+      Then 页面显示「暂无推荐」并说明商城暂时不可用
+      And 页面不报错，也不以营销内容填充
+
+    Scenario: 没有健康风险时不构造推荐
+      Given 一份报告没有任何已确认健康风险
+      When 患者打开该报告详情页
+      Then 页面显示「暂无推荐」
+      And 服务端不调用商城
+
+    Scenario: 库存未标注不渲染为零
+      Given 商城对某商品返回 `stock` 为空值
+      When 页面渲染该商品卡片
+      Then 该卡片显示库存未标注
+      And 不显示为缺货或库存 0
+
   Rule: AFK 拉取请求自动化使用可信控制面
 
     Scenario: 持久化 runner 使用当前 main 作为审核基线

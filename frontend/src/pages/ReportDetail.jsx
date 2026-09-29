@@ -23,6 +23,7 @@ import {
   Typography,
 } from 'antd';
 import { fetchReportPage, getReport } from '../api.js';
+import Recommendations from '../components/Recommendations.jsx';
 import {
   abnormalTag,
   displayFlag,
@@ -345,6 +346,8 @@ export default function ReportDetailPage({ account, reportId, onBack, onContinue
           <MetricOverview result={result} onOpenSource={setSourceMetric} />
 
           <EvidenceResult result={result.evidence_result} onOpenSource={setSourceMetric} />
+
+          <Recommendations reportId={result.id} reportToken="" />
 
           <Collapse
             className="report-original-collapse"
