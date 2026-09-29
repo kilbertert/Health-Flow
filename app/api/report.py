@@ -40,11 +40,13 @@ from app.schema.evidence import (
     Unmatched,
 )
 from app.schema.report import (
+    CartLinkResponse,
     MedicalReportResponse,
     MetricRecord,
     RecommendationResponse,
     ReportConfirmationRequest,
 )
+from app.service.deep_link import DeepLinkError, build_deep_link
 from app.service.evidence_bridge import (
     EvidenceBridgeError,
     build_observations_with_unmatched,
@@ -55,6 +57,9 @@ from app.service.evidence_bridge import (
 from app.service.mall_goods import fetch_goods, label_pairs_for, serialized
 from app.service.report_ownership import resolve_owner
 from app.service.vision_encoder import ParsedReport, get_vision_encoder_service
+
+#: 只有这些状态的报告才谈得上加购：未完成确认/评估的报告没有可据以取货的风险。
+COMPLETED_FOR_LINK = frozenset({"confirmed", "assessed"})
 
 router = APIRouter()
 ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".gif", ".bmp"}
@@ -955,3 +960,39 @@ async def delete_report(
         with contextlib.suppress(OSError):
             stored_paths[0].parent.rmdir()
     return {"message": "报告已删除", "report_id": report_id}
+
+
+@router.post("/report/{report_id}/recommendations/{spu_id}/cart-link", response_model=CartLinkResponse)
+async def create_cart_link(
+    report_id: int,
+    spu_id: str,
+    request: Request,
+    db: Session = Depends(db_dependency),
+    x_report_token: str = Header(default=""),
+    account=Depends(report_account_dependency),
+):
+    """构造「加入购物车」深链（同源，POST 因为它在推进一次状态转换）。
+
+    这是 #175 的**签发端**：本仓只构造 URL 与签名，**不调用商城任何写接口、不持有
+    购物车状态**。跳转由浏览器完成，加购由商城完成。
+
+    与推荐端点同样的降级口径：构造不出来就**如实说明是哪一种**，不发一个注定被拒的链接。
+    """
+    report = _authorized_report(
+        db,
+        report_id,
+        x_report_token,
+        owner_id=resolve_owner(request).storage_id,
+        session_authenticated=account is not None,
+    )
+    if report.status not in COMPLETED_FOR_LINK:
+        return CartLinkResponse(url=None, reason="report_not_ready")
+
+    try:
+        link = build_deep_link(spu_id=spu_id, detection_id=f"report-{report.id}")
+    except DeepLinkError:
+        # 不把原因透给患者（可能是密钥未配置这类运维细节），但也不伪装成成功。
+        logger.warning("加购深链构造失败 report=%s", report.id)
+        return CartLinkResponse(url=None, reason="link_unavailable")
+
+    return CartLinkResponse(url=link.url, reason=None)

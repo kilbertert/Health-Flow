@@ -60,6 +60,13 @@ export const getReportRecommendations = (id, token = '') => request(
   { headers: reportHeaders(token) },
 );
 
+// 加购深链由服务端构造并签名（#175）。POST 是因为它推进一次状态转换：
+// 每次调用都会签发一张带 `exp` 的新链接。
+export const createCartLink = (id, spuId, token = '') => request(
+  `/health/report/${id}/recommendations/${encodeURIComponent(spuId)}/cart-link`,
+  { method: 'POST', headers: reportHeaders(token) },
+);
+
 export async function fetchReportPage(reportId, fileIndex, pageNumber, token) {
   const res = await fetch(
     `${BASE}/health/report/${reportId}/files/${fileIndex}/pages/${pageNumber}`,

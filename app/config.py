@@ -79,6 +79,11 @@ class Settings(BaseSettings):
     # 验签方强制的票据寿命上限。票面约定 120 秒，这里默认 10 分钟——比约定宽，
     # 正常票据永远撞不到，但 `exp` 在三年后的票据会被拒。
     MALL_TICKET_MAX_TTL_SECONDS: int = 600
+    # 加购深链（genesis-evidence #175）。前台地址与入口路径在部署时确定；
+    # 契约只定了 H5 内部的详情页路由名，外层前缀是部署事实，本仓不猜。
+    MALL_STOREFRONT_BASE_URL: str = ""
+    MALL_STOREFRONT_CART_PATH: str = ""
+    MALL_DEEP_LINK_SECRET: str = ""
 
     SERVE_FRONTEND: bool = False
     FRONTEND_DIST: str = "frontend/dist"
@@ -122,6 +127,13 @@ class Settings(BaseSettings):
     def mall_ticket_configured(self) -> bool:
         """公钥路径与受众都配齐才算配置。缺一即未配置（服务应拒绝启动）。"""
         return bool(self.MALL_TICKET_PUBLIC_KEY_PATH.strip() and self.MALL_TICKET_AUDIENCE.strip())
+    def mall_deep_link_configured(self) -> bool:
+        """三项齐备才认为深链可用；缺任一项即拒绝构造链接，不发注定被拒的 URL。"""
+        return bool(
+            self.MALL_STOREFRONT_BASE_URL.strip()
+            and self.MALL_STOREFRONT_CART_PATH.strip()
+            and self.MALL_DEEP_LINK_SECRET.strip()
+        )
 
     @property
     def mall_webapi_configured(self) -> bool:

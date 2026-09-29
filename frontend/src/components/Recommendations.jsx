@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Empty, List, Space, Spin, Tag, Typography } from 'antd';
-import { getReportRecommendations } from '../api.js';
+import { Button, Card, Empty, List, Space, Spin, Tag, Typography, message } from 'antd';
+import { createCartLink, getReportRecommendations } from '../api.js';
 
 // 为空的三种情况必须能区分：把"商城不可达"和"没有对应商品"合并成一句，
 // 会让运维分不清该去修配置还是该去提醒租户上货。
@@ -29,7 +29,7 @@ function stockTag(stock) {
   return <Tag color={stock > 0 ? 'green' : 'default'}>{stock > 0 ? `库存 ${stock}` : '缺货'}</Tag>;
 }
 
-function GoodsCard({ item }) {
+function GoodsCard({ item, onAddToCart, busy }) {
   return (
     <List.Item className="recommendation-item">
       {item.image ? (
@@ -43,6 +43,15 @@ function GoodsCard({ item }) {
           <Typography.Text type="danger">{priceText(item)}</Typography.Text>
           {stockTag(item.stock)}
         </Space>
+        <Button
+          type="primary"
+          size="small"
+          style={{ marginTop: 8 }}
+          loading={busy}
+          onClick={() => onAddToCart(item)}
+        >
+          加入购物车
+        </Button>
       </div>
     </List.Item>
   );
@@ -81,6 +90,26 @@ export default function Recommendations({ reportId, reportToken = '' }) {
     return () => { active = false; };
   }, [reportId, reportToken]);
 
+  const [busySpu, setBusySpu] = useState('');
+
+  const addToCart = async (item) => {
+    setBusySpu(item.id);
+    try {
+      const link = await createCartLink(reportId, item.id, reportToken);
+      if (link.url) {
+        window.location.assign(link.url);
+        return;
+      }
+      // 服务端明确说构造不出来——如实说明是**跳转前**的失败，与「商城拒绝了链接」
+      // 是两回事，后者本仓看不到（契约里分得很清）。
+      message.info('暂时无法跳转到商城，请稍后再试。');
+    } catch (err) {
+      message.error(err.message || '暂时无法跳转到商城，请稍后再试。');
+    } finally {
+      setBusySpu('');
+    }
+  };
+
   return (
     <Card className="recommendations-card" title="推荐商品" style={{ marginTop: 16 }}>
       {state.loading ? (
@@ -90,7 +119,9 @@ export default function Recommendations({ reportId, reportToken = '' }) {
           className="recommendation-list"
           grid={{ gutter: 16, xs: 1, sm: 2, md: 3 }}
           dataSource={state.items}
-          renderItem={(item) => <GoodsCard item={item} />}
+          renderItem={(item) => (
+            <GoodsCard item={item} onAddToCart={addToCart} busy={busySpu === item.id} />
+          )}
         />
       ) : (
         <>

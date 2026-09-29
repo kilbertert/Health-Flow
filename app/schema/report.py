@@ -97,6 +97,13 @@ class RecommendationItem(BaseModel):
     shop_id: str | None = None
 
 
+class CartLinkResponse(BaseModel):
+    """加购深链。为空时 `reason` 说明是哪一种空，不合并成一句。"""
+
+    url: str | None = None
+    reason: Literal["report_not_ready", "link_unavailable"] | None = None
+
+
 class RecommendationResponse(BaseModel):
     """检测页推荐结果。为空时 `reason` 必须说明是哪一种空。"""
 
