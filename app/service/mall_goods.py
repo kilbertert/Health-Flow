@@ -33,6 +33,9 @@ logger = logging.getLogger(__name__)
 EMPTY_LABELS: tuple[tuple[str, str], ...] = ()
 
 # 调用成功但没货可给 / 压根没调到商城。两者对运维的含义不同，不得合并。
+# 这是响应契约词汇表（`app.schema.report.RecommendationReason`）里本模块**能产生**的
+# 子集；第四个值 `no_published_card` 由端点判定（报告本身没有风险，不调商城）。
+# 两侧一致由 `tests/test_mall_goods.py` 断言，避免多写一份枚举后各自漂移。
 Reason = Literal["no_label_data", "mall_unavailable"]
 
 

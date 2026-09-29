@@ -374,3 +374,28 @@ def test_readiness_flags_missing_mall_config_in_production():
 
     assert body["mall_goods"] == "missing"
     assert body["status"] == "degraded"
+
+
+def test_response_contract_matches_produced_reasons():
+    """`Literal` 是契约：这里断言它正好是端点会产生的四个值。
+
+    之前它多带一个后端永不产生的 `no_labels`，等于对外承诺存在第四种空态。
+    这条断言让新增/删除原因时两侧必须同时改。
+    """
+    from typing import get_args
+
+    from app.schema.report import RecommendationReason
+    from app.service.mall_goods import Reason
+
+    endpoint_only = {"no_published_card"}
+    assert set(get_args(RecommendationReason)) == set(get_args(Reason)) | endpoint_only
+
+
+def test_response_rejects_an_undeclared_reason():
+    """契约之外的原因值必须校验失败，不能悄悄通过。"""
+    from pydantic import ValidationError
+
+    from app.schema.report import RecommendationResponse
+
+    with pytest.raises(ValidationError):
+        RecommendationResponse(items=[], reason="no_labels")

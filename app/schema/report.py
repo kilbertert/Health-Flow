@@ -75,6 +75,14 @@ class ReportFileRecord(BaseModel):
     source_url: str
 
 
+# 推荐为空的原因。**只有三种**，且与 `app.service.mall_goods.Reason` 是同一条约定：
+# `no_published_card`（本报告没有可据以取货的健康风险，不调商城）、
+# `no_label_data`（商城调用成功但按标签交集为空）、
+# `mall_unavailable`（不可达/超时/业务错误/凭据未配置）。命中时为空值。
+# 这条约定有测试钉住两侧一致（`tests/test_mall_goods.py`），别再各写一份。
+RecommendationReason = Literal["no_published_card", "no_label_data", "mall_unavailable"]
+
+
 class RecommendationItem(BaseModel):
     """检测页商品卡片。字段是商城端点返回的展示子集，不含内部定价面。"""
 
@@ -93,7 +101,7 @@ class RecommendationResponse(BaseModel):
     """检测页推荐结果。为空时 `reason` 必须说明是哪一种空。"""
 
     items: list[RecommendationItem] = Field(default_factory=list)
-    reason: Literal["no_published_card", "no_labels", "no_label_data", "mall_unavailable"] | None = None
+    reason: RecommendationReason | None = None
 
 
 class ReportExtractionJobResponse(BaseModel):
