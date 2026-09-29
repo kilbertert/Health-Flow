@@ -126,6 +126,9 @@ def test_empty_values_do_not_participate_in_signing():
         {"MALL_STOREFRONT_BASE_URL": ""},
         {"MALL_STOREFRONT_CART_PATH": ""},
         {"MALL_DEEP_LINK_SECRET": ""},
+        # 空租户会签出 `tenant_id=`：商城侧要么拒绝，要么把它当成某个默认租户
+        # —— 后者意味着「跳到了别人的店」。与其它几项同一种处理。
+        {"MALL_WEBAPI_TENANT_ID": ""},
     ],
 )
 def test_missing_configuration_refuses_to_build_instead_of_guessing(overrides):

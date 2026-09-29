@@ -81,6 +81,7 @@ def build_deep_link(
     base = settings.MALL_STOREFRONT_BASE_URL.strip().rstrip("/")
     route = settings.MALL_STOREFRONT_CART_PATH.strip()
     secret = settings.MALL_DEEP_LINK_SECRET.strip()
+    tenant = settings.MALL_WEBAPI_TENANT_ID.strip()
 
     if not base:
         raise DeepLinkError("商城前台地址未配置")
@@ -90,6 +91,10 @@ def build_deep_link(
         raise DeepLinkError("加购入口路径未配置")
     if not secret:
         raise DeepLinkError("深链签名密钥未配置")
+    if not tenant:
+        # 空租户会签出 `tenant_id=`：商城侧要么拒绝，要么把它当成某个默认租户——
+        # 后者更糟，因为那意味着「跳到了别人的店」。与其它几项同一种处理：拒绝构造。
+        raise DeepLinkError("租户标识未配置")
     if not spu_id.strip():
         raise DeepLinkError("缺少商品标识")
     if not detection_id.strip():
@@ -99,7 +104,7 @@ def build_deep_link(
 
     expires_at = int(now if now is not None else time.time()) + LINK_TTL_SECONDS
     payload: dict[str, object] = {
-        "tenant_id": settings.MALL_WEBAPI_TENANT_ID.strip(),
+        "tenant_id": tenant,
         # 契约参数：商城侧要验签的就是这些。
         "spu_id": spu_id.strip(),
         # 页面级别名：商城 H5 的商品详情页只认 `id`，不认 `spu_id`。**两个都带**——
@@ -159,7 +164,8 @@ def _demo() -> None:
     assert sign_payload(same, "k", path="/a") != sign_payload(tampered, "k", path="/a")
 
     # 3) 缺配置必须抛错，不降级成「拼一个能用的链接」。
-    for field in ("MALL_STOREFRONT_BASE_URL", "MALL_STOREFRONT_CART_PATH", "MALL_DEEP_LINK_SECRET"):
+    for field in ("MALL_STOREFRONT_BASE_URL", "MALL_STOREFRONT_CART_PATH", "MALL_DEEP_LINK_SECRET",
+                  "MALL_WEBAPI_TENANT_ID"):
         broken = SimpleNamespace(**{**settings.__dict__, field: ""})
         try:
             build_deep_link(spu_id="s", detection_id="d", settings=broken)
