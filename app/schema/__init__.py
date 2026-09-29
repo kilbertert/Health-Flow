@@ -1,11 +1,8 @@
 """Schema definitions for API request/response."""
 
 from app.schema.auth import (
-    AccountResponse,
-    LoginRequest,
-    ProfileUpdateRequest,
-    RegisterRequest,
     ReportHistoryItem,
+    SessionSubjectResponse,
 )
 from app.schema.chat import (
     ChatMessage,
@@ -43,11 +40,8 @@ __all__ = [
     "MedicalReportResponse",
     "MetricConfirmation",
     "ReportConfirmationRequest",
-    "AccountResponse",
-    "LoginRequest",
-    "ProfileUpdateRequest",
-    "RegisterRequest",
     "ReportHistoryItem",
+    "SessionSubjectResponse",
     "ChatMessage",
     "ChatRequest",
     "ChatResponse",

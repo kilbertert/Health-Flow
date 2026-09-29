@@ -20,6 +20,8 @@ from sqlalchemy.pool import StaticPool
 from app.data.models import Base
 from app.data.models import MedicalReport as ReportModel
 from app.service.deep_link import LINK_TTL_SECONDS, DeepLinkError, build_deep_link, sign_payload
+from app.service.report_ownership import UNOWNED_SENTINEL  # noqa: F401
+from app.service.sessions import SESSION_COOKIE, issue_session
 
 BASE = "https://storefront.example.test"
 ROUTE = "/shopPackage/pages/goods/goods-detail/index"
@@ -162,15 +164,18 @@ def _client(evidence_result, status="assessed"):
     Base.metadata.create_all(engine)
     SessionLocal = sessionmaker(bind=engine)
     with SessionLocal() as session:
+        owner_id = "account:link-tenant:link-user"
         report = ReportModel(
             patient_id="P-link",
             report_type="体检",
             status=status,
-            owner_id="account:acct-1",
-            access_token_hash=hashlib.sha256(b"tok").hexdigest(),
+            owner_id=owner_id,
             evidence_result=evidence_result,
         )
         session.add(report)
+        # #172：报告令牌旁路已移除，访问必须带主体会话。
+        token, session_row = issue_session(owner_id)
+        session.add(session_row)
         session.commit()
         report_id = report.id
 
@@ -179,34 +184,32 @@ def _client(evidence_result, status="assessed"):
             yield session
 
     from contextlib import contextmanager
-    from types import SimpleNamespace as NS
     from unittest.mock import patch
 
     @contextmanager
     def ctx():
         with (
             patch("app.data.get_db", override_get_db),
-            patch("app.service.auth.account_for_request", return_value=NS(id="acct-1")),
-            patch("app.api.report.resolve_owner", return_value=NS(storage_id="account:acct-1")),
+            patch("app.api.report.resolve_owner", return_value=SimpleNamespace(storage_id=owner_id)),
         ):
             from app.main import app
 
             yield TestClient(app)
 
-    return report_id, ctx()
+    return report_id, ctx(), {SESSION_COOKIE: token}
 
 
 def test_endpoint_returns_a_signed_link_for_a_completed_report():
     from unittest.mock import patch
 
-    report_id, client_ctx = _client({"findings": [{"condition_code": "COND_DYSLIPIDEMIA"}]})
+    report_id, client_ctx, cookie = _client({"findings": [{"condition_code": "COND_DYSLIPIDEMIA"}]})
     with client_ctx as client, patch(
         "app.api.report.build_deep_link",
         return_value=SimpleNamespace(url=f"{BASE}{ROUTE}?sig=abc"),
     ):
         response = client.post(
             f"/api/health/report/{report_id}/recommendations/spu-1/cart-link",
-            headers={"X-Report-Token": "tok"},
+            cookies=cookie,
         )
 
     assert response.status_code == 200
@@ -215,11 +218,11 @@ def test_endpoint_returns_a_signed_link_for_a_completed_report():
 
 def test_endpoint_refuses_for_a_report_that_is_not_ready():
     """未完成确认/评估的报告没有可据以取货的风险，也就没有加购可言。"""
-    report_id, client_ctx = _client(None, status="pending_confirmation")
+    report_id, client_ctx, cookie = _client(None, status="pending_confirmation")
     with client_ctx as client:
         response = client.post(
             f"/api/health/report/{report_id}/recommendations/spu-1/cart-link",
-            headers={"X-Report-Token": "tok"},
+            cookies=cookie,
         )
 
     assert response.status_code == 200
@@ -232,11 +235,11 @@ def test_endpoint_reports_an_unbuildable_link_instead_of_returning_a_broken_one(
 
     from app.service.deep_link import DeepLinkError as Err
 
-    report_id, client_ctx = _client({"findings": [{"condition_code": "COND_DYSLIPIDEMIA"}]})
+    report_id, client_ctx, cookie = _client({"findings": [{"condition_code": "COND_DYSLIPIDEMIA"}]})
     with client_ctx as client, patch("app.api.report.build_deep_link", side_effect=Err("未配置")):
         response = client.post(
             f"/api/health/report/{report_id}/recommendations/spu-1/cart-link",
-            headers={"X-Report-Token": "tok"},
+            cookies=cookie,
         )
 
     assert response.status_code == 200

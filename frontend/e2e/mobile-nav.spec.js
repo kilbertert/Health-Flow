@@ -1,16 +1,7 @@
 // 移动端底部三标签导航(E2E):
 // 断点以下用 首页/体检解读/我的 代替顶部业务导航与菜单抽屉,
 // 未上线业务入口不进入移动端导航,桌面端顶部导航保持不变。
-import { test, expect } from './fixtures.js';
-
-async function login(page, account) {
-  await page.goto('/');
-  await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
-  await page.getByLabel('邮箱').fill(account.email);
-  await page.getByLabel('密码').fill(account.password);
-  await page.getByRole('button', { name: /^登\s*录$/ }).click();
-  await expect(page.getByRole('heading', { name: '呵护您的健康' })).toBeVisible();
-}
+import { test, expect, loginWithSeed } from './fixtures.js';
 
 const UNLAUNCHED_LABELS = ['中医问诊', '验血咨询', '体脂检测'];
 
@@ -19,8 +10,8 @@ const UNLAUNCHED_LABELS = ['中医问诊', '验血咨询', '体脂检测'];
     test.use({ viewport: { width, height: 667 } });
 
     test('底部三标签可直达 首页/体检解读/我的', async ({ page, seed }) => {
-      const { account } = await seed({ reports: ['assessed'] });
-      await login(page, account);
+      const seeded = await seed({ reports: ['assessed'] });
+      await loginWithSeed(page, seeded);
 
       const bottomNav = page.getByRole('navigation', { name: '移动端主导航' });
       await expect(bottomNav).toBeVisible();
@@ -41,8 +32,8 @@ const UNLAUNCHED_LABELS = ['中医问诊', '验血咨询', '体脂检测'];
     });
 
     test('未上线业务入口与菜单抽屉不出现在移动端导航', async ({ page, seed }) => {
-      const { account } = await seed();
-      await login(page, account);
+      const seeded = await seed();
+      await loginWithSeed(page, seeded);
 
       const bottomNav = page.getByRole('navigation', { name: '移动端主导航' });
       await expect(bottomNav).toBeVisible();
@@ -61,8 +52,8 @@ test.describe('桌面端顶部导航', () => {
   test.use({ viewport: { width: 1280, height: 800 } });
 
   test('底部导航隐藏且顶部服务导航保持不变', async ({ page, seed }) => {
-    const { account } = await seed();
-    await login(page, account);
+    const seeded = await seed();
+    await loginWithSeed(page, seeded);
 
     const serviceNav = page.getByRole('navigation', { name: '健康服务' });
     await expect(serviceNav).toBeVisible();

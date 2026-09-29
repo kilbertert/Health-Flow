@@ -1,30 +1,21 @@
 // 图片粘贴(E2E):
 // 桌面端通过合成粘贴事件把剪贴板图片注入待上传列表,
 // 移动端验证粘贴按钮/长按聚焦隐藏可编辑区、不滚动聚焦与进列表。
-import { test, expect } from './fixtures.js';
+import { test, expect, loginWithSeed } from './fixtures.js';
 
 const TINY_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC';
 
-async function login(page, account) {
-  await page.goto('/');
-  await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
-  await page.getByLabel('邮箱').fill(account.email);
-  await page.getByLabel('密码').fill(account.password);
-  await page.getByRole('button', { name: /^登\s*录$/ }).click();
-  await expect(page.getByRole('heading', { name: '呵护您的健康' })).toBeVisible();
-}
-
-async function openUploadPage(page, account) {
-  await login(page, account);
+async function openUploadPage(page, seeded) {
+  await loginWithSeed(page, seeded);
   await page.getByRole('button', { name: '体检报告解读' }).click();
   await expect(page.getByRole('heading', { name: '体检报告解读' })).toBeVisible();
   await expect(page.getByText('点击或拖拽多张报告文件到此区域')).toBeVisible();
 }
 
-function uploadResponse(account, files) {
+function uploadResponse(seeded, files) {
   return {
     id: 9001,
-    patient_id: account.id,
+    patient_id: seeded.subject.owner_id,
     report_type: '体检',
     department: '',
     created_at: new Date().toISOString(),
@@ -67,8 +58,8 @@ test.describe('报告图片粘贴', () => {
   test.use({ viewport: { width: 1280, height: 800 } });
 
   test('桌面粘贴生成 MIME 对应扩展名的文件项', async ({ page, seed }) => {
-    const { account } = await seed({ reports: [] });
-    await openUploadPage(page, account);
+    const seeded = await seed({ reports: [] });
+    await openUploadPage(page, seeded);
     const zone = page.locator('.report-paste-zone');
 
     await dispatchPaste(zone, {
@@ -83,8 +74,8 @@ test.describe('报告图片粘贴', () => {
   });
 
   test('非图片剪贴物被忽略并轻提示', async ({ page, seed }) => {
-    const { account } = await seed({ reports: [] });
-    await openUploadPage(page, account);
+    const seeded = await seed({ reports: [] });
+    await openUploadPage(page, seeded);
     const zone = page.locator('.report-paste-zone');
 
     await dispatchPaste(zone, { plainText: '这是一段普通文本' });
@@ -93,8 +84,8 @@ test.describe('报告图片粘贴', () => {
   });
 
   test('识别 text/html 中的 data:image base64', async ({ page, seed }) => {
-    const { account } = await seed({ reports: [] });
-    await openUploadPage(page, account);
+    const seeded = await seed({ reports: [] });
+    await openUploadPage(page, seeded);
     const zone = page.locator('.report-paste-zone');
 
     await dispatchPaste(zone, {
@@ -104,8 +95,8 @@ test.describe('报告图片粘贴', () => {
   });
 
   test('webp/heic 剪贴物提示暂不支持', async ({ page, seed }) => {
-    const { account } = await seed({ reports: [] });
-    await openUploadPage(page, account);
+    const seeded = await seed({ reports: [] });
+    await openUploadPage(page, seeded);
     const zone = page.locator('.report-paste-zone');
 
     for (const type of ['image/webp', 'image/heic']) {
@@ -119,8 +110,8 @@ test.describe('报告图片粘贴', () => {
   });
 
   test('粘贴图片与已选文件一起进入上传请求', async ({ page, seed }) => {
-    const { account } = await seed({ reports: [] });
-    await openUploadPage(page, account);
+    const seeded = await seed({ reports: [] });
+    await openUploadPage(page, seeded);
 
     await page.locator('.report-paste-zone input[type="file"]').setInputFiles({
       name: 'existing.pdf',
@@ -143,7 +134,7 @@ test.describe('报告图片粘贴', () => {
       await route.fulfill({
         status: 202,
         contentType: 'application/json',
-        body: JSON.stringify(uploadResponse(account, [
+        body: JSON.stringify(uploadResponse(seeded, [
           { name: 'existing.pdf', type: 'application/pdf' },
           { name: pastedName, type: 'image/png' },
         ])),
@@ -158,8 +149,8 @@ test.describe('报告图片粘贴', () => {
   });
 
   test('普通输入框粘贴不会进入上传列表', async ({ page, seed }) => {
-    const { account } = await seed({ reports: [] });
-    await openUploadPage(page, account);
+    const seeded = await seed({ reports: [] });
+    await openUploadPage(page, seeded);
 
     const departmentInput = page.getByLabel('科室');
     await departmentInput.fill('桌面输入框');
@@ -182,8 +173,8 @@ test.describe('报告图片粘贴', () => {
   });
 
   test('无法读取剪贴板时提示选择文件', async ({ page, seed }) => {
-    const { account } = await seed({ reports: [] });
-    await openUploadPage(page, account);
+    const seeded = await seed({ reports: [] });
+    await openUploadPage(page, seeded);
 
     await page.locator('.report-paste-zone').evaluate((element) => {
       element.dispatchEvent(new Event('paste', { bubbles: true, cancelable: true }));
@@ -196,8 +187,8 @@ test.describe('移动端粘贴入口', () => {
   test.use({ viewport: { width: 375, height: 667 } });
 
   test('粘贴图片按钮聚焦隐藏可编辑区且不滚动页面', async ({ page, seed }) => {
-    const { account } = await seed({ reports: [] });
-    await openUploadPage(page, account);
+    const seeded = await seed({ reports: [] });
+    await openUploadPage(page, seeded);
 
     const pasteButton = page.getByRole('button', { name: '粘贴图片' });
     await pasteButton.scrollIntoViewIfNeeded();
@@ -223,8 +214,8 @@ test.describe('移动端粘贴入口', () => {
   });
 
   test('长按上传区聚焦隐藏可编辑区并显示引导', async ({ page, seed }) => {
-    const { account } = await seed({ reports: [] });
-    await openUploadPage(page, account);
+    const seeded = await seed({ reports: [] });
+    await openUploadPage(page, seeded);
 
     const zone = page.locator('.report-paste-zone');
     await zone.scrollIntoViewIfNeeded();
@@ -274,8 +265,8 @@ test.describe('移动端粘贴入口', () => {
   });
 
   test('聚焦后的移动粘贴区接收图片并进入待上传列表', async ({ page, seed }) => {
-    const { account } = await seed({ reports: [] });
-    await openUploadPage(page, account);
+    const seeded = await seed({ reports: [] });
+    await openUploadPage(page, seeded);
 
     await page.getByRole('button', { name: '粘贴图片' }).click();
     await expect(page.getByText('长按屏幕 → 粘贴')).toBeVisible();

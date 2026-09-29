@@ -8,7 +8,7 @@
 
     uv run python scripts/e2e_seed.py \\
         --database sqlite:////tmp/healthflow-e2e/healthflow-e2e.db \\
-        --email e2e-xxx@healthflow.test --password ... \\
+        --tenant-id e2e-tenant --external-subject e2e-user \\
         [--display-name 昵称] [--report assessed] [--report pending_confirmation]
 
 标准输出为 JSON(账户凭据 + 报告 ID/状态/访问令牌),供脚手架消费。
@@ -17,9 +17,7 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
-import secrets
 import sys
 import uuid
 from collections.abc import Sequence
@@ -30,14 +28,15 @@ repo_root = Path(__file__).resolve().parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.data.models import Base, MedicalReport, MetricRecord, ReportFile
+from app.data.models import Base, MedicalReport, MetricRecord, ReportFile, TicketSubject, UserSession
 from app.schema.evidence import EvidenceMatchResponse
-from app.service.auth import new_account
+from app.service.report_ownership import subject_storage_id
+from app.service.sessions import issue_session
 
 # 支持的种子报告状态:已完成(assessed)与待确认(pending_confirmation)。
 SEED_REPORT_STATUSES = ("assessed", "pending_confirmation")
@@ -129,12 +128,6 @@ def _ensure_sqlite_database_directory(database_url: str) -> None:
         parent.mkdir(parents=True, exist_ok=True)
 
 
-def _report_access_token() -> tuple[str, str]:
-    """Return ``(token, hash)`` mirroring the upload endpoint's token pair."""
-    token = secrets.token_urlsafe(32)
-    return token, hashlib.sha256(token.encode("utf-8")).hexdigest()
-
-
 def _write_seed_report_page(report_files_dir: str, report_id: int) -> tuple[str, str, str]:
     """Create a white seed page image so the source viewer has a real file to render."""
     from PIL import Image
@@ -204,23 +197,24 @@ def _seed_metric(
 
 def _seed_report(
     session: Session,
-    account_id: str,
+    owner_id: str,
     status: str,
     *,
     report_files_dir: str | None = None,
-) -> tuple[MedicalReport, str]:
-    """Create one owned report in ``status``; return the row and access token."""
+) -> MedicalReport:
+    """Create one owned report in ``status``。
+
+    不再签发报告令牌（#172 已移除该机制），也不再回显任何令牌。
+    """
     confirmed = status == "assessed"
     specs = _ASSESSED_METRICS if confirmed else _PENDING_METRICS
-    token, token_hash = _report_access_token()
     report = MedicalReport(
-        patient_id=account_id,
-        owner_id=account_id,
+        patient_id=owner_id,
+        owner_id=owner_id,
         report_type="体检报告",
         department="健康管理中心",
         status=status,
         subject_consistency="same",
-        access_token_hash=token_hash,
         parsed_content={
             "report_type": "体检报告",
             "raw_text": "\n".join(spec["evidence_text"] for spec in specs),
@@ -248,19 +242,23 @@ def _seed_report(
         )
     for index, spec in enumerate(specs, start=1):
         session.add(_seed_metric(report.id, spec, index, confirmed=confirmed))
-    return report, token
+    return report
 
 
 def seed_database(
     database_url: str,
     *,
-    email: str,
-    password: str,
+    tenant_id: str = "e2e-tenant",
+    external_subject: str = "e2e-user",
     display_name: str | None = None,
     reports: Sequence[str] = SEED_REPORT_STATUSES,
     report_files_dir: str | None = None,
 ) -> dict[str, Any]:
-    """Seed one login account plus the requested reports into ``database_url``."""
+    """Seed one ticket subject, its session, and the requested reports.
+
+    #172 之后不再有账号与密码：主体由「票据兑换」产生。种子脚本直接构造等价的
+    主体标识与一条会话行，等价于「用户刚从商城跳进来兑换过一张票」的状态。
+    """
     for status in reports:
         if status not in SEED_REPORT_STATUSES:
             raise ValueError(f"不支持的种子报告状态: {status}")
@@ -269,33 +267,43 @@ def seed_database(
     try:
         Base.metadata.create_all(engine)
         with Session(engine) as session:
-            account = new_account(email, password, display_name)
-            session.add(account)
-            seeded: list[tuple[MedicalReport, str]] = [
-                _seed_report(
-                    session,
-                    account.id,
-                    status,
-                    report_files_dir=report_files_dir,
+            owner_id = subject_storage_id(tenant_id, external_subject)
+            existing = session.scalar(select(UserSession).where(UserSession.account_id == owner_id))
+            if existing is not None:
+                # 同一主体重复播种是调用方的错误：本次会再建一套报告，与已有的一套
+                # 混在一起，测试数据不再是确定的。显式拒绝，而不是静默产生重复。
+                raise IntegrityError("subject already seeded", None, Exception(owner_id))
+            # 主体记录：票据兑换会建它，种子这里建等价的一条，否则 /me 拿不到展示名。
+            session.add(
+                TicketSubject(
+                    id=str(uuid.uuid4()),
+                    tenant_id=tenant_id,
+                    external_subject=external_subject,
+                    display_name=display_name or "商城用户",
                 )
+            )
+            token, session_row = issue_session(owner_id)
+            session.add(session_row)
+            seeded = [
+                _seed_report(session, owner_id, status, report_files_dir=report_files_dir)
                 for status in reports
             ]
             session.commit()
             payload = {
-                "account": {
-                    "id": account.id,
-                    "email": account.email,
-                    "password": password,
-                    "display_name": account.display_name,
+                "subject": {
+                    "owner_id": owner_id,
+                    "tenant_id": tenant_id,
+                    "external_subject": external_subject,
+                    "display_name": display_name or "商城用户",
+                    "session_token": token,
                 },
                 "reports": [
                     {
                         "id": report.id,
                         "status": report.status,
                         "report_type": report.report_type,
-                        "access_token": token,
                     }
-                    for report, token in seeded
+                    for report in seeded
                 ],
             }
     finally:
@@ -304,11 +312,11 @@ def seed_database(
 
 
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="向 E2E 测试数据库写入登录账户与指定状态的报告种子数据。")
+    parser = argparse.ArgumentParser(description="向 E2E 测试数据库写入票据主体、会话与指定状态的报告种子数据。")
     parser.add_argument("--database", required=True, help="测试数据库 SQLAlchemy URL")
-    parser.add_argument("--email", required=True, help="登录账户邮箱")
-    parser.add_argument("--password", required=True, help="登录账户密码")
-    parser.add_argument("--display-name", default=None, help="登录账户昵称")
+    parser.add_argument("--display-name", default=None, help="主体显示昵称")
+    parser.add_argument("--tenant-id", default="e2e-tenant", help="主体所属租户标识")
+    parser.add_argument("--external-subject", default="e2e-user", help="主体在商城侧的用户标识")
     parser.add_argument(
         "--report",
         action="append",
@@ -330,14 +338,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         payload = seed_database(
             args.database,
-            email=args.email,
-            password=args.password,
+            tenant_id=args.tenant_id,
+            external_subject=args.external_subject,
             display_name=args.display_name,
             reports=args.reports or SEED_REPORT_STATUSES,
             report_files_dir=args.report_files,
         )
     except IntegrityError as exc:
-        print(f"e2e_seed: 账户已存在({args.email}): {exc.orig}", file=sys.stderr)
+        print(f"e2e_seed: 主体已存在({args.external_subject}): {exc.orig}", file=sys.stderr)
         return 1
     print(json.dumps(payload, ensure_ascii=False))
     return 0

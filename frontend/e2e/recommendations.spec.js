@@ -2,26 +2,17 @@
 // 商品由本服务端代理取回,浏览器只与自身同源通信;
 // 命中时渲染卡片,未命中时如实显示"暂无推荐"且区分原因;
 // 无论哪种情况,浏览器都不得对商城域名发起请求。
-import { test, expect } from './fixtures.js';
+import { test, expect, loginWithSeed } from './fixtures.js';
 
 const MALL_HOST = 'lkf.h5.mall.qushiyun.com';
 
-async function login(page, account) {
-  await page.goto('/');
-  await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
-  await page.getByLabel('邮箱').fill(account.email);
-  await page.getByLabel('密码').fill(account.password);
-  await page.getByRole('button', { name: /^登\s*录$/ }).click();
-  await expect(page.getByRole('heading', { name: '呵护您的健康' })).toBeVisible();
-}
-
 async function openAssessedReport(page, seed, reportId) {
-  const { account, reports } = await seed({ reports: ['assessed'] });
-  const id = reportId || reports[0].id;
-  await login(page, account);
+  const seeded = await seed({ reports: ['assessed'] });
+  const id = reportId || seeded.reports[0].id;
+  await loginWithSeed(page, seeded);
   await page.goto(`/#/report/${id}`);
   await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible();
-  return { account, reportId: id };
+  return { seeded, reportId: id };
 }
 
 function stubRecommendations(page, body) {

@@ -76,26 +76,15 @@ export async function fetchReportPage(reportId, fileIndex, pageNumber, token) {
   return res.blob();
 }
 
-export const registerAccount = (body) => request('/auth/register', {
+// 会话由商城票据建立（#172）：兑换端点是通过页面 URL 上的 ticket 调用的。
+export const exchangeTicket = (ticket) => request('/auth/ticket', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify(body),
-});
-
-export const loginAccount = (body) => request('/auth/login', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify(body),
+  body: JSON.stringify({ ticket }),
 });
 
 export const getCurrentAccount = () => request('/auth/me');
 
 export const logoutAccount = () => request('/auth/logout', { method: 'POST' });
-
-export const updateProfile = (body) => request('/auth/profile', {
-  method: 'PATCH',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify(body),
-});
 
 export const getReportHistory = () => request('/auth/reports');

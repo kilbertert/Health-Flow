@@ -37,12 +37,10 @@ import {
 import Upload from './pages/Upload.jsx';
 import ReportDetail from './pages/ReportDetail.jsx';
 import {
+  exchangeTicket,
   getCurrentAccount,
   getReportHistory,
-  loginAccount,
   logoutAccount,
-  registerAccount,
-  updateProfile,
 } from './api.js';
 
 const NAV_ITEMS = [
@@ -62,60 +60,24 @@ function BrandMark({ large = false }) {
   return <img className={`brand-mark ${large ? 'brand-mark-large' : ''}`} src="/hst-club-logo.png" alt="HST Club" />;
 }
 
-function AuthScreen({ onAuthenticated }) {
-  const [mode, setMode] = useState('login');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [form] = Form.useForm();
-
-  const submit = async (values) => {
-    setBusy(true);
-    setError('');
-    try {
-      const account = mode === 'login'
-        ? await loginAccount(values)
-        : await registerAccount(values);
-      onAuthenticated(account);
-      message.success(mode === 'login' ? '登录成功' : '账户创建成功');
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const switchMode = () => {
-    setMode(mode === 'login' ? 'register' : 'login');
-    setError('');
-    form.resetFields();
-  };
-
+function NoSessionScreen() {
+  // #172 之后本应用**不再有登录页**。没有会话时不能回退到登录界面
+  // （票面：回退会让整个应用白屏），而是在这里说明「请从商城入口进入」。
+  // 商城入口 URL 由部署配置提供；未配置时只说明、不给一个猜的链接。
   return (
     <main className="auth-page">
       <div className="auth-brand"><BrandMark large /></div>
-      <h1>{mode === 'login' ? '欢迎回来' : '创建健康账户'}</h1>
-      <p className="auth-copy">使用邮箱保存您的报告和健康提示。当前为邮箱+密码 Demo。</p>
+      <h1>请从商城入口进入</h1>
+      <p className="auth-copy">本页需要由商城签发的一次性登录票据建立会话。</p>
       <Card className="auth-card">
-        {error && <Alert type="error" showIcon title={error} style={{ marginBottom: 16 }} />}
-        <Form form={form} layout="vertical" onFinish={submit} requiredMark={false}>
-          {mode === 'register' && (
-            <Form.Item name="display_name" label="昵称" initialValue="健康用户" rules={[{ required: true, message: '请输入昵称' }]}>
-              <Input prefix={<UserOutlined />} placeholder="您的昵称" maxLength={128} />
-            </Form.Item>
-          )}
-          <Form.Item name="email" label="邮箱" rules={[{ required: true, type: 'email', message: '请输入有效邮箱' }]}>
-            <Input prefix={<MailOutlined />} placeholder="name@example.com" autoComplete="email" />
-          </Form.Item>
-          <Form.Item name="password" label="密码" rules={[{ required: true, min: mode === 'register' ? 8 : 1, message: mode === 'register' ? '密码至少 8 位' : '请输入密码' }]}>
-            <Input.Password prefix={<LockOutlined />} placeholder="请输入密码" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} />
-          </Form.Item>
-          <Button type="primary" htmlType="submit" block loading={busy}>{mode === 'login' ? '登录' : '完成注册'}</Button>
-        </Form>
-        <button className="auth-switch" type="button" onClick={switchMode}>
-          {mode === 'login' ? '还没有账户？注册' : '已有账户？去登录'}
-        </button>
+        <Alert
+          type="info"
+          showIcon
+          title="当前没有有效会话"
+          description="请回到商城，在健康检测入口重新进入本页。"
+        />
       </Card>
-      <p className="auth-boundary"><SafetyCertificateOutlined /> 账户用于保存您的报告记录，不替代医生诊断。</p>
+      <p className="auth-boundary"><SafetyCertificateOutlined /> 本页只提供报告解读与健康信息参考，不替代医生诊断。</p>
     </main>
   );
 }
@@ -191,7 +153,7 @@ function MenuSheet({ open, onClose, onOpenReport, onOpenProfile, account }) {
   return <Drawer className="menu-sheet" placement="left" width="min(86vw, 340px)" open={open} onClose={onClose} title={<div className="sheet-title"><BrandMark /><strong>健康流</strong></div>}>
     <button className="sheet-link" type="button" onClick={() => { onOpenReport(); onClose(); }}><FileSearchOutlined /><span>体检报告解读</span><ArrowRightOutlined /></button>
     <button className="sheet-link" type="button" onClick={() => { onOpenProfile(); onClose(); }}><UserOutlined /><span>个人中心</span><ArrowRightOutlined /></button>
-    <div className="sheet-status"><MailOutlined /><div><strong>{account.display_name}</strong><span>{account.email}</span></div></div>
+    <div className="sheet-status"><MailOutlined /><div><strong>{account.display_name}</strong><span>来自商城的会话</span></div></div>
   </Drawer>;
 }
 
@@ -208,39 +170,24 @@ function abnormalSummary(item) {
   return count === 0 ? ' · 未见异常' : ` · ${count} 项偏高/偏低`;
 }
 
-function ProfilePage({ account, onBack, onLogout, onOpenReport, onAccountChange }) {
+function ProfilePage({ account, onBack, onLogout, onOpenReport }) {
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [editing, setEditing] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [securityOpen, setSecurityOpen] = useState(false);
-  const [form] = Form.useForm();
 
   const loadHistory = () => getReportHistory().then(setHistory).catch((err) => setError(err.message)).finally(() => setLoading(false));
   useEffect(() => { loadHistory(); }, []);
-  const save = async (values) => {
-    setSaving(true);
-    try {
-      const updated = await updateProfile(values);
-      onAccountChange(updated);
-      setEditing(false);
-      message.success('昵称已更新');
-    }
-    catch (err) { setError(err.message); } finally { setSaving(false); }
-  };
-
   return <main className="profile-page"><div className="profile-heading"><Button type="text" icon={<ArrowLeftOutlined />} onClick={onBack}>返回</Button><h1>个人中心</h1><span /></div>
-    <section className="profile-identity"><span className="profile-avatar"><UserOutlined /></span><div><h2>{account.display_name}</h2><p>{account.email}</p></div><Button type="text" icon={<EditOutlined />} aria-label="编辑昵称" onClick={() => { form.setFieldsValue({ display_name: account.display_name }); setEditing(true); }} /></section>
-    <div className="profile-links"><button className="profile-link" type="button" onClick={() => setSecurityOpen(true)}><LockOutlined /><span>账户与安全</span><small>邮箱登录 · 会话安全</small><ArrowRightOutlined /></button><button className="profile-link" type="button" onClick={() => document.getElementById('report-history')?.scrollIntoView({ behavior: 'smooth' })}><HistoryOutlined /><span>报告历史</span><small>{history.length} 份报告</small><ArrowRightOutlined /></button><button className="profile-link" type="button" onClick={() => message.info('通知设置将在后续阶段开放')}><BellOutlined /><span>通知设置</span><small>暂未开放</small><ArrowRightOutlined /></button><button className="profile-link" type="button" onClick={() => message.info('帮助与反馈将在后续阶段开放')}><SafetyCertificateOutlined /><span>帮助与反馈</span><small>暂未开放</small><ArrowRightOutlined /></button></div>
+    <section className="profile-identity"><span className="profile-avatar"><UserOutlined /></span><div><h2>{account.display_name}</h2><p>来自商城的会话</p></div></section>
+    <div className="profile-links"><button className="profile-link" type="button" onClick={() => setSecurityOpen(true)}><LockOutlined /><span>账户与安全</span><small>商城票据 · 会话安全</small><ArrowRightOutlined /></button><button className="profile-link" type="button" onClick={() => document.getElementById('report-history')?.scrollIntoView({ behavior: 'smooth' })}><HistoryOutlined /><span>报告历史</span><small>{history.length} 份报告</small><ArrowRightOutlined /></button><button className="profile-link" type="button" onClick={() => message.info('通知设置将在后续阶段开放')}><BellOutlined /><span>通知设置</span><small>暂未开放</small><ArrowRightOutlined /></button><button className="profile-link" type="button" onClick={() => message.info('帮助与反馈将在后续阶段开放')}><SafetyCertificateOutlined /><span>帮助与反馈</span><small>暂未开放</small><ArrowRightOutlined /></button></div>
     <section className="history-section" id="report-history"><div className="section-title"><h2>报告历史</h2><Typography.Text type="secondary">仅显示当前账户</Typography.Text></div>{error && <Alert type="error" showIcon title={error} />}{loading ? <div className="history-loading"><Spin /></div> : history.length === 0 ? <Empty description="还没有报告记录" /> : <List dataSource={history} renderItem={(item) => <List.Item actions={[<Button type="link" onClick={() => onOpenReport(item.id)} key="open">查看</Button>]}><List.Item.Meta title={`${item.report_type || '体检报告'} · ${new Date(item.created_at).toLocaleDateString('zh-CN')}`} description={<span>{item.department || '未填写科室'} · {item.metric_count} 项指标{abnormalSummary(item)}</span>} /><Tag color={item.status === 'assessed' ? 'green' : 'gold'}>{statusLabel(item.status)}</Tag></List.Item>} />}</section>
     <Button className="logout-button" danger icon={<LogoutOutlined />} onClick={onLogout}>退出登录</Button>
-    <Modal title="修改昵称" open={editing} onCancel={() => setEditing(false)} footer={null}><Form form={form} onFinish={save} layout="vertical"><Form.Item name="display_name" label="昵称" rules={[{ required: true, message: '请输入昵称' }]}><Input maxLength={128} /></Form.Item><Button type="primary" htmlType="submit" loading={saving} block>保存</Button></Form></Modal>
-    <Modal title="账户与安全" open={securityOpen} onCancel={() => setSecurityOpen(false)} footer={<Button type="primary" onClick={() => setSecurityOpen(false)}>知道了</Button>}><p>登录邮箱：{account.email}</p><p>当前使用服务端会话保存登录状态，退出登录后会立即失效。</p></Modal>
+    <Modal title="账户与安全" open={securityOpen} onCancel={() => setSecurityOpen(false)} footer={<Button type="primary" onClick={() => setSecurityOpen(false)}>知道了</Button>}><p>本应用的会话由商城签发的登录票据建立。</p><p>退出登录后会话立即失效；再次使用请从商城入口重新进入。</p></Modal>
   </main>;
 }
 
-function HealthFlowApp({ account, onLogout, onAccountChange }) {
+function HealthFlowApp({ account, onLogout }) {
   const [view, setView] = useState(() => reportRouteFromHash()?.view || 'home');
   const [reportId, setReportId] = useState(() => reportRouteFromHash()?.reportId || null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -286,7 +233,7 @@ function HealthFlowApp({ account, onLogout, onAccountChange }) {
     {view === 'home' && <HomePage onOpenReport={() => openReport()} onOpenProfile={() => navigate('profile')} />}
     {view === 'report' && <ReportPage account={account} reportId={reportId} onBack={() => navigate('home')} onReportSaved={() => {}} />}
     {view === 'report-detail' && reportId && <ReportDetail account={account} reportId={reportId} onBack={() => navigate('home')} onContinueConfirm={(id) => navigate('report', id)} />}
-    {view === 'profile' && <ProfilePage account={account} onBack={() => navigate('home')} onLogout={onLogout} onAccountChange={onAccountChange} onOpenReport={(id) => openReport(id)} />}
+    {view === 'profile' && <ProfilePage account={account} onBack={() => navigate('home')} onLogout={onLogout} onOpenReport={(id) => openReport(id)} />}
     <BottomNav view={view === 'report-detail' ? 'report' : view} onNavigate={handleBottomNav} />
     <MenuSheet account={account} open={menuOpen} onClose={() => setMenuOpen(false)} onOpenReport={() => openReport()} onOpenProfile={() => navigate('profile')} />
   </div>;
@@ -295,9 +242,28 @@ function HealthFlowApp({ account, onLogout, onAccountChange }) {
 export default function App() {
   const [account, setAccount] = useState(null);
   const [loading, setLoading] = useState(true);
-  useEffect(() => { getCurrentAccount().then(setAccount).catch(() => setAccount(null)).finally(() => setLoading(false)); }, []);
+
+  useEffect(() => {
+    // #172 之后**唯一的建会话入口**是商城跳转带来的票据。启动顺序：
+    // 地址上有 `ticket` 就先兑换（兑换会种下会话 cookie），再读当前主体。
+    // 兑换失败不渲染登录页——那是票面禁止的回退；这里交给 NoSessionScreen
+    // 说明「请从商城入口进入」。
+    const params = new URLSearchParams(window.location.search);
+    const ticket = params.get('ticket');
+    const bootstrap = ticket
+      ? exchangeTicket(ticket)
+        .then((subject) => {
+          // 票据是一次性的：留在地址栏里会让用户刷新时拿到一个已被消费的票。
+          params.delete('ticket');
+          const query = params.toString();
+          window.history.replaceState({}, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`);
+          return subject;
+        })
+      : getCurrentAccount();
+    bootstrap.then(setAccount).catch(() => setAccount(null)).finally(() => setLoading(false));
+  }, []);
   if (loading) return <div className="app-loading"><Spin size="large" /></div>;
-  if (!account) return <ConfigProvider theme={{ token: { colorPrimary: '#c98b28', borderRadius: 14 } }}><AntApp><AuthScreen onAuthenticated={setAccount} /></AntApp></ConfigProvider>;
+  if (!account) return <ConfigProvider theme={{ token: { colorPrimary: '#c98b28', borderRadius: 14 } }}><AntApp><NoSessionScreen /></AntApp></ConfigProvider>;
   const logout = async () => { await logoutAccount().catch(() => {}); setAccount(null); message.success('已退出登录'); };
-  return <ConfigProvider theme={{ token: { colorPrimary: '#c98b28', colorInfo: '#c98b28', borderRadius: 14, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif' } }}><AntApp><HealthFlowApp account={account} onLogout={logout} onAccountChange={setAccount} /></AntApp></ConfigProvider>;
+  return <ConfigProvider theme={{ token: { colorPrimary: '#c98b28', colorInfo: '#c98b28', borderRadius: 14, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif' } }}><AntApp><HealthFlowApp account={account} onLogout={logout} /></AntApp></ConfigProvider>;
 }

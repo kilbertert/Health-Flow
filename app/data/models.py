@@ -20,7 +20,14 @@ Base = declarative_base()
 
 
 class UserAccount(Base):
-    """A patient-facing account.  Credentials never live on a report row."""
+    """退役期的账户行。**保留只读，至自然消亡**（health-flow #172）。
+
+    本票之后没有任何代码路径会创建、更新或按它鉴权——自助注册、密码与登录整体退役，
+    主体只能由商城票据兑换创建。这张表留着，是因为删表是数据操作而不是代码操作：
+    「退役」删的是「用户自己能创建身份」的能力，不是数据。
+
+    按邮箱反查（`email` 唯一索引）也随之失去意义：那会依赖一个我们无法验证的外部标识。
+    """
 
     __tablename__ = "user_accounts"
 
@@ -37,23 +44,26 @@ class UserAccount(Base):
         nullable=False,
     )
 
-    sessions = relationship("UserSession", back_populates="account", cascade="all, delete-orphan")
 
 
 class UserSession(Base):
-    """Server-side session; the browser only receives the random token."""
+    """Server-side session; the browser only receives the random token.
+
+    **`account_id` 这一列现在装的是主体的存储标识**（`account:<tenant>:<sub>`），
+    不再是账号表的主键——#172 之后会话不再经过账号。列名保留（改名是迁移，不是本票），
+    所以它**没有**外键：历史行指向账号，新行指向票据主体，两者不是同一张表的键。
+    """
 
     __tablename__ = "user_sessions"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    account_id = Column(String(36), ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=False)
+    account_id = Column(String(128), nullable=False)
     token_hash = Column(String(64), nullable=False, unique=True, index=True)
     created_at = Column(DateTime, default=datetime.now, nullable=False)
     expires_at = Column(DateTime, nullable=False, index=True)
     last_seen_at = Column(DateTime, default=datetime.now, nullable=False)
     revoked_at = Column(DateTime)
 
-    account = relationship("UserAccount", back_populates="sessions")
 
 
 class MedicalReport(Base):

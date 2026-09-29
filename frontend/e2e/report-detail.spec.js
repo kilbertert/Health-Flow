@@ -2,19 +2,10 @@
 // 历史列表进入 #/report/:id,深链可直达并在刷新后恢复;
 // 已完成报告渲染指标总览/异常摘要/知识卡/原文/技术详情,修正值优先展示;
 // 待确认报告先显示状态边界,再进入既有确认流程。
-import { test, expect } from './fixtures.js';
+import { test, expect, loginWithSeed } from './fixtures.js';
 
-async function login(page, account) {
-  await page.goto('/');
-  await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
-  await page.getByLabel('邮箱').fill(account.email);
-  await page.getByLabel('密码').fill(account.password);
-  await page.getByRole('button', { name: /^登\s*录$/ }).click();
-  await expect(page.getByRole('heading', { name: '呵护您的健康' })).toBeVisible();
-}
-
-async function openReportFromHistory(page, account) {
-  await login(page, account);
+async function openReportFromHistory(page, seeded) {
+  await loginWithSeed(page, seeded);
   await page.getByRole('button', { name: '个人中心', exact: true }).click();
   await expect(page.getByRole('heading', { name: '个人中心' })).toBeVisible();
   await page.getByRole('button', { name: '查看' }).click();
@@ -22,13 +13,13 @@ async function openReportFromHistory(page, account) {
 }
 
 test('历史列表打开报告详情并读取 hash 路由', async ({ page, seed }) => {
-  const { account, reports } = await seed({ reports: ['assessed'] });
-  const reportId = reports[0].id;
-  await openReportFromHistory(page, account);
+  const seeded = await seed({ reports: ['assessed'] });
+  const reportId = seeded.reports[0].id;
+  await openReportFromHistory(page, seeded);
 
   expect(page.url()).toContain(`#/report/${reportId}`);
   const meta = page.locator('.report-meta-card');
-  await expect(meta).toContainText(account.display_name);
+  await expect(meta).toContainText(seeded.subject.display_name);
   await expect(meta).toContainText(`#${reportId}`);
   await expect(meta).toContainText('已完成');
   await expect(page.getByText('指标总览', { exact: true })).toBeVisible();
@@ -36,9 +27,9 @@ test('历史列表打开报告详情并读取 hash 路由', async ({ page, seed 
 });
 
 test('报告详情深链刷新后恢复', async ({ page, seed }) => {
-  const { account, reports } = await seed({ reports: ['assessed'] });
-  const reportId = reports[0].id;
-  await login(page, account);
+  const seeded = await seed({ reports: ['assessed'] });
+  const reportId = seeded.reports[0].id;
+  await loginWithSeed(page, seeded);
 
   await page.goto(`/#/report/${reportId}`);
   await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible();
@@ -51,8 +42,8 @@ test('报告详情深链刷新后恢复', async ({ page, seed }) => {
 });
 
 test('修正后的指标值优先展示', async ({ page, seed }) => {
-  const { account, reports } = await seed({ reports: ['assessed'] });
-  const reportId = reports[0].id;
+  const seeded = await seed({ reports: ['assessed'] });
+  const reportId = seeded.reports[0].id;
 
   await page.route(`**/api/health/report/${reportId}`, async (route) => {
     await route.fulfill({
@@ -60,7 +51,7 @@ test('修正后的指标值优先展示', async ({ page, seed }) => {
       contentType: 'application/json',
       body: JSON.stringify({
         id: reportId,
-        patient_id: account.id,
+        patient_id: seeded.subject.owner_id,
         report_type: '体检报告',
         department: '健康管理中心',
         created_at: new Date().toISOString(),
@@ -89,15 +80,15 @@ test('修正后的指标值优先展示', async ({ page, seed }) => {
     });
   });
 
-  await openReportFromHistory(page, account);
+  await openReportFromHistory(page, seeded);
   const row = page.locator('.metric-overview-card tr').filter({ hasText: '空腹血糖' }).last();
   await expect(row).toContainText('6.4');
   await expect(page.locator('.metric-overview-card').getByText('6.5', { exact: true })).toHaveCount(0);
 });
 
 test('待确认报告先显示状态边界，再进入既有确认流程', async ({ page, seed }) => {
-  const { account } = await seed({ reports: ['pending_confirmation'] });
-  await openReportFromHistory(page, account);
+  const seeded = await seed({ reports: ['pending_confirmation'] });
+  await openReportFromHistory(page, seeded);
 
   const meta = page.locator('.report-status-card');
   await expect(meta).toBeVisible();
@@ -111,8 +102,8 @@ test('待确认报告先显示状态边界，再进入既有确认流程', async
 });
 
 test('报告原文与技术详情默认收起且可展开', async ({ page, seed }) => {
-  const { account } = await seed({ reports: ['assessed'] });
-  await openReportFromHistory(page, account);
+  const seeded = await seed({ reports: ['assessed'] });
+  await openReportFromHistory(page, seeded);
 
   const original = page.getByRole('button', { name: '报告原文' });
   const technical = page.getByRole('button', { name: '技术详情' });
@@ -126,8 +117,8 @@ test('报告原文与技术详情默认收起且可展开', async ({ page, seed 
 });
 
 test('打印媒体下仅保留报告抬头、指标总览与健康提示', async ({ page, seed }) => {
-  const { account } = await seed({ reports: ['assessed'] });
-  await openReportFromHistory(page, account);
+  const seeded = await seed({ reports: ['assessed'] });
+  await openReportFromHistory(page, seeded);
   await expect(page.locator('.wechat-print-guide')).toHaveCount(0);
 
   await page.emulateMedia({ media: 'print' });
@@ -150,8 +141,8 @@ test.describe('微信内置浏览器打印引导', () => {
   });
 
   test('报告详情显示"用系统浏览器打开"引导', async ({ page, seed }) => {
-    const { account } = await seed({ reports: ['assessed'] });
-    await openReportFromHistory(page, account);
+    const seeded = await seed({ reports: ['assessed'] });
+    await openReportFromHistory(page, seeded);
 
     const guide = page.locator('.wechat-print-guide');
     await expect(guide).toBeVisible();

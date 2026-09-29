@@ -1,19 +1,10 @@
 // 指标确认表卡片化(E2E):
 // 375/414px 下确认表渲染为常显名称/数值/异常状态的指标卡片,
 // 展开卡片后可进行修正并提交确认;桌面端仍使用表格形态。
-import { test, expect } from './fixtures.js';
+import { test, expect, loginWithSeed } from './fixtures.js';
 
-async function login(page, account) {
-  await page.goto('/');
-  await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
-  await page.getByLabel('邮箱').fill(account.email);
-  await page.getByLabel('密码').fill(account.password);
-  await page.getByRole('button', { name: /^登\s*录$/ }).click();
-  await expect(page.getByRole('heading', { name: '呵护您的健康' })).toBeVisible();
-}
-
-async function openPendingReport(page, account) {
-  await login(page, account);
+async function openPendingReport(page, seeded) {
+  await loginWithSeed(page, seeded);
   await page.getByRole('button', { name: '个人中心', exact: true }).click();
   await expect(page.getByRole('heading', { name: '个人中心' })).toBeVisible();
   await page.getByRole('button', { name: '查看' }).click();
@@ -23,11 +14,11 @@ async function openPendingReport(page, account) {
   await expect(page.getByText(/解析结果/)).toBeVisible();
 }
 
-function assessedResponse(account, reportUrl) {
+function assessedResponse(seeded, reportUrl) {
   const id = Number(reportUrl.split('/report/')[1].split('/')[0]);
   return {
     id,
-    patient_id: account.id,
+    patient_id: seeded.subject.owner_id,
     report_type: '体检报告',
     department: '健康管理中心',
     created_at: new Date().toISOString(),
@@ -66,8 +57,8 @@ function assessedResponse(account, reportUrl) {
     test.use({ viewport: { width, height: 667 } });
 
     test('卡片常显指标信息，可展开修正并提交确认', async ({ page, seed }) => {
-      const { account } = await seed({ reports: ['pending_confirmation'] });
-      await openPendingReport(page, account);
+      const seeded = await seed({ reports: ['pending_confirmation'] });
+      await openPendingReport(page, seeded);
 
       const card = page.getByRole('button', { name: '甘油三酯指标卡片' });
       await expect(card).toBeVisible();
@@ -98,7 +89,7 @@ function assessedResponse(account, reportUrl) {
         await route.fulfill({
           status: 200,
           contentType: 'application/json',
-          body: JSON.stringify(assessedResponse(account, route.request().url())),
+          body: JSON.stringify(assessedResponse(seeded, route.request().url())),
         });
       });
 
@@ -125,8 +116,8 @@ test.describe('指标确认表格桌面端', () => {
   test.use({ viewport: { width: 1280, height: 800 } });
 
   test('确认表保持表格形态，不渲染卡片', async ({ page, seed }) => {
-    const { account } = await seed({ reports: ['pending_confirmation'] });
-    await openPendingReport(page, account);
+    const seeded = await seed({ reports: ['pending_confirmation'] });
+    await openPendingReport(page, seeded);
 
     const confirmationTable = page.getByRole('table').filter({
       has: page.getByRole('columnheader', { name: '指标' }),

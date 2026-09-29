@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import hmac
 import json
 import logging
 import math
-import secrets
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -18,7 +16,6 @@ from fastapi import (
     Depends,
     File,
     Form,
-    Header,
     HTTPException,
     Request,
     Response,
@@ -27,7 +24,7 @@ from fastapi import (
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from app.api.deps import db_dependency, report_account_dependency
+from app.api.deps import db_dependency, session_owner_dependency
 from app.config import get_settings
 from app.data.models import MedicalReport as ReportModel
 from app.data.models import MetricRecord as MetricModel
@@ -55,7 +52,7 @@ from app.service.evidence_bridge import (
     metric_code_for_name,
 )
 from app.service.mall_goods import fetch_goods, label_pairs_for, serialized
-from app.service.report_ownership import resolve_owner
+from app.service.report_ownership import UNOWNED_SENTINEL, resolve_owner
 from app.service.vision_encoder import ParsedReport, get_vision_encoder_service
 
 #: 只有这些状态的报告才谈得上加购：未完成确认/评估的报告没有可据以取货的风险。
@@ -81,28 +78,22 @@ _TRANSIENT_ERROR_MARKERS = (
 )
 
 
-def _token_hash(token: str) -> str:
-    return hashlib.sha256(token.encode()).hexdigest()
+def _authorized_report(db: Session, report_id: int, *, owner_id: str) -> ReportModel:
+    """只按**主体的存储标识**判定归属。报告令牌旁路已随 #172 一并移除。
 
-
-def _authorized_report(
-    db: Session,
-    report_id: int,
-    access_token: str,
-    *,
-    owner_id: str,
-    session_authenticated: bool = False,
-) -> ReportModel:
+    注意 `report.access_token_hash` 不再参与判定，但**不要求它为空**：历史行里有它，
+    而「有令牌」不构成访问依据——本票之后没有任何凭据能替代主体。
+    """
     report = db.query(ReportModel).filter(ReportModel.id == report_id).first()
-    if report is None or not report.access_token_hash or not report.owner_id:
+    if report is None or not report.owner_id:
         raise HTTPException(status_code=404, detail="报告不存在")
-    owner_matches = hmac.compare_digest(report.owner_id or "", owner_id)
-    token_matches = bool(
-        report.access_token_hash
-        and access_token
-        and hmac.compare_digest(report.access_token_hash, _token_hash(access_token))
-    )
-    if not owner_matches or (not session_authenticated and not token_matches):
+    # **无主历史行对任何人封闭。** 移除令牌旁路之后有一个更弱的路径会冒出来：
+    # `resolve_owner` 在无会话时返回哨兵值，若它与旧行的 `owner_id` 相等，
+    # 一个未认证请求就能读到无主报告——那比被移除的令牌旁路还宽。所以哨兵值
+    # 显式拒绝，双方都不算匹配。
+    if report.owner_id == UNOWNED_SENTINEL:
+        raise HTTPException(status_code=404, detail="报告不存在")
+    if not hmac.compare_digest(report.owner_id or "", owner_id):
         raise HTTPException(status_code=404, detail="报告不存在")
     return report
 
@@ -237,11 +228,11 @@ async def upload_report(
     file: UploadFile | None = File(None),
     files: list[UploadFile] | None = File(None),
     db: Session = Depends(db_dependency),
-    account=Depends(report_account_dependency),
+    owner_id: str | None = Depends(session_owner_dependency),
 ):
     patient_id = (patient_id or "").strip()
-    if not patient_id and account is not None:
-        patient_id = account.id
+    if not patient_id and owner_id:
+        patient_id = owner_id
     if not patient_id:
         raise HTTPException(status_code=422, detail="patient_id 不能为空")
     upload_files = list(files or [])
@@ -279,7 +270,6 @@ async def upload_report(
             raise HTTPException(status_code=400, detail=f"第 {file_index} 个报告文件内容为空")
         accepted_files.append((file_index, filename, _media_type(filename), content))
 
-    access_token = secrets.token_urlsafe(32)
     report = ReportModel(
         patient_id=patient_id,
         report_type=report_type or "体检",
@@ -287,7 +277,6 @@ async def upload_report(
         parsed_content={"file_count": len(accepted_files)},
         status="processing",
         subject_consistency="same" if len(accepted_files) == 1 else "uncertain",
-        access_token_hash=_token_hash(access_token),
         owner_id=resolve_owner(request).storage_id,
         exam_date=datetime.now(),
     )
@@ -310,8 +299,7 @@ async def upload_report(
     return _report_response(
         report,
         [],
-        access_token=None if account is not None else access_token,
-        owned_by_account=account is not None,
+        owned_by_account=True,
     )
 
 
@@ -510,7 +498,6 @@ def _report_response(
     report: ReportModel,
     metrics: list[MetricModel],
     *,
-    access_token: str | None = None,
     owned_by_account: bool = False,
 ) -> MedicalReportResponse:
     extraction_job = getattr(report, "extraction_job", None)
@@ -551,7 +538,6 @@ def _report_response(
             if extraction_job is not None
             else None
         ),
-        access_token=access_token,
         extraction_trace={
             key: getattr(report, key)
             for key in (
@@ -585,18 +571,15 @@ async def get_report(
     report_id: int,
     request: Request,
     db: Session = Depends(db_dependency),
-    x_report_token: str = Header(default=""),
-    account=Depends(report_account_dependency),
+    owner_id: str | None = Depends(session_owner_dependency),
 ):
     report = _authorized_report(
         db,
         report_id,
-        x_report_token,
         owner_id=resolve_owner(request).storage_id,
-        session_authenticated=account is not None,
     )
     metrics = _ordered_metrics(db, report_id).all()
-    return _report_response(report, metrics, owned_by_account=account is not None)
+    return _report_response(report, metrics, owned_by_account=owner_id is not None)
 
 
 @router.post("/report/{report_id}/confirm", response_model=MedicalReportResponse)
@@ -605,15 +588,12 @@ async def confirm_report(
     request: Request,
     confirmation: ReportConfirmationRequest,
     db: Session = Depends(db_dependency),
-    x_report_token: str = Header(default=""),
-    account=Depends(report_account_dependency),
+    owner_id: str | None = Depends(session_owner_dependency),
 ):
     report = _authorized_report(
         db,
         report_id,
-        x_report_token,
         owner_id=resolve_owner(request).storage_id,
-        session_authenticated=account is not None,
     )
     if report.status not in {"pending_confirmation", "confirmed"}:
         raise HTTPException(status_code=409, detail="报告当前状态不允许确认")
@@ -705,7 +685,7 @@ async def confirm_report(
     )
     db.commit()
     try:
-        return await _assess_report(report, db, owned_by_account=account is not None)
+        return await _assess_report(report, db, owned_by_account=owner_id is not None)
     except EvidenceBridgeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -715,15 +695,12 @@ async def assess_report(
     report_id: int,
     request: Request,
     db: Session = Depends(db_dependency),
-    x_report_token: str = Header(default=""),
-    account=Depends(report_account_dependency),
+    owner_id: str | None = Depends(session_owner_dependency),
 ):
     report = _authorized_report(
         db,
         report_id,
-        x_report_token,
         owner_id=resolve_owner(request).storage_id,
-        session_authenticated=account is not None,
     )
     if report.status not in {"confirmed", "assessed"}:
         raise HTTPException(status_code=409, detail="请先确认报告指标")
@@ -733,7 +710,7 @@ async def assess_report(
             detail="报告仍有文件未完成解析，不能生成健康提示",
         )
     try:
-        return await _assess_report(report, db, owned_by_account=account is not None)
+        return await _assess_report(report, db, owned_by_account=owner_id is not None)
     except EvidenceBridgeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -826,8 +803,7 @@ async def get_report_recommendations(
     report_id: int,
     request: Request,
     db: Session = Depends(db_dependency),
-    x_report_token: str = Header(default=""),
-    account=Depends(report_account_dependency),
+    owner_id: str | None = Depends(session_owner_dependency),
 ):
     """推荐商品（同源）。浏览器只与本服务通信，商城由服务端取。
 
@@ -843,9 +819,7 @@ async def get_report_recommendations(
     report = _authorized_report(
         db,
         report_id,
-        x_report_token,
         owner_id=resolve_owner(request).storage_id,
-        session_authenticated=account is not None,
     )
 
     conditions = _confirmed_condition_codes(report)
@@ -869,15 +843,12 @@ async def get_report_metrics(
     report_id: int,
     request: Request,
     db: Session = Depends(db_dependency),
-    x_report_token: str = Header(default=""),
-    account=Depends(report_account_dependency),
+    owner_id: str | None = Depends(session_owner_dependency),
 ):
     _authorized_report(
         db,
         report_id,
-        x_report_token,
         owner_id=resolve_owner(request).storage_id,
-        session_authenticated=account is not None,
     )
     return [_metric_response(metric) for metric in _ordered_metrics(db, report_id).all()]
 
@@ -897,15 +868,12 @@ async def get_report_page(
     page_number: int,
     request: Request,
     db: Session = Depends(db_dependency),
-    x_report_token: str = Header(default=""),
-    account=Depends(report_account_dependency),
+    owner_id: str | None = Depends(session_owner_dependency),
 ):
     _authorized_report(
         db,
         report_id,
-        x_report_token,
         owner_id=resolve_owner(request).storage_id,
-        session_authenticated=account is not None,
     )
     source = (
         db.query(ReportFileModel)
@@ -939,15 +907,12 @@ async def delete_report(
     report_id: int,
     request: Request,
     db: Session = Depends(db_dependency),
-    x_report_token: str = Header(default=""),
-    account=Depends(report_account_dependency),
+    owner_id: str | None = Depends(session_owner_dependency),
 ):
     report = _authorized_report(
         db,
         report_id,
-        x_report_token,
         owner_id=resolve_owner(request).storage_id,
-        session_authenticated=account is not None,
     )
     # 先删数据库主记录；向量索引是尽力而为，放在 DB 成功之后，
     # 避免 DB 删除失败时向量索引已被清掉造成状态不一致。
@@ -968,8 +933,7 @@ async def create_cart_link(
     spu_id: str,
     request: Request,
     db: Session = Depends(db_dependency),
-    x_report_token: str = Header(default=""),
-    account=Depends(report_account_dependency),
+    owner_id: str | None = Depends(session_owner_dependency),
 ):
     """构造「加入购物车」深链（同源，POST 因为它在推进一次状态转换）。
 
@@ -981,9 +945,7 @@ async def create_cart_link(
     report = _authorized_report(
         db,
         report_id,
-        x_report_token,
         owner_id=resolve_owner(request).storage_id,
-        session_authenticated=account is not None,
     )
     if report.status not in COMPLETED_FOR_LINK:
         return CartLinkResponse(url=None, reason="report_not_ready")
