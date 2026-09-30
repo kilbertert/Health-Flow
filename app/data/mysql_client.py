@@ -103,8 +103,15 @@ class MySQLClient:
         外键让插入失败（主体不是账号行），长度让较长的主体标识被截断或拒收。
 
         `create_all` **不会**改既有表——这就是为什么这段必须显式执行。它只做两件
-        幂等的事：丢外键（若存在）、把列宽扩到 128（若还窄）。在不带外键的 SQLite
-        上，第一件自然跳过。
+        幂等的事：丢外键（若存在）、把列宽扩到 128（若还窄）。
+
+        **SQLite 也要做，不是只有 MySQL。** 早先这里写的是「SQLite 上是开发库，
+        `create_all` 建出来的表本来就没有外键，无需升级」——但**既有库不是
+        `create_all` 建的**：它是账号时代建的，带着那个外键。实测服务宿主
+        （`/opt/health-flow/var/healthflow.db`）就是这种库：`account_id VARCHAR(36)`
+        + `FOREIGN KEY(account_id) REFERENCES user_accounts(id)`，而 SQLAlchemy 的
+        `connect` 钩子把 `PRAGMA foreign_keys=ON` 打开，于是**票据登录必定
+        `IntegrityError`**（主体不是账号行），且只在真的兑换票据时才炸。
         """
         inspector = inspect(connection)
         if "user_sessions" not in inspector.get_table_names():
@@ -113,17 +120,21 @@ class MySQLClient:
         owner_column = columns.get("account_id")
         if owner_column is None:
             return
+        has_account_fk = any(
+            foreign_key.get("constrained_columns") == ["account_id"]
+            for foreign_key in inspector.get_foreign_keys("user_sessions")
+        )
 
-        # 方言不同，DDL 也不同：MySQL 用 `DROP FOREIGN KEY` / `MODIFY`，SQLite 不支持
-        # 改列（只能重建表）。这里只处理**需要升级的那种部署**（生产是 MySQL）；
-        # SQLite 上是开发库，`create_all` 建出来的表本来就没有外键，无需升级。
+        # 方言不同，DDL 也不同：MySQL 用 `DROP FOREIGN KEY` / `MODIFY`；SQLite 不支持
+        # 改列，只能重建表——而且要**在旧 schema 上重建**，这正是既有部署的形状。
         dialect = connection.dialect.name
         if dialect == "mysql":
-            for foreign_key in inspector.get_foreign_keys("user_sessions"):
-                if foreign_key.get("constrained_columns") == ["account_id"]:
-                    name = foreign_key.get("name")
-                    if name:
-                        connection.execute(text(f"ALTER TABLE user_sessions DROP FOREIGN KEY {name}"))
+            if has_account_fk:
+                for foreign_key in inspector.get_foreign_keys("user_sessions"):
+                    if foreign_key.get("constrained_columns") == ["account_id"]:
+                        name = foreign_key.get("name")
+                        if name:
+                            connection.execute(text(f"ALTER TABLE user_sessions DROP FOREIGN KEY {name}"))
             length = getattr(owner_column["type"], "length", None)
             if length is not None and length < 128:
                 connection.execute(text("ALTER TABLE user_sessions MODIFY account_id VARCHAR(128) NOT NULL"))
@@ -134,9 +145,10 @@ class MySQLClient:
             if patient_column is not None:
                 patient_length = getattr(patient_column["type"], "length", None)
                 if patient_length is not None and patient_length < 128:
-                    connection.execute(
-                        text("ALTER TABLE medical_reports MODIFY patient_id VARCHAR(128) NOT NULL")
-                    )
+                    connection.execute(text("ALTER TABLE medical_reports MODIFY patient_id VARCHAR(128) NOT NULL"))
+        elif dialect == "sqlite":
+            if has_account_fk:
+                _sqlite_rebuild_without_account_fk(connection)
 
     def drop_tables(self) -> None:
         Base.metadata.drop_all(bind=self.engine)
@@ -158,6 +170,53 @@ class MySQLClient:
 
 
 _mysql_client: MySQLClient | None = None
+
+
+def _sqlite_rebuild_without_account_fk(connection) -> None:
+    """在 SQLite 上把 `user_sessions` 重建为不带账号外键的形状。
+
+    SQLite 没有 `ALTER TABLE ... DROP CONSTRAINT`，所以重建是**唯一**的做法：
+    建一张目标形状的表、把行搬过去、换名。两件事必须做对，否则会丢数据：
+
+    - **搬行时按列名对齐**，不是按位置——旧表与模型的列序不保证一致。列集合从
+      旧表自身读出，所以历史列不会被静默丢掉。
+    - **重建索引**：索引不随数据搬过去。名字取自旧表自己的 `sqlite_master`，不猜
+      SQLAlchemy 会给什么名字。
+
+    `PRAGMA foreign_keys` 不需要动：外键定义在 `user_sessions` 自己身上（它引用
+    `user_accounts`），没有任何表引用它，所以「先删行再删表」不会违反任何约束。
+
+    事务由调用方的 `engine.begin()` 提供；这里不自己 commit。`PRAGMA foreign_keys`
+    在事务内本就是 no-op，所以也没法在这里关——见上一段，不需要关。
+    """
+    columns = [row[1] for row in connection.execute(text("PRAGMA table_info(user_sessions)"))]
+    index_sql = [
+        row[0]
+        for row in connection.execute(
+            text("SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='user_sessions' AND sql IS NOT NULL")
+        )
+    ]
+    quoted = ", ".join(f'"{name}"' for name in columns)
+    connection.execute(text("DROP TABLE IF EXISTS user_sessions_migrating"))
+    connection.execute(
+        text(
+            "CREATE TABLE user_sessions_migrating ("
+            " id INTEGER NOT NULL,"
+            " account_id VARCHAR(128) NOT NULL,"
+            " token_hash VARCHAR(64) NOT NULL,"
+            " created_at DATETIME NOT NULL,"
+            " expires_at DATETIME NOT NULL,"
+            " last_seen_at DATETIME NOT NULL,"
+            " revoked_at DATETIME,"
+            " PRIMARY KEY (id)"
+            ")"
+        )
+    )
+    connection.execute(text(f"INSERT INTO user_sessions_migrating ({quoted}) SELECT {quoted} FROM user_sessions"))
+    connection.execute(text("DROP TABLE user_sessions"))
+    connection.execute(text("ALTER TABLE user_sessions_migrating RENAME TO user_sessions"))
+    for statement in index_sql:
+        connection.execute(text(statement))
 
 
 def _enable_sqlite_foreign_keys(connection, _connection_record) -> None:
