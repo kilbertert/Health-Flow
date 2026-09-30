@@ -116,3 +116,21 @@ def test_chat_with_image_uses_report_parse_timeout_for_chat_api():
         client.chat_with_image([{"role": "user", "content": [{"type": "text", "text": "extract"}]}])
 
     assert openai_factory.call_args.kwargs["timeout"] == 180
+
+
+def test_vlm_singleton_uses_the_report_extraction_budget():
+    """单例的 max_tokens 取配置项，不是类默认的 2048。
+
+    2048 会在报告一页的指标 JSON 中途截断，而失败信息是「VLM 未返回 JSON」——
+    读起来像模型不配合，实际是输出被砍了。这条断言把「预算够不够」钉在配置上。
+    """
+    import app.model.llm as llm_module
+    from app.config import get_settings
+
+    original = llm_module._vlm_client
+    llm_module._vlm_client = None
+    try:
+        assert llm_module.get_vlm_client().max_tokens == get_settings().REPORT_EXTRACTION_MAX_TOKENS
+        assert llm_module.get_vlm_client().max_tokens != 2048
+    finally:
+        llm_module._vlm_client = original

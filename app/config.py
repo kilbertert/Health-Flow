@@ -36,6 +36,15 @@ class Settings(BaseSettings):
     VLLM_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
     OPENAI_RESPONSES_URL: str = ""
+    # 视觉抽取的**输出**预算。报告页要逐行转录观测项、每项还带 bbox 与原文片段，
+    # 一页的 JSON 轻松上 4k token。8192 会把输出截断在 JSON 中间——解析失败后
+    # 报的是「VLM 未返回 JSON」，看起来像模型不配合，实际是预算不够。
+    #
+    # 用推理模型时这个值还要更高：它们先输出一段 reasoning 再给正文，**两者共用
+    # 这一个预算**。实测（deepseek-v4.1-flash，单页检验单）8192 被 reasoning 吃光，
+    # 16384 才够。上限不是免费的——它同时是失控请求的成本上限——所以做成配置项，
+    # 由部署方按所用模型定。
+    REPORT_EXTRACTION_MAX_TOKENS: int = 16384
 
     MINIMAX_API_KEY: str = ""
     MINIMAX_MODEL: str = "MiniMax-M2.7"

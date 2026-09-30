@@ -301,10 +301,15 @@ _vlm_client: VLMClient | None = None
 
 
 def get_vlm_client() -> VLMClient:
-    """获取VLM客户端单例（避免每次调用都新建客户端）。"""
+    """获取VLM客户端单例（避免每次调用都新建客户端）。
+
+    输出预算取 `REPORT_EXTRACTION_MAX_TOKENS`，不是类默认的 2048：报告抽取要输出
+    一页的指标 JSON，2048 会在中途截断。**用推理模型时还要更高**——它们先输出
+    reasoning 再给正文，共用这一个预算（实测 deepseek-v4.1-flash 需要 16384）。
+    """
     global _vlm_client
     if _vlm_client is None:
-        _vlm_client = VLMClient()
+        _vlm_client = VLMClient(max_tokens=get_settings().REPORT_EXTRACTION_MAX_TOKENS)
     return _vlm_client
 
 
