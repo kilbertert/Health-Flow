@@ -132,6 +132,10 @@ class vLLMClient(LLMClient):
             "model": self.model,
             "input": input_items,
             "store": False,
+            # **必须显式带上输出预算。** 不带的话服务端用自己的默认值，本地那个
+            # 更大的 `max_tokens` 只存在于客户端属性里、从未到达服务端——报告抽取
+            # 照样会在 JSON 中途被截断，而错误仍然是「未返回文本」。
+            "max_output_tokens": self.max_tokens,
         }
         if json_output:
             request["text"] = {"format": {"type": "json_object"}}
@@ -301,10 +305,15 @@ _vlm_client: VLMClient | None = None
 
 
 def get_vlm_client() -> VLMClient:
-    """获取VLM客户端单例（避免每次调用都新建客户端）。"""
+    """获取VLM客户端单例（避免每次调用都新建客户端）。
+
+    输出预算取 `REPORT_EXTRACTION_MAX_TOKENS`，不是类默认的 2048：报告抽取要输出
+    一页的指标 JSON，2048 会在中途截断。**用推理模型时还要更高**——它们先输出
+    reasoning 再给正文，共用这一个预算（实测 deepseek-v4.1-flash 需要 16384）。
+    """
     global _vlm_client
     if _vlm_client is None:
-        _vlm_client = VLMClient()
+        _vlm_client = VLMClient(max_tokens=get_settings().REPORT_EXTRACTION_MAX_TOKENS)
     return _vlm_client
 
 

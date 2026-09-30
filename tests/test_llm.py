@@ -116,3 +116,57 @@ def test_chat_with_image_uses_report_parse_timeout_for_chat_api():
         client.chat_with_image([{"role": "user", "content": [{"type": "text", "text": "extract"}]}])
 
     assert openai_factory.call_args.kwargs["timeout"] == 180
+
+
+def test_vlm_singleton_uses_the_report_extraction_budget():
+    """单例的 max_tokens 取配置项，不是类默认的 2048。
+
+    2048 会在报告一页的指标 JSON 中途截断，而失败信息是「VLM 未返回 JSON」——
+    读起来像模型不配合，实际是输出被砍了。这条断言把「预算够不够」钉在配置上。
+    """
+    import app.model.llm as llm_module
+    from app.config import get_settings
+
+    original = llm_module._vlm_client
+    llm_module._vlm_client = None
+    try:
+        assert llm_module.get_vlm_client().max_tokens == get_settings().REPORT_EXTRACTION_MAX_TOKENS
+        assert llm_module.get_vlm_client().max_tokens != 2048
+    finally:
+        llm_module._vlm_client = original
+
+
+def test_responses_api_receives_the_configured_output_budget():
+    """Responses 路径必须把输出预算**发给服务端**。
+
+    这条守的是一次真实的漏发：本地把 `max_tokens` 提到 16384，但 Responses 请求体里
+    没有 `max_output_tokens`，于是服务端用自己的默认值——报告抽取照样在 JSON 中途被
+    截断，而错误信息仍然是「未返回文本」。**本地属性变大 ≠ 服务端放宽。**
+    """
+    from unittest.mock import patch
+
+    client = VLMClient(model="m", api_base="http://x/v1", max_tokens=16000)
+    client.responses_url = "http://x/v1/responses"
+    sent = {}
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "id": "r1",
+                "status": "completed",
+                "output": [{"content": [{"type": "output_text", "text": "{}"}]}],
+            }
+
+    def _capture(url, **kwargs):
+        sent.update(kwargs.get("json") or {})
+        return _Resp()
+
+    with patch("app.model.llm.httpx.post", _capture):
+        client._responses_text([{"role": "user", "content": "x"}])
+
+    assert sent.get("max_output_tokens") == 16000
