@@ -103,9 +103,13 @@ LABELS = (("慢病风险", "血脂异常风险评估"),)
 
 
 def test_labels_gate_returns_empty_when_nothing_to_filter_by():
-    """无标签可查 → 空，且**不退回"全都要"**：那是这道闸门要防的事。"""
-    assert label_pairs_for("COND_DYSLIPIDEMIA") == ()
+    """**没有映射的健康方向** → 空，且**不退回"全都要"**：那是这道闸门要防的事。
+
+    已映射的方向反过来必须有值——否则「映射表接没接上」这件事在测试里看不出来。
+    """
+    assert label_pairs_for("COND_NOT_MAPPED_YET") == ()
     assert filter_by_labels((MallGoodsItem(id="1"),), ()) == ()
+    assert label_pairs_for("COND_DYSLIPIDEMIA") == (("血脂异常风险评估", "血脂异常风险评估"),)
 
 
 def test_labels_gate_is_an_intersection_not_a_guard():
@@ -348,8 +352,8 @@ def test_endpoint_returns_condition_reasons():
     assert body["items"] == []
     assert body["reason"] == "no_label_data"
     fetch.assert_awaited_once()
-    # 无标签也真的调了商城：这是 #174 的验收项，不能只在测试里 mock。
-    assert fetch.await_args.kwargs["labels"] == ()
+    # 真的调了商城，且带上的是**这张表的取值**——不是空、也不是"全都要"。
+    assert fetch.await_args.kwargs["labels"] == (("血脂异常风险评估", "血脂异常风险评估"),)
 
 
 def test_endpoint_reports_no_published_card_without_calling_mall():
