@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     # 缺任一项即视为未配置，读取商品时降级为"暂无推荐"而不是发出无效请求。
     MALL_WEBAPI_BASE_URL: str = ""
     MALL_WEBAPI_GOODS_PATH: str = "/mallapi/webapi/goods/read"
+    # 按 (标签名, 取值) 取货走商城**已有的** C 端接口，它自己做了可售性过滤。
+    # 与只读端点各管一条路径：无标签时用前者，有标签时用这条。
+    MALL_WEBAPI_LABELS_PATH: str = "/mallapi/goodsspu/getGoodsByLabels"
     MALL_WEBAPI_APP_ID: str = ""
     MALL_WEBAPI_APP_SECRET: str = ""
     MALL_WEBAPI_TENANT_ID: str = ""
@@ -127,6 +130,7 @@ class Settings(BaseSettings):
     def mall_ticket_configured(self) -> bool:
         """公钥路径与受众都配齐才算配置。缺一即未配置（服务应拒绝启动）。"""
         return bool(self.MALL_TICKET_PUBLIC_KEY_PATH.strip() and self.MALL_TICKET_AUDIENCE.strip())
+
     def mall_deep_link_configured(self) -> bool:
         """三项齐备才认为深链可用；缺任一项即拒绝构造链接，不发注定被拒的 URL。"""
         return bool(

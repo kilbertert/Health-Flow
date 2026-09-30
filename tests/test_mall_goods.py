@@ -45,6 +45,7 @@ def _settings(**overrides):
     base = {
         "MALL_WEBAPI_BASE_URL": "https://mall.example.test",
         "MALL_WEBAPI_GOODS_PATH": "/mallapi/webapi/goods/read",
+        "MALL_WEBAPI_LABELS_PATH": "/mallapi/goodsspu/getGoodsByLabels",
         "MALL_WEBAPI_APP_ID": "healthflow-genesis-readonly",
         "MALL_WEBAPI_APP_SECRET": "s3cret",
         "MALL_WEBAPI_TENANT_ID": "tenant-under-test",
@@ -76,9 +77,7 @@ def test_signature_uses_uppercase_hex_twice():
 
 def test_signature_skips_empty_values_and_sorts_by_name():
     """空值不参与签名；顺序按原始键名升序（不区分大小写地"看起来"相同也不行）。"""
-    assert sign_payload({"b": "", "a": "1", "sign": "ignored"}, "k") == sign_payload(
-        {"a": "1", "b": None}, "k"
-    )
+    assert sign_payload({"b": "", "a": "1", "sign": "ignored"}, "k") == sign_payload({"a": "1", "b": None}, "k")
 
 
 def test_parse_items_fails_closed_on_unexpected_shape():
@@ -139,6 +138,97 @@ def test_label_field_is_parsed_when_the_endpoint_supplies_it():
 
     assert items[0].labels == frozenset(LABELS)
     assert [item.id for item in filter_by_labels(items, LABELS)] == [items[0].id]
+
+
+def test_null_data_is_an_empty_hit_not_a_format_error():
+    """`data: null` = 调用成功但没命中，不是格式错误。
+
+    按标签取货在没有商品挂该标签时就是这个形状；把它当格式错误会归因成
+    "商城不可达"——运维会去查配置，而真正要做的是让租户上货/挂标签。
+    """
+    assert parse_items({"code": 0, "data": None, "ok": True}) == ()
+
+
+def test_missing_data_key_is_still_a_format_error():
+    """**键缺失**不是空命中。
+
+    区别在于键在不在，不是值是不是 null：`data: null` 是「查到了，没有」，
+    没有 `data` 键是「这个接口不是我以为的那个接口」。后者当空命中，会把一次契约
+    破坏伪装成「这家没上货」。
+    """
+    from app.service.mall_goods import MallGoodsError
+
+    with pytest.raises(MallGoodsError, match="格式无效"):
+        parse_items({"code": 0, "ok": True})
+
+
+def test_first_image_falls_back_to_pic_urls():
+    """两条取货路径的图片字段形状不同，必须归一到同一个展示字段。"""
+    from app.service.mall_goods import first_image
+
+    assert first_image({"image": "a.jpg", "picUrls": ["b.jpg"]}) == "a.jpg"
+    assert first_image({"picUrls": ["b.jpg", "c.jpg"]}) == "b.jpg"
+    assert first_image({"picUrls": []}) is None
+    assert first_image({"image": "   ", "picUrls": None}) is None
+
+
+@pytest.mark.asyncio
+async def test_labelled_fetch_uses_the_label_endpoint_and_sends_every_pair():
+    """有标签 → 走商城的标签查询，把每一对都发出去，且**不在本地再筛一次**。
+
+    本地筛要求每件商品带 `labels` 字段，而商城的列表/批量接口**不返回它**——本地筛
+    会把命中商品全部滤成空，且是静默滤空。命中集合由商城给，那才是权威。
+    """
+    from app.service.mall_goods import fetch_goods
+
+    hit = {"id": "spu-1", "name": "命中商品", "picUrls": ["p.jpg"], "priceDown": 10}
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"code": 0, "data": [hit], "ok": True}
+    with patch("app.service.mall_goods.httpx.AsyncClient.post", return_value=response) as post:
+        result = await fetch_goods(settings=_settings(), labels=LABELS)
+
+    assert result.reason is None
+    assert [item.id for item in result.items] == ["spu-1"]
+    # `picUrls` 归一成展示用的 image
+    assert result.items[0].image == "p.jpg"
+
+    sent = post.call_args
+    assert sent.args[0].endswith("/mallapi/goodsspu/getGoodsByLabels")
+    body = sent.kwargs["json"]
+    assert body["goodsSpuLabels"] == [{"labelName": "慢病风险", "optionName": "血脂异常风险评估"}]
+    # 并集：一件商品命中任一方向即算相关
+    assert body["returnUnion"] is True
+    assert body["sign"].isupper()
+
+
+@pytest.mark.asyncio
+async def test_labelled_fetch_reports_no_label_data_on_empty_hit():
+    """标签查到了但没有商品挂 → no_label_data（不是 mall_unavailable）。"""
+    from app.service.mall_goods import fetch_goods
+
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"code": 0, "data": None, "ok": True}
+    with patch("app.service.mall_goods.httpx.AsyncClient.post", return_value=response):
+        result = await fetch_goods(settings=_settings(), labels=LABELS)
+
+    assert result.items == ()
+    assert result.reason == "no_label_data"
+
+
+@pytest.mark.asyncio
+async def test_labelled_fetch_never_falls_back_to_the_unfiltered_endpoint():
+    """标签端点未配置时**不发请求**，而不是退回只读端点。
+
+    只读端点不认标签，退回它会得到一个「没过滤」的完整商品列表，而按标签取货一旦
+    失败就会把整页商品推给任意健康风险——比直接降级糟得多。
+    """
+    from app.service.mall_goods import fetch_goods
+
+    with patch("app.service.mall_goods.httpx.AsyncClient.post") as post:
+        result = await fetch_goods(settings=_settings(MALL_WEBAPI_LABELS_PATH=""), labels=LABELS)
+
+    assert post.call_count == 0
+    assert result == MallGoodsResult(items=(), reason="mall_unavailable")
 
 
 @pytest.mark.asyncio
@@ -279,9 +369,12 @@ def test_endpoint_reports_no_published_card_without_calling_mall():
 
 
 def test_endpoint_surfaces_mall_outage_as_reason_not_error():
-    with _report_client({"findings": [_finding("COND_DYSLIPIDEMIA")]}) as (client, report_id, cookie), patch(
-        "app.api.report.fetch_goods",
-        return_value=MallGoodsResult(items=(), reason="mall_unavailable"),
+    with (
+        _report_client({"findings": [_finding("COND_DYSLIPIDEMIA")]}) as (client, report_id, cookie),
+        patch(
+            "app.api.report.fetch_goods",
+            return_value=MallGoodsResult(items=(), reason="mall_unavailable"),
+        ),
     ):
         response = client.get(
             f"/api/health/report/{report_id}/recommendations",
@@ -302,9 +395,12 @@ def test_endpoint_serializes_hit_items_without_touching_stock():
         stock=None,
         shop_id="1582258389846802433",
     )
-    with _report_client({"findings": [_finding("COND_DYSLIPIDEMIA")]}) as (client, report_id, cookie), patch(
-        "app.api.report.fetch_goods",
-        return_value=MallGoodsResult(items=(hit,), reason=None),
+    with (
+        _report_client({"findings": [_finding("COND_DYSLIPIDEMIA")]}) as (client, report_id, cookie),
+        patch(
+            "app.api.report.fetch_goods",
+            return_value=MallGoodsResult(items=(hit,), reason=None),
+        ),
     ):
         response = client.get(
             f"/api/health/report/{report_id}/recommendations",
@@ -323,24 +419,27 @@ def test_readiness_reports_unconfigured_mall_in_development(client_unused=None):
 
     from app.main import app
 
-    with patch(
-        "app.main.get_settings",
-        return_value=SimpleNamespace(
-            mall_webapi_configured=False,
-            APP_ENV="development",
-            GENESIS_EVIDENCE_API_URL="http://127.0.0.1:8125/api/evidence/matches",
-            GENESIS_EVIDENCE_API_KEY="x" * 32,
-            VLLM_API_KEY="k",
-            OPENAI_API_KEY="",
-            llm_api_base="http://127.0.0.1:8000/v1",
-            VLLM_MODEL="m",
-            basic_auth_enabled=False,
-            HEALTHFLOW_BASIC_USER="healthflow",
-            HEALTHFLOW_BASIC_PASSWORD="",
-            report_account_required=False,
-            database_url="sqlite://",
+    with (
+        patch(
+            "app.main.get_settings",
+            return_value=SimpleNamespace(
+                mall_webapi_configured=False,
+                APP_ENV="development",
+                GENESIS_EVIDENCE_API_URL="http://127.0.0.1:8125/api/evidence/matches",
+                GENESIS_EVIDENCE_API_KEY="x" * 32,
+                VLLM_API_KEY="k",
+                OPENAI_API_KEY="",
+                llm_api_base="http://127.0.0.1:8000/v1",
+                VLLM_MODEL="m",
+                basic_auth_enabled=False,
+                HEALTHFLOW_BASIC_USER="healthflow",
+                HEALTHFLOW_BASIC_PASSWORD="",
+                report_account_required=False,
+                database_url="sqlite://",
+            ),
         ),
-    ), patch("app.main.get_mysql_client") as mysql:
+        patch("app.main.get_mysql_client") as mysql,
+    ):
         mysql.return_value.engine.connect.return_value.__enter__.return_value.execute.return_value = None
         body = TestClient(app).get("/ready").json()
 
@@ -354,24 +453,27 @@ def test_readiness_flags_missing_mall_config_in_production():
 
     from app.main import app
 
-    with patch(
-        "app.main.get_settings",
-        return_value=SimpleNamespace(
-            mall_webapi_configured=False,
-            APP_ENV="production",
-            GENESIS_EVIDENCE_API_URL="http://127.0.0.1:8125/api/evidence/matches",
-            GENESIS_EVIDENCE_API_KEY="x" * 32,
-            VLLM_API_KEY="k",
-            OPENAI_API_KEY="",
-            llm_api_base="http://127.0.0.1:8000/v1",
-            VLLM_MODEL="m",
-            basic_auth_enabled=False,
-            HEALTHFLOW_BASIC_USER="healthflow",
-            HEALTHFLOW_BASIC_PASSWORD="",
-            report_account_required=False,
-            database_url="sqlite://",
+    with (
+        patch(
+            "app.main.get_settings",
+            return_value=SimpleNamespace(
+                mall_webapi_configured=False,
+                APP_ENV="production",
+                GENESIS_EVIDENCE_API_URL="http://127.0.0.1:8125/api/evidence/matches",
+                GENESIS_EVIDENCE_API_KEY="x" * 32,
+                VLLM_API_KEY="k",
+                OPENAI_API_KEY="",
+                llm_api_base="http://127.0.0.1:8000/v1",
+                VLLM_MODEL="m",
+                basic_auth_enabled=False,
+                HEALTHFLOW_BASIC_USER="healthflow",
+                HEALTHFLOW_BASIC_PASSWORD="",
+                report_account_required=False,
+                database_url="sqlite://",
+            ),
         ),
-    ), patch("app.main.get_mysql_client") as mysql:
+        patch("app.main.get_mysql_client") as mysql,
+    ):
         mysql.return_value.engine.connect.return_value.__enter__.return_value.execute.return_value = None
         body = TestClient(app).get("/ready").json()
 
