@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -23,7 +23,7 @@ from app.config import get_settings
 from app.data.models import Base, MedicalReport, MetricRecord, ReportAuditEvent, TicketSubject
 from app.main import app
 from app.service.report_ownership import subject_storage_id
-from app.service.sessions import SESSION_COOKIE, issue_session
+from app.service.sessions import SESSION_COOKIE, issue_session, session_hash
 
 
 @pytest.fixture
@@ -338,25 +338,20 @@ def test_exchange_failure_does_not_fall_back_to_a_login_page(subject_client, tmp
 # --- review 修正：迁移级缺陷与停用语义 -----------------------------------------
 
 
-def test_create_tables_tolerates_a_sqlite_legacy_schema(tmp_path):
-    """旧库的 `user_sessions.account_id` 带着指向账号表的外键且只有 36 字符。
+def _legacy_sqlite_engine(db_path):
+    """建一个**账号时代形状**的 SQLite 库，并带上生产引擎的 `PRAGMA foreign_keys=ON`。
 
-    #172 之后这一列装的是主体标识（`account:<tenant>:<sub>`，可能 >36），两处都会
-    挡住票据会话——外键让插入失败、长度让它被拒。`create_all` 不改既有表，所以这段
-    升级必须显式执行，且**要在由旧 schema 建起的库上测**，不是只在新建库上测。
+    这个形状不是杜撰的：它逐列复制自服务宿主上 `/opt/health-flow/var/healthflow.db`
+    的 `sqlite_master`（`account_id VARCHAR(36)` + `FOREIGN KEY(account_id)
+    REFERENCES user_accounts(id) ON DELETE CASCADE`）。早先这里只建列不建外键，
+    于是「旧库」与真实旧库差了最关键的那一条，用例因此漏过了票据登录必定失败这件事。
     """
-    from sqlalchemy import create_engine, inspect, text
+    from app.data.mysql_client import _enable_sqlite_foreign_keys
 
-    from app.data.mysql_client import MySQLClient
-
-    db_path = tmp_path / "legacy.db"
     engine = create_engine(f"sqlite:///{db_path}")
+    event.listen(engine, "connect", _enable_sqlite_foreign_keys)
     with engine.begin() as connection:
-        connection.execute(
-            text(
-                "CREATE TABLE user_accounts (id VARCHAR(36) PRIMARY KEY)"
-            )
-        )
+        connection.execute(text("CREATE TABLE user_accounts (id VARCHAR(36) PRIMARY KEY)"))
         connection.execute(
             text(
                 "CREATE TABLE user_sessions ("
@@ -371,17 +366,89 @@ def test_create_tables_tolerates_a_sqlite_legacy_schema(tmp_path):
                 ")"
             )
         )
+        connection.execute(text("CREATE UNIQUE INDEX ix_user_sessions_token_hash ON user_sessions (token_hash)"))
+        connection.execute(text("CREATE INDEX ix_user_sessions_expires_at ON user_sessions (expires_at)"))
+        # 一条历史会话：迁移必须把它带过去，不能只搬空表。
+        connection.execute(text("INSERT INTO user_accounts (id) VALUES ('legacy-account')"))
+        connection.execute(
+            text(
+                "INSERT INTO user_sessions (account_id, token_hash, created_at, expires_at, last_seen_at)"
+                " VALUES ('legacy-account', 'legacy-hash', '2026-09-01 00:00:00',"
+                " '2026-10-01 00:00:00', '2026-09-01 00:00:00')"
+            )
+        )
     engine.dispose()
+
+
+def test_create_tables_upgrades_a_legacy_sqlite_schema(tmp_path):
+    """旧库的 `user_sessions.account_id` 带着指向账号表的外键且只有 36 字符。
+
+    #172 之后这一列装的是主体标识（`account:<tenant>:<sub>`，可能 >36），两处都会
+    挡住票据会话——外键让插入失败、长度让它被拒。`create_all` 不改既有表，所以这段
+    升级必须显式执行，且**要在由旧 schema 建起的库上测**。
+
+    SQLite 也在升级范围内：既有部署用的就是那种库，「SQLite 上没有外键」这个前提
+    只对 `create_all` 新建的库成立，对线上那份不成立。
+    """
+    from sqlalchemy import inspect
+
+    from app.data.mysql_client import MySQLClient
+
+    db_path = tmp_path / "legacy.db"
+    _legacy_sqlite_engine(db_path)
 
     client = MySQLClient.__new__(MySQLClient)
     client.engine = create_engine(f"sqlite:///{db_path}")
     client.create_tables()
 
     with client.engine.begin() as connection:
-        columns = {str(column["name"]): column for column in inspect(connection).get_columns("user_sessions")}
-    # SQLite 不支持改列，这段升级只对 MySQL（生产）生效；开发库上 `create_all`
-    # 建出来的表本来就没有外键，无需升级。这里断言的是「不会因方言不支持而炸」。
-    assert columns["account_id"]["type"].length == 36
+        inspector = inspect(connection)
+        columns = {str(column["name"]): column for column in inspector.get_columns("user_sessions")}
+        foreign_keys = inspector.get_foreign_keys("user_sessions")
+        indexes = {index["name"] for index in inspector.get_indexes("user_sessions")}
+        rows = connection.execute(text("SELECT account_id, token_hash FROM user_sessions")).fetchall()
+    assert columns["account_id"]["type"].length == 128
+    assert foreign_keys == []
+    # 重建表时不重建索引就会静默丢掉它们——唯一索引一丢，`token_hash` 的唯一性
+    # 就没人守着，两个会话可以共用同一个 token 哈希。
+    assert {"ix_user_sessions_token_hash", "ix_user_sessions_expires_at"} <= indexes
+    assert rows == [("legacy-account", "legacy-hash")]
+    client.engine.dispose()
+
+
+def test_upgraded_legacy_sqlite_database_accepts_a_ticket_session(tmp_path):
+    """**升级之后，票据兑换必须真的走得通。**
+
+    上一条只断言 schema 变了；这一条断言那个变化**解决了它要解决的问题**。分开写
+    是因为一个「重建了表但没去掉外键」的实现能让上一条全绿——而线上需要的恰恰是
+    这一条红不红。
+
+    用真实引擎（带 `PRAGMA foreign_keys=ON`）插一条主体会话，复现票据兑换最后一步。
+    """
+    from app.data.models import UserSession
+    from app.data.mysql_client import MySQLClient, _enable_sqlite_foreign_keys
+    from app.service.report_ownership import subject_storage_id
+    from app.service.sessions import issue_session
+
+    db_path = tmp_path / "legacy.db"
+    _legacy_sqlite_engine(db_path)
+
+    client = MySQLClient.__new__(MySQLClient)
+    client.engine = create_engine(f"sqlite:///{db_path}")
+    # 生产引擎就是这么建的（`MySQLClient.__init__` 对 SQLite URL 挂这个钩子）。
+    # **这条监听器是用例的关键**：不挂它，外键不生效，一个没去掉外键的实现也会绿。
+    event.listen(client.engine, "connect", _enable_sqlite_foreign_keys)
+    client.create_tables()
+    SessionLocal = sessionmaker(bind=client.engine)
+
+    storage_id = subject_storage_id("2014583528221839360", "mall-user-1")
+    token, session_row = issue_session(storage_id)
+    with SessionLocal() as session:
+        session.add(session_row)
+        session.commit()
+    with SessionLocal() as session:
+        saved = session.query(UserSession).filter(UserSession.token_hash == session_hash(token)).one()
+        assert saved.account_id == storage_id
     client.engine.dispose()
 
 
