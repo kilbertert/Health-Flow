@@ -93,12 +93,13 @@ def sign_payload(payload: dict[str, object], key: str) -> str:
 def parse_items(payload: object) -> tuple[MallGoodsItem, ...]:
     """把商城响应体解析成展示条目。结构不符即失败，不猜。
 
-    `data` 是 `null` 表示商城**调用成功但没有命中**，不是格式错误——按标签取货
-    在没有商品挂该标签时就是这个形状，把它当格式错误会归因成「商城不可达」。
+    **只有 `data` 这个键存在且为 `null` 才算空命中。** 键缺失或整个响应不是对象，
+    都是「读不懂的响应」——把它当空命中会把一次契约破坏伪装成「这家没上货」，
+    运维会去催租户上货，而真正坏的是接口。区分点在于**键在不在**，不是值是不是 null。
     """
-    if not isinstance(payload, dict):
+    if not isinstance(payload, dict) or "data" not in payload:
         raise MallGoodsError("商城返回格式无效")
-    records = payload.get("data")
+    records = payload["data"]
     if records is None:
         return ()
     if not isinstance(records, list):
@@ -196,19 +197,16 @@ def filter_by_labels(
     return tuple(item for item in items if item.labels & wanted)
 
 
-def goods_path_for(settings: Settings) -> str:
-    """按标签取货走**商城已有的** C 端接口。
+def _labels_request(settings: Settings, wanted: tuple[tuple[str, str], ...]) -> tuple[str, dict[str, object]]:
+    """按标签取货的 (路径, 请求体)。
 
-    `/goodsspu/getGoodsByLabels` 就按 (标签名, 取值) 取货，且它自己做了可售性过滤
-    （审核通过 + 已上架）。所以"按标签取货"**不需要商城侧任何改动**，也不需要我们
-    把整个商品列表拉回来再在本地过滤——服务端的现成接口就能做。
-
-    无标签时走 #167 那条已交付、已验收的只读端点，行为一字不变。
+    路径来自 `MALL_WEBAPI_LABELS_PATH`，**没有兜底**：这条请求体只有标签接口能读，
+    发给只读端点会得到一个「没有按标签过滤」的完整商品列表，而那会被当成命中集合
+    返回给患者——比报错更糟。缺配置时调用方直接降级，不发这个请求。
     """
-    return settings.MALL_WEBAPI_LABELS_PATH.strip() or settings.MALL_WEBAPI_GOODS_PATH
-
-
-def _labels_body(settings: Settings, wanted: tuple[tuple[str, str], ...]) -> dict[str, object]:
+    path = settings.MALL_WEBAPI_LABELS_PATH.strip()
+    if not path:
+        return "", {}
     body: dict[str, object] = {
         "appId": settings.MALL_WEBAPI_APP_ID.strip(),
         "timeStamp": int(time.time() * 1000),
@@ -218,10 +216,11 @@ def _labels_body(settings: Settings, wanted: tuple[tuple[str, str], ...]) -> dic
         "returnUnion": True,
     }
     body["sign"] = sign_payload(body, settings.MALL_WEBAPI_APP_SECRET.strip())
-    return body
+    return path, body
 
 
-def _goods_body(settings: Settings) -> dict[str, object]:
+def _goods_request(settings: Settings) -> tuple[str, dict[str, object]]:
+    """无标签时的 (路径, 请求体)：#167 那条只读端点，行为一字不变。"""
     body: dict[str, object] = {
         "appId": settings.MALL_WEBAPI_APP_ID.strip(),
         "timeStamp": int(time.time() * 1000),
@@ -229,7 +228,7 @@ def _goods_body(settings: Settings) -> dict[str, object]:
         "size": settings.MALL_WEBAPI_PAGE_SIZE,
     }
     body["sign"] = sign_payload(body, settings.MALL_WEBAPI_APP_SECRET.strip())
-    return body
+    return settings.MALL_WEBAPI_GOODS_PATH, body
 
 
 async def fetch_goods(
@@ -252,9 +251,17 @@ async def fetch_goods(
         return MallGoodsResult(items=(), reason="mall_unavailable")
 
     wanted = tuple(labels or EMPTY_LABELS)
-    body = _labels_body(settings, wanted) if wanted else _goods_body(settings)
+    if wanted:
+        path, body = _labels_request(settings, wanted)
+        if not path:
+            # 标签端点未配置：**不发**。发给只读端点会得到「没按标签过滤」的完整商品
+            # 列表，而那会被当成命中集合——静默地把不相关商品推给患者。
+            logger.warning("按标签取货未配置（MALL_WEBAPI_LABELS_PATH 为空），降级为无推荐")
+            return MallGoodsResult(items=(), reason="mall_unavailable")
+    else:
+        path, body = _goods_request(settings)
 
-    url = settings.MALL_WEBAPI_BASE_URL.strip().rstrip("/") + goods_path_for(settings)
+    url = settings.MALL_WEBAPI_BASE_URL.strip().rstrip("/") + path
     headers = {
         "Content-Type": "application/json",
         "tenant-id": settings.MALL_WEBAPI_TENANT_ID.strip(),

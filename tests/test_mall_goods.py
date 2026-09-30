@@ -149,6 +149,19 @@ def test_null_data_is_an_empty_hit_not_a_format_error():
     assert parse_items({"code": 0, "data": None, "ok": True}) == ()
 
 
+def test_missing_data_key_is_still_a_format_error():
+    """**键缺失**不是空命中。
+
+    区别在于键在不在，不是值是不是 null：`data: null` 是「查到了，没有」，
+    没有 `data` 键是「这个接口不是我以为的那个接口」。后者当空命中，会把一次契约
+    破坏伪装成「这家没上货」。
+    """
+    from app.service.mall_goods import MallGoodsError
+
+    with pytest.raises(MallGoodsError, match="格式无效"):
+        parse_items({"code": 0, "ok": True})
+
+
 def test_first_image_falls_back_to_pic_urls():
     """两条取货路径的图片字段形状不同，必须归一到同一个展示字段。"""
     from app.service.mall_goods import first_image
@@ -200,6 +213,22 @@ async def test_labelled_fetch_reports_no_label_data_on_empty_hit():
 
     assert result.items == ()
     assert result.reason == "no_label_data"
+
+
+@pytest.mark.asyncio
+async def test_labelled_fetch_never_falls_back_to_the_unfiltered_endpoint():
+    """标签端点未配置时**不发请求**，而不是退回只读端点。
+
+    只读端点不认标签，退回它会得到一个「没过滤」的完整商品列表，而按标签取货一旦
+    失败就会把整页商品推给任意健康风险——比直接降级糟得多。
+    """
+    from app.service.mall_goods import fetch_goods
+
+    with patch("app.service.mall_goods.httpx.AsyncClient.post") as post:
+        result = await fetch_goods(settings=_settings(MALL_WEBAPI_LABELS_PATH=""), labels=LABELS)
+
+    assert post.call_count == 0
+    assert result == MallGoodsResult(items=(), reason="mall_unavailable")
 
 
 @pytest.mark.asyncio
