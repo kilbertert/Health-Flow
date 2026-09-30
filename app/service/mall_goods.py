@@ -91,10 +91,16 @@ def sign_payload(payload: dict[str, object], key: str) -> str:
 
 
 def parse_items(payload: object) -> tuple[MallGoodsItem, ...]:
-    """把商城响应体解析成展示条目。结构不符即失败，不猜。"""
+    """把商城响应体解析成展示条目。结构不符即失败，不猜。
+
+    `data` 是 `null` 表示商城**调用成功但没有命中**，不是格式错误——按标签取货
+    在没有商品挂该标签时就是这个形状，把它当格式错误会归因成「商城不可达」。
+    """
     if not isinstance(payload, dict):
         raise MallGoodsError("商城返回格式无效")
     records = payload.get("data")
+    if records is None:
+        return ()
     if not isinstance(records, list):
         raise MallGoodsError("商城返回格式无效")
     items: list[MallGoodsItem] = []
@@ -106,7 +112,7 @@ def parse_items(payload: object) -> tuple[MallGoodsItem, ...]:
                 MallGoodsItem(
                     id=str(record.get("id", "")),
                     name=str(record.get("name") or ""),
-                    image=record.get("image"),
+                    image=first_image(record),
                     price_down=record.get("priceDown"),
                     price_up=record.get("priceUp"),
                     stock=record.get("stock"),
@@ -117,6 +123,23 @@ def parse_items(payload: object) -> tuple[MallGoodsItem, ...]:
         except ValidationError as exc:
             raise MallGoodsError("商城返回格式无效") from exc
     return tuple(items)
+
+
+def first_image(record: dict[str, object]) -> str | None:
+    """商品主图。两个来源、两种形状，按优先级取第一个非空值。
+
+    只读端点返回拼好的 `image` 字符串；按标签取货返回的是 `picUrls` 数组。
+    两个来源必须得出同一个字段，否则同一件商品在两条路径上会有两种渲染结果。
+    """
+    image = record.get("image")
+    if isinstance(image, str) and image.strip():
+        return image
+    pic_urls = record.get("picUrls")
+    if isinstance(pic_urls, list):
+        for candidate in pic_urls:
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate
+    return None
 
 
 def parse_labels(record: dict[str, object]) -> frozenset[tuple[str, str]]:
@@ -173,30 +196,65 @@ def filter_by_labels(
     return tuple(item for item in items if item.labels & wanted)
 
 
+def goods_path_for(settings: Settings) -> str:
+    """按标签取货走**商城已有的** C 端接口。
+
+    `/goodsspu/getGoodsByLabels` 就按 (标签名, 取值) 取货，且它自己做了可售性过滤
+    （审核通过 + 已上架）。所以"按标签取货"**不需要商城侧任何改动**，也不需要我们
+    把整个商品列表拉回来再在本地过滤——服务端的现成接口就能做。
+
+    无标签时走 #167 那条已交付、已验收的只读端点，行为一字不变。
+    """
+    return settings.MALL_WEBAPI_LABELS_PATH.strip() or settings.MALL_WEBAPI_GOODS_PATH
+
+
+def _labels_body(settings: Settings, wanted: tuple[tuple[str, str], ...]) -> dict[str, object]:
+    body: dict[str, object] = {
+        "appId": settings.MALL_WEBAPI_APP_ID.strip(),
+        "timeStamp": int(time.time() * 1000),
+        "goodsSpuLabels": [{"labelName": name, "optionName": value} for name, value in wanted],
+        # 并集：一件商品命中任一健康方向即算相关。交集会把「同时挂多个方向」的商品
+        # 排除掉，那不是我们要的语义。
+        "returnUnion": True,
+    }
+    body["sign"] = sign_payload(body, settings.MALL_WEBAPI_APP_SECRET.strip())
+    return body
+
+
+def _goods_body(settings: Settings) -> dict[str, object]:
+    body: dict[str, object] = {
+        "appId": settings.MALL_WEBAPI_APP_ID.strip(),
+        "timeStamp": int(time.time() * 1000),
+        "current": 1,
+        "size": settings.MALL_WEBAPI_PAGE_SIZE,
+    }
+    body["sign"] = sign_payload(body, settings.MALL_WEBAPI_APP_SECRET.strip())
+    return body
+
+
 async def fetch_goods(
     *,
     settings: Settings | None = None,
     labels: tuple[tuple[str, str], ...] | None = None,
 ) -> MallGoodsResult:
-    """取该租户可售商品并按标签过滤。始终调用商城，失败与为空分别归因。
+    """取该租户可售商品，有标签判据时按标签取货。始终调用商城，失败与为空分别归因。
 
     未配置商城凭据时**不发请求**：空密钥签出来的请求必然被拒，发出去只是把一次
     配置缺失伪装成一次网络失败。
+
+    两条路径的取舍：给了标签就走商城的标签查询（命中集合由**商城**给出，即权威），
+    没给标签仍走 #167 的只读端点并在本地按 `item.labels` 过滤（历史上就是这么验收的，
+    不改它）。标签查询**只认标签、不认分页**，返回的是命中集合本身，没有截断问题。
     """
     settings = settings or get_settings()
     if not settings.mall_webapi_configured:
         logger.warning("商城只读端点未配置（缺少 base url / app id / secret / tenant id），降级为无推荐")
         return MallGoodsResult(items=(), reason="mall_unavailable")
 
-    request_body: dict[str, object] = {
-        "appId": settings.MALL_WEBAPI_APP_ID.strip(),
-        "timeStamp": int(time.time() * 1000),
-        "current": 1,
-        "size": settings.MALL_WEBAPI_PAGE_SIZE,
-    }
-    request_body["sign"] = sign_payload(request_body, settings.MALL_WEBAPI_APP_SECRET.strip())
+    wanted = tuple(labels or EMPTY_LABELS)
+    body = _labels_body(settings, wanted) if wanted else _goods_body(settings)
 
-    url = settings.MALL_WEBAPI_BASE_URL.strip().rstrip("/") + settings.MALL_WEBAPI_GOODS_PATH
+    url = settings.MALL_WEBAPI_BASE_URL.strip().rstrip("/") + goods_path_for(settings)
     headers = {
         "Content-Type": "application/json",
         "tenant-id": settings.MALL_WEBAPI_TENANT_ID.strip(),
@@ -204,7 +262,7 @@ async def fetch_goods(
     }
     try:
         async with httpx.AsyncClient(timeout=settings.MALL_WEBAPI_TIMEOUT_SECONDS) as client:
-            response = await client.post(url, json=request_body, headers=headers)
+            response = await client.post(url, json=body, headers=headers)
     except httpx.HTTPError as exc:
         logger.warning("商城只读端点不可达：%s", type(exc).__name__)
         return MallGoodsResult(items=(), reason="mall_unavailable")
@@ -233,10 +291,15 @@ async def fetch_goods(
         logger.warning("商城只读端点返回结构无法解析")
         return MallGoodsResult(items=(), reason="mall_unavailable")
 
+    # **带标签查询时不再本地筛。** 命中集合由商城的标签查询给出，那是权威；本地那份
+    # 判据要求每件商品都带 `labels` 字段，而事实是**商品的列表/批量接口不带它**
+    # （只有单品详情带），本地筛会把命中商品全部滤成空——而且是静默滤空。
+    # 无标签路径保持既有语义：本地按商品自带的标签交集过滤。
+    filtered = items if wanted else filter_by_labels(items, wanted)
+
     # 调用成功之后的每一种"空"都是 no_label_data：可能是没有标签可查（映射还没建），
-    # 也可能是标签查到了但商品没挂——两者的修复动作都在商城侧，对患者是同一种沉默。
-    # 真正要区分的是**没调到**商城（mall_unavailable），那在 `fetch_goods` 里。
-    filtered = filter_by_labels(items, labels or EMPTY_LABELS)
+    # 也可能是标签查到了但商品没挂（含挂着但已下架）——两者的修复动作都在商城侧，
+    # 对患者是同一种沉默。真正要区分的是**没调到**商城（mall_unavailable）。
     if not filtered:
         return MallGoodsResult(items=(), reason="no_label_data")
     return MallGoodsResult(items=filtered, reason=None)
@@ -261,9 +324,12 @@ def serialized(items: tuple[MallGoodsItem, ...]) -> list[dict[str, object]]:
 def _demo() -> None:
     """自检：签名大小写与过滤为空的行为。`python -m app.service.mall_goods`。"""
     # 大小写是本模块最容易写错的一处：内层小写会被商城判"签名错误"。
-    assert sign_payload({"appId": "a", "timeStamp": 1}, "k") == hashlib.md5(
-        (hashlib.md5(b"appId=a&timeStamp=1&appSecret=k").hexdigest().upper() + "k").encode()
-    ).hexdigest().upper()
+    assert (
+        sign_payload({"appId": "a", "timeStamp": 1}, "k")
+        == hashlib.md5((hashlib.md5(b"appId=a&timeStamp=1&appSecret=k").hexdigest().upper() + "k").encode())
+        .hexdigest()
+        .upper()
+    )
     # 没有标签判据 → 过滤恒为空，且这个空属于"调用成功但没货"，不是"商城不可达"。
     assert filter_by_labels((MallGoodsItem(id="1"),), ()) == ()
     assert MallGoodsResult(items=(), reason="no_label_data").reason == "no_label_data"
