@@ -24,6 +24,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from app.config import Settings, get_settings
+from app.service.condition_tags import label_pair_for
 
 logger = logging.getLogger(__name__)
 
@@ -166,15 +167,13 @@ def parse_labels(record: dict[str, object]) -> frozenset[tuple[str, str]]:
 def label_pairs_for(condition_code: str) -> tuple[tuple[str, str], ...]:
     """`condition_code` → 商城（标签名，标签值）对。
 
-    这是**显式的接缝**：商城侧今天只返回该租户全部可售商品，没有标签维度
-    （`WebApiReadGoodsRequest` 只有 shopId/current/size），且金丝雀租户没有任何
-    商品标签数据，所以这里如实返回空元组。空 → 过滤后为空 → 原因 `no_label_data`。
-
-    标签数据与端点入参到位后，这里接**语义映射**的取值即可。那份映射是
-    genesis-evidence 的交付物（`docs/condition-to-mall-tag.md`，交付给商城、由商城把
-    标签打到商品上），**不在本仓**；本仓只消费它的结果，不复制一份——复制就会漂移。
+    表在 `app/service/condition_tags.py`（真值在 genesis-evidence 的
+    `docs/condition-to-mall-tag.md`，那边有契约测试拦住漂移）。本函数只做
+    「查不到就是空」这一步：**没有映射的健康方向不去问商城**，降级为 `no_label_data`，
+    而不是退化成「把该租户全部商品推给这个风险」。
     """
-    return EMPTY_LABELS
+    pair = label_pair_for(condition_code)
+    return (pair,) if pair else EMPTY_LABELS
 
 
 def filter_by_labels(
