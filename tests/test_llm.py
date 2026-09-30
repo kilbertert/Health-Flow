@@ -134,3 +134,39 @@ def test_vlm_singleton_uses_the_report_extraction_budget():
         assert llm_module.get_vlm_client().max_tokens != 2048
     finally:
         llm_module._vlm_client = original
+
+
+def test_responses_api_receives_the_configured_output_budget():
+    """Responses 路径必须把输出预算**发给服务端**。
+
+    这条守的是一次真实的漏发：本地把 `max_tokens` 提到 16384，但 Responses 请求体里
+    没有 `max_output_tokens`，于是服务端用自己的默认值——报告抽取照样在 JSON 中途被
+    截断，而错误信息仍然是「未返回文本」。**本地属性变大 ≠ 服务端放宽。**
+    """
+    from unittest.mock import patch
+
+    client = VLMClient(model="m", api_base="http://x/v1", max_tokens=16000)
+    client.responses_url = "http://x/v1/responses"
+    sent = {}
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "id": "r1",
+                "status": "completed",
+                "output": [{"content": [{"type": "output_text", "text": "{}"}]}],
+            }
+
+    def _capture(url, **kwargs):
+        sent.update(kwargs.get("json") or {})
+        return _Resp()
+
+    with patch("app.model.llm.httpx.post", _capture):
+        client._responses_text([{"role": "user", "content": "x"}])
+
+    assert sent.get("max_output_tokens") == 16000

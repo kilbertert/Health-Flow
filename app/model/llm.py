@@ -132,6 +132,10 @@ class vLLMClient(LLMClient):
             "model": self.model,
             "input": input_items,
             "store": False,
+            # **必须显式带上输出预算。** 不带的话服务端用自己的默认值，本地那个
+            # 更大的 `max_tokens` 只存在于客户端属性里、从未到达服务端——报告抽取
+            # 照样会在 JSON 中途被截断，而错误仍然是「未返回文本」。
+            "max_output_tokens": self.max_tokens,
         }
         if json_output:
             request["text"] = {"format": {"type": "json_object"}}
