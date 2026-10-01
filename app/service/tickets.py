@@ -135,7 +135,19 @@ def verify_ticket(
     if not isinstance(payload, dict):
         raise TicketError("票据载荷不是对象")
 
-    if payload.get("aud") != audience:
+    # RFC 7519 §4.1.3：`aud` 可以是**单个字符串**，也可以是**字符串数组**。
+    # 商城侧（hutool 的 JWT）把 `.setAudience(...)` 的每个参数都塞进数组，
+    # 于是真实票据长这样：`"aud": ["health-flow"]`。只比字符串会让每一张真票
+    # 都判成「受众不符」——而这正是 2026-10-01 端到端验收时撞到的。
+    # 判定语义不变：**必须正好包含本服务的受众**，不是「是合法 aud 就行」。
+    raw_aud = payload.get("aud")
+    if isinstance(raw_aud, str):
+        aud_values = [raw_aud]
+    elif isinstance(raw_aud, list) and all(isinstance(x, str) for x in raw_aud):
+        aud_values = raw_aud
+    else:
+        raise TicketError("票据受众字段格式不合法")
+    if audience not in aud_values:
         raise TicketError("票据受众与本服务不符")
 
     for name in ("sub", "tenant_id", "jti", "exp", "iat"):
@@ -163,7 +175,11 @@ def verify_ticket(
         jti=str(payload["jti"]),
         subject=str(payload["sub"]),
         tenant_id=str(payload["tenant_id"]),
-        audience=str(payload["aud"]),
+        # **回填的是已核对的配置值，不是票面原值。** 票面的 `aud` 可能是字符串，
+        # 也可能是数组（见上），`str()` 一个数组会得到 `"['health-flow']"` 这种
+        # Python 字面量——那不是受众标识，任何拿它去比对象的东西都会失败。
+        # 走到这里已经确认 `audience in aud_values`，所以"本服务核对的受众"就是它。
+        audience=audience,
         issued_at=issued_at,
         expires_at=expires_at,
     )
