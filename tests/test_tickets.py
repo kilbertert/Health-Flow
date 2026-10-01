@@ -110,7 +110,13 @@ def test_audience_as_single_element_array_is_accepted():
     private_key, public_key = _keypair()
     token = _make_ticket(private_key, extra_claims={"aud": [AUDIENCE]})
 
-    assert verify_ticket(token, public_key=public_key, audience=AUDIENCE).subject == "mall-user-1"
+    claims = verify_ticket(token, public_key=public_key, audience=AUDIENCE)
+
+    assert claims.subject == "mall-user-1"
+    # **回填必须是受众标识本身**，不是 `str(["health-flow"])` 那种 Python 字面量——
+    # 后者拿去做任何比较都会失败。
+    assert claims.audience == AUDIENCE
+    assert claims.audience == "health-flow"
 
 
 def test_audience_array_not_containing_us_is_rejected():

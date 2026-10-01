@@ -175,7 +175,11 @@ def verify_ticket(
         jti=str(payload["jti"]),
         subject=str(payload["sub"]),
         tenant_id=str(payload["tenant_id"]),
-        audience=str(payload["aud"]),
+        # **回填的是已核对的配置值，不是票面原值。** 票面的 `aud` 可能是字符串，
+        # 也可能是数组（见上），`str()` 一个数组会得到 `"['health-flow']"` 这种
+        # Python 字面量——那不是受众标识，任何拿它去比对象的东西都会失败。
+        # 走到这里已经确认 `audience in aud_values`，所以"本服务核对的受众"就是它。
+        audience=audience,
         issued_at=issued_at,
         expires_at=expires_at,
     )
