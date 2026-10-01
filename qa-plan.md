@@ -108,7 +108,10 @@
 **旧阻断项的现状（2026-10-01 实测）**：
 
 1. ~~商城侧尚未建立任何标签~~ —— **已解除**。目标租户已建标签，商品已挂上。
-2. ~~映射取值仍不完整~~ —— **已解除**：`docs/condition-to-mall-tag.md` 12 行均已填值。
+2. ~~映射取值仍不完整~~ —— **已解除**：12 条映射均已填值。真值文档
+   （`docs/condition-to-mall-tag.md`）在 **genesis-evidence** 仓库，**不在本仓**；
+   本仓的取值副本在 `app/service/condition_tags.py` 的 `CONDITION_TAGS`，
+   由 `tests/test_condition_tags.py` 逐条比对两仓、拦住漂移。在**本仓**核对取值看后者即可。
 3. ~~商城端点没有标签入参~~ —— **对这条用例不适用**。该条说的是 `POST /webapi/goods/read`
    （#186 仍未解决），但**本仓取货走的不是它**，而是 `MALL_WEBAPI_LABELS_PATH`
    （默认 `/mallapi/goodsspu/getGoodsByLabels`）。**实测该路径在目标租户可用**：
