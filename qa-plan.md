@@ -113,9 +113,11 @@
    本仓的取值副本在 `app/service/condition_tags.py` 的 `CONDITION_TAGS`。
    在**本仓**核对取值看后者即可。
 
-   ⚠️ **漂移检查有前提**：`tests/test_condition_tags.py` 在 genesis 检出**不在同一工作区**
-   时**整组跳过**（单仓检出、CI 都是这种情况），因此**它不保证每次都核对真值**。
-   需要真值比对时，要在两仓同处一个工作区的环境里跑；否则以真值文档为准手工核对。
+   ⚠️ **漂移检查有前提**：`tests/test_condition_tags.py` 读的是**写死的绝对路径**
+   `/home/claude/Projects/genesis-evidence/docs/condition-to-mall-tag.md`（`GENESIS_DOC`）。
+   该文件不在那个确切位置时，**整组检查跳过**（单仓检出、CI、以及 genesis 检出在别处
+   的情况都是如此），因此**它不保证每次都核对真值**。要让这道检查真正跑起来，
+   须在该绝对路径上存在 genesis 检出；否则以真值文档为准**手工核对**。
 3. ~~商城端点没有标签入参~~ —— **对这条用例不适用**。该条说的是 `POST /webapi/goods/read`
    （#186 仍未解决），但**本仓取货走的不是它**，而是 `MALL_WEBAPI_LABELS_PATH`
    （默认 `/mallapi/goodsspu/getGoodsByLabels`）。**实测该路径在目标租户可用**：
