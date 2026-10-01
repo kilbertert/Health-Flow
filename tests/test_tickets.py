@@ -100,6 +100,37 @@ def test_valid_ticket_yields_claims():
     assert claims.tenant_id == TENANT
 
 
+def test_audience_as_single_element_array_is_accepted():
+    """商城侧签出的 `aud` 是数组（hutool 的 setAudience 把每个参数都放进数组）。
+
+    RFC 7519 §4.1.3 明确允许 `aud` 是字符串或字符串数组，两种都要认；
+    这条是 2026-10-01 端到端验收撞到的那次：真实票里是 `["health-flow"]`，
+    只比字符串会把每一张真票都判成"受众不符"。
+    """
+    private_key, public_key = _keypair()
+    token = _make_ticket(private_key, extra_claims={"aud": [AUDIENCE]})
+
+    assert verify_ticket(token, public_key=public_key, audience=AUDIENCE).subject == "mall-user-1"
+
+
+def test_audience_array_not_containing_us_is_rejected():
+    """数组形式同样要"正好包含本服务"，不是"只要有 aud 就放行"。"""
+    private_key, public_key = _keypair()
+    token = _make_ticket(private_key, extra_claims={"aud": ["some-other-service", "another"]})
+
+    with pytest.raises(TicketError, match="受众"):
+        verify_ticket(token, public_key=public_key, audience=AUDIENCE)
+
+
+def test_audience_of_wrong_type_is_rejected():
+    """既不是字符串也不是字符串数组的 `aud` 一律拒，不做类型强转。"""
+    private_key, public_key = _keypair()
+    token = _make_ticket(private_key, extra_claims={"aud": [123]})
+
+    with pytest.raises(TicketError, match="格式"):
+        verify_ticket(token, public_key=public_key, audience=AUDIENCE)
+
+
 def test_audience_mismatch_is_rejected():
     """`aud` 与**一个明确的配置值**比对——不是「合法 aud 即可」。"""
     private_key, public_key = _keypair()
