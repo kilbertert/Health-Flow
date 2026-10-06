@@ -33,13 +33,42 @@
 
 ### 2. 落盘内容与构建输出一致（不是「文件在」，是「是这一版」）
 
+**全部 16 个文件逐条比对**，本机 `dist/` 与主机 `/opt/health-flow/frontend` **完全一致**：
+
 ```
-index.html         4a0e25e8a81c01844b8e5f11f265f261429dd3d9e74c79e67e6e9de695b419af
-assets/index-C1Jj_aLt.js
-                   3283d82045ecde1d41fea2aab24b04b63a5f963085df8785016c33ac6eb83635
+5ef6a4797dea9ae72f9b0eb030acd79f8f80c25169ffb2c96cf0215cf6379346  assets/antd-B1Ls2J-n.js
+3283d82045ecde1d41fea2aab24b04b63a5f963085df8785016c33ac6eb83635  assets/index-C1Jj_aLt.js
+450afbbb767f2864c4000618e1e280ac1bf0202f240181c17c8cab1778b9a362  assets/index-TRP4qhw0.css
+ef4052ae9434f7e24d0022ad1ddc3190194bfade5bbbeb1e92dce0dd80ad6203  assets/react-BDF8K8oT.js
+351403b2978b8494eddfef83844732286c21693b72917251a75e5f1ff64a6b07  hst-club-logo.png
+4a0e25e8a81c01844b8e5f11f265f261429dd3d9e74c79e67e6e9de695b419af  index.html
+911dc691ed0ffdc6ebb6e230dfffbd313370d328a013440a8440aeb273677d00  products/active-folate.png
+f63f9c7d0b0eb5aaf1638fd81632120d823afd131417600d57fc914bd49fc964  products/calcium-citrate.png
+b0780669af447b4a60d0634de6b9835db7d5719a68fa275422093d1095dce47c  products/cardiotonic-element.png
+027aa29056c14a1ea17751d9e0e5f4edd24f37d93345234bf1d94e50c7cb4877  products/joyees-fruit-vegetable-fiber.png
+5862326087c5d8972ced7619683ffce2f63d2e71967a162191b34a301a1a0cd2  products/milk-thistle-alpha-lipoic.png
+0676f4edcac250b00da9ebd98491f0fd3cbbd19aec4e2261488b7eee3a1b80b2  products/quercetin.png
+876cb685093c6d2d3af9266923f3fd46bfecb887cbbc0ffab1e6d07bf5474ed6  products/super-bc.png
+3f86551399480594d644908a294709e44be69c921e0f4a3d079c2e24cbbe480a  products/vitamin-d3.png
+2057bcf025a58305a4bdee2845769c3756b4c74fc1d1cfbeaa8d6d9f64a39bc8  products/whole-bone-nutrition-meal.png
+e0f9a133822f34bdc03e0350133674f4ea9dba88ed2c7c4ab813b7f6bc893160  products/zhizhen-plant-sterol.png
 ```
 
-两个哈希与本机 `dist/` 同名文件**逐字节相同**。
+**这一条是实测的对照，不是抽查**：重新构建后，把本机 `dist/` 与主机
+`/opt/health-flow/frontend` 各自的**全量** `sha256sum` 清单排序后 `diff`，结果为空
+（16/16 逐字节相同）。命令：
+
+```bash
+# 本机
+cd frontend && rm -rf dist && npm run build
+find dist -type f | sed 's|^dist/||' | sort | xargs sha256sum > /tmp/local.txt
+
+# 主机
+dev-host exec 36 --allow-service-exec -- "sh -c 'cd /opt/health-flow/frontend && \
+  find . -type f | sed \"s|^\\./||\" | sort | xargs sha256sum'" > /tmp/host.txt
+
+diff <(sort /tmp/local.txt) <(sort /tmp/host.txt)   # 期望无输出
+```
 
 ### 3. 线上入口实际提供的就是这一版
 
