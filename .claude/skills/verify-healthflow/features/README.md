@@ -12,27 +12,40 @@ entry point is incomplete when this index lists others.**
 there — every example below must traverse first. These are the real paths, taken from
 the specs themselves, not inferred:
 
+**每条路径都从首页独立开始。** 不要把它们串成一个连续序列——「体检报告解读」这个
+导航按钮只在**首页**存在，进了确认流程之后再点它是找不到的。在每个用例里重新
+`loginWithSeed` 即可回到首页。
+
 ```js
-// 账户会话
-await loginWithSeed(page, seeded);                    // -> 首页「呵护您的健康」
-
-// 报告历史 / 报告详情 / 指标确认 都挂在个人中心下
+// A. 报告历史 / 报告详情 / 指标确认 —— 都挂在个人中心下
+const seeded = await seed({ reports: ['assessed'] });
+await loginWithSeed(page, seeded);                          // -> 首页「呵护您的健康」
 await page.getByRole('button', { name: '个人中心', exact: true }).click();
-await expect(page.getByRole('heading', { name: '个人中心' })).toBeVisible();
-await page.getByRole('button', { name: '查看' }).click();      // 历史列表项 -> 报告详情
+await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible(); // 或 报告历史
+
+// B. 报告详情（从历史进入，或深链直达）
+await page.getByRole('button', { name: '查看' }).click();
 await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible();
+// 或：await page.goto(`/#/report/${seeded.reports[0].id}`);
 
-// 从报告详情进入指标确认
+// C. 指标确认（从报告详情进入）
 await page.getByRole('button', { name: '继续确认' }).click();
-await expect(page.getByRole('heading', { name: '体检报告解读' })).toBeVisible();  // 解析结果
+await expect(page.getByText(/解析结果/)).toBeVisible();
 
-// 上传页（粘贴的落点）——导航按钮名是「体检报告解读」
+// D. 上传页 —— 回到首页再导航，按钮名是「体检报告解读」
+await loginWithSeed(page, seeded);                          // 重置回首页
 await page.getByRole('button', { name: '体检报告解读' }).click();
 await expect(page.getByText('点击或拖拽多张报告文件到此区域')).toBeVisible();
 ```
 
-**「体检报告解读」既是一个导航按钮（→ 上传页），也是确认流程的标题。** 两者靠
-上下文区分：上传页有「点击或拖拽多张报告文件到此区域」，确认流程有「解析结果」。
+两个容易踩的点：
+
+- **「体检报告解读」是双关**：首页上它是导航按钮（→ 上传页），确认流程里它是一级标题。
+  按 name 找 heading 会撞车，用所在页面或伴随文本区分（上传页「点击或拖拽…」／
+  确认流程「解析结果」）。
+- **种多个报告时「查看」不唯一**。历史列表每个报告一个「查看」按钮，
+  `getByRole('button', { name: '查看' })` 会匹配多个并在 strict mode 下报错。
+  只种一个报告，或把定位限定到具体列表项。
 
 | Feature | Surface | Existing spec | Reaches it by |
 |---|---|---|---|

@@ -97,6 +97,16 @@ curl -sf "http://127.0.0.1:${PORT}/health"   # only when a run is live; 200 = se
 - **Port busy** → a previous run was killed uncleanly. Find and stop *that* process
   (never by name matching, see Cleanup), or re-run with a fresh `HEALTHFLOW_E2E_PORT`.
 
+**⚠️ A custom `HEALTHFLOW_E2E_PORT` is only half-wired.** The `webServer` respects it,
+but `loginWithSeed` in `fixtures.js` plants the session cookie against a **hard-coded**
+`http://127.0.0.1:8137`. Change the port and the server moves but the seeded session does
+not — every `loginWithSeed` call then lands unauthenticated. So:
+
+- Treat a non-default port as **advanced**: it works for driving via `page.goto`, but the
+  seed fixture must be adjusted first.
+- When Doctor probes, report the port you actually used — do not present a green probe on
+  a custom port as proof the seeded flows work.
+
 ## Drive
 
 Import `test`/`expect` from `./fixtures.js` — never from `@playwright/test` — so you get
@@ -110,7 +120,9 @@ page, so an example that stops there times out. Traverse per the canonical paths
 import { test, expect, loginWithSeed } from './fixtures.js';
 
 test('示例：已完成报告的指标总览', async ({ page, seed }) => {
-  const seeded = await seed({ reports: ['assessed', 'pending_confirmation'] });
+  // Seed ONE report: the history list renders one 查看 button per report, and
+  // getByRole resolves to all of them — an unscoped click fails strict mode.
+  const seeded = await seed({ reports: ['assessed'] });
   await loginWithSeed(page, seeded);            // plants the session cookie, opens '/'
 
   await page.getByRole('button', { name: '个人中心', exact: true }).click();

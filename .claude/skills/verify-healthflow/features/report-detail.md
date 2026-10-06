@@ -31,6 +31,12 @@ expect(page.url()).toContain(`#/report/${reportId}`);
 await page.goto(`/#/report/${reportId}`);
 await expect(page.getByText('指标总览', { exact: true })).toBeVisible();
 
+// 深链的价值在**刷新后仍能恢复** —— goto 之后必须 reload 再断言一次，
+// 只断言 goto 等于没测到这条契约。
+await page.reload();
+await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible();
+await expect(page.getByText('指标总览', { exact: true })).toBeVisible();
+
 // 原文溯源：按钮 accessible name 形如「查看<指标名>原文」
 await page.getByRole('button', { name: '查看空腹血糖原文' }).click();
 ```

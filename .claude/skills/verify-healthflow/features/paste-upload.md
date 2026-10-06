@@ -43,6 +43,7 @@ async function dispatchPaste(locator, { files = [], textHtml = '', plainText = '
 }
 
 // 1. 上传页的导航按钮名是「体检报告解读」，不是「粘贴图片」
+const seeded = await seed({ reports: [] });   // loginWithSeed 需要 seeded.subject
 await loginWithSeed(page, seeded);
 await page.getByRole('button', { name: '体检报告解读' }).click();
 await expect(page.getByText('点击或拖拽多张报告文件到此区域')).toBeVisible();

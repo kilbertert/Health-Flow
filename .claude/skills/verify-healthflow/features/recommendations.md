@@ -13,20 +13,26 @@
 
 ## Driving it with Playwright
 
+**监听必须在导航之前挂。** 推荐内容在报告详情挂载时拉取；先导航再挂监听，会在
+渲染期间漏掉请求，使断言在没有请求时**假通过**。
+
 ```js
 const seeded = await seed({ reports: ['assessed'] });
 
+// 1. 先挂监听
+const mallRequests = [];
+page.on('request', (r) => {
+  if (new URL(r.url()).host === 'lkf.h5.mall.qushiyun.com') mallRequests.push(r.url());
+});
+
+// 2. 再导航（单个报告，避免 查看 匹配到多个按钮）
 await loginWithSeed(page, seeded);                                  // -> 首页
 await page.getByRole('button', { name: '个人中心', exact: true }).click();
 await page.getByRole('button', { name: '查看' }).click();            // -> 报告详情
 await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible();
 
-// 推荐区在报告详情下方。要断言「浏览器不请求商城域名」，先挂监听再导航：
-const mallRequests = [];
-page.on('request', (r) => {
-  if (new URL(r.url()).host === 'lkf.h5.mall.qushiyun.com') mallRequests.push(r.url());
-});
-// ...驱动推荐区...
+// 3. 等推荐区真正出结果后再断言，否则断言跑在请求之前
+await expect(page.getByText(/暂无|无可推荐|推荐/)).toBeVisible();
 expect(mallRequests).toEqual([]);
 ```
 
