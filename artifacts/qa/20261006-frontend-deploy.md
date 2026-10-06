@@ -52,33 +52,43 @@ $ curl -s http://36.156.159.175:10007/assets/index-C1Jj_aLt.js | sha256sum
 与构建输出一致。**部署前**线上是 `index-C0QGrrzm.js`（54179 字节，无推荐挂载），
 替换后为 `index-C1Jj_aLt.js`（54408 字节）——差异即本次改动。
 
-### 4. 构建可复现
+### 4. 构建可复现；**归档哈希只在同一棵树上可复算**
 
-连续两次 `rm -rf dist && npm run build`，全量文件 sha256 逐条相同。
+连续两次 `rm -rf dist && npm run build`，全量文件 sha256 逐条相同——**文件内容**可复现。
 
-**归档本身也可复算**——这一点是单独实测的，不是从文件哈希推出来的：
+**归档哈希不是这样。** `tar` 会把文件 mtime 写进归档，而重新构建会刷新 mtime，
+所以「重新构建再打包」得到的是**另一个归档哈希**。这是实测的，不是推断：
 
 ```
-$ tar -czf /tmp/repack1.tar.gz -C dist . && tar -czf /tmp/repack2.tar.gz -C dist .
-46268939c8eb52bb59447df0baeed4883353b2709d8d841ba548c9a6553459c9  repack1.tar.gz
-46268939c8eb52bb59447df0baeed4883353b2709d8d841ba548c9a6553459c9  repack2.tar.gz
-46268939c8eb52bb59447df0baeed4883353b2709d8d841ba548c9a6553459c9  health-flow-frontend-06f158d.tar.gz
+# 同一棵树、连打两次 → 相同
+46268939c8eb52bb59447df0baeed4883353b2709d8d841ba548c9a6553459c9  pack-same-tree.tar.gz
+46268939c8eb52bb59447df0baeed4883353b2709d8d841ba548c9a6553459c9  health-flow-frontend-06f158d.tar.gz（已部署）
+
+# 重新构建后再打包 → 不同（文件内容仍逐字节相同，差的是归档里的 mtime）
+f30110f98bbc6e41c199382a5d6bb45ac746f5854402d7343a00addb615be75e  pack-after-rebuild.tar.gz
 ```
 
-佐证的工具版本（打包元数据会随它们变化，故一并记下）：
+工具版本（打包元数据随它们变化，故一并记下）：
 
 ```
 gzip 1.10
 tar (GNU tar) 1.34
 ```
 
-**这个可复算性有边界**：它成立于「同一构建输出 + 同一打包命令 + 同一工具版本」。
-换 `tar`/`gzip` 版本、或换打包命令的参数，归档哈希会变——文件哈希不会。复算步骤：
+**所以要分清两件事：**
+
+| 想验的 | 怎么验 | 是否可复算 |
+| --- | --- | --- |
+| **文件内容**是这一版（有意义的那条） | 比对 `dist/` 内各文件的 sha256 | ✅ 任何机器、任何时间，只要构建工具链一致 |
+| **这次传输**没被改动（归档完整性） | 比对归档 sha256 | ⚠️ 只在**同一棵未改动的树**上可复算 |
+
+归档哈希的用途就是后者——它是**那一次传输**的完整性凭据（写闸门 `--artifact-sha256`
+正是这样用的），不是长期可复算的版本标识。要复算文件内容：
 
 ```bash
 cd frontend && rm -rf dist && npm run build
-tar -czf out.tar.gz -C dist . && sha256sum out.tar.gz
-# 期望 46268939c8eb52bb59447df0baeed4883353b2709d8d841ba548c9a6553459c9
+find dist -type f | sort | xargs sha256sum
+# 与本记录「落盘与构建输出一致」一节的哈希逐条比对
 ```
 
 ### 5. 部署前的既有产物已清理
