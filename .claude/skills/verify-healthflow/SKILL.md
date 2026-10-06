@@ -103,8 +103,12 @@ curl -sf "http://127.0.0.1:${PORT}/health"   # only when a run is live; 200 = se
 
 一个容易误判的点：`fixtures.js` 里 `addCookies` 的 `url:` 写的是固定的
 `http://127.0.0.1:8137`，看起来像是"自定义端口就会掉会话"。**实测不是**：
-把该 URL 指到一个根本没有监听的端口，用例照样通过。端口不匹配只影响 cookie 的
-domain 匹配，而 Playwright 的 cookie 注入在 `context.addCookies` 之后即生效。
+把该 URL 指到一个根本没有监听的端口，用例照样通过。
+
+原因是 **cookie 本身不受端口约束**（RFC 6265：cookie 的作用域是 domain + path，
+没有 port 分量）。`addCookies` 的 `url` 只用来推导 domain 与 path，端口部分不参与
+匹配 —— 所以这里写 8137 还是 8237 没有区别。真正的 required 是 **domain 一致**
+（都是 `127.0.0.1`）。
 
 **所以：不要为了这个看起来的硬编码去改 `fixtures.js`。** 实测不支持那个改动，
 改了只是无谓地碰产品外的既有文件。
