@@ -14,6 +14,17 @@ The five canonical triage roles use the default label strings. See `docs/agents/
 
 Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
 
+### Verification
+
+Unit and integration tests are necessary but not sufficient. When a change
+alters behavior a patient can see, prove it on the running app before you call
+it done: invoke the `verify-healthflow` skill, drive the affected feature in a
+real browser, and keep the captured evidence.
+
+`verify-healthflow` lists the covered features in its `features/` map — check
+there first rather than inventing a new harness. It reports `clean`, `changed`,
+or `blocked`; `blocked` must name what stopped it, never be reported as passed.
+
 <!-- afk-bootstrap:managed:start -->
 ## AFK workflow gate
 

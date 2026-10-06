@@ -42,6 +42,12 @@ Use red-green-refactor where applicable.
 Before committing, run `uv sync --extra dev`, `uv run pytest`, and
 `uv run ruff check`, then `node .sandcastle/policy-check.mjs commit`.
 
+If your change alters behavior a patient can see, also run the project
+verification skill `.claude/skills/verify-healthflow` and capture its evidence.
+Tests are not a substitute: it drives the real app in a browser the way a user
+does. If you cannot run it, say so and why in the commit body; do not report it
+as done.
+
 # COMMIT
 
 Make one or more git commits on `{{BRANCH}}`. Use conventional-commit

@@ -4,6 +4,11 @@ Read the project-specific `CLAUDE.md`, `GLOSSARY.md`, `docs/`, and applicable
 ADRs before changing code. Keep user-visible health language within the
 project's domain glossary and run the documented Python checks.
 
+When a change alters what a patient can see, the documented Python checks are
+not enough on their own: use the `verify-healthflow` skill to drive the real
+app and capture evidence before declaring the work done. See `CLAUDE.md`
+("Verification") for the standard.
+
 <!-- afk-bootstrap:managed:start -->
 ## AFK workflow gate
 

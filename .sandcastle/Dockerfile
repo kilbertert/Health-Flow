@@ -26,6 +26,17 @@ RUN groupmod -o -g ${AGENT_GID} node \
   && usermod -o -u ${AGENT_UID} -g ${AGENT_GID} -d /home/agent -m -l agent node \
   && mkdir -p /home/agent/.codex && chown -R ${AGENT_UID}:${AGENT_GID} /home/agent/.codex
 
+# Verification skill support: the `verify-healthflow` skill drives the real app
+# in a browser via Playwright, so the browser and its OS deps must be baked in.
+# Without this the skill can only report "cannot run", which the implement
+# prompt would surface as a blocked step rather than a passed one.
+# PLAYWRIGHT_BROWSERS_PATH must be set before USER, or the browsers land
+# root-only and the agent's non-root user cannot read them.
+# Version tracks `@playwright/test` in frontend/package.json.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+RUN npx --yes playwright@1.62.1 install --with-deps chromium \
+  && rm -rf /var/lib/apt/lists/*
+
 RUN npm install --global @anthropic-ai/claude-code \
   && npm install --global @openai/codex@0.146.1 \
   && mv /usr/local/bin/claude /usr/local/bin/claude-real \
