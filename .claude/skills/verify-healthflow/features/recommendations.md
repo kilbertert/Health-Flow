@@ -31,10 +31,15 @@ await page.getByRole('button', { name: '个人中心', exact: true }).click();
 await page.getByRole('button', { name: '查看' }).click();            // -> 报告详情
 await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible();
 
-// 3. 等推荐区真正出结果后再断言，否则断言跑在请求之前
-await expect(page.getByText(/暂无|无可推荐|推荐/)).toBeVisible();
+// 3. 等推荐区真正加载完再断言
+await expect(page.locator('.recommendations-loading')).toHaveCount(0);
+await expect(page.locator('.recommendations-card')).toBeVisible();
 expect(mallRequests).toEqual([]);
 ```
+
+**不要用文案当"加载完成"的判据。** 卡片标题「推荐商品」是静态的，页面一挂载就匹配——
+拿它做等待条件等于没等，断言会跑在请求之前，漏检迟发的商城请求。等
+`.recommendations-loading` 消失才是真正的 settled 条件。
 
 ## Gotchas
 

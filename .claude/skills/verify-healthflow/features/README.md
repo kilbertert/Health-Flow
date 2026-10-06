@@ -21,7 +21,8 @@ the specs themselves, not inferred:
 const seeded = await seed({ reports: ['assessed'] });
 await loginWithSeed(page, seeded);                          // -> 首页「呵护您的健康」
 await page.getByRole('button', { name: '个人中心', exact: true }).click();
-await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible(); // 或 报告历史
+await expect(page.getByRole('heading', { name: '个人中心' })).toBeVisible();  // 先等到个人中心
+// 报告详情要等点了「查看」之后才会出现，别在这里等它
 
 // B. 报告详情（从历史进入，或深链直达）
 await page.getByRole('button', { name: '查看' }).click();
