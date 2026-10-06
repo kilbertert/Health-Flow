@@ -44,7 +44,9 @@ Before committing, run `uv sync --extra dev`, `uv run pytest`, and
 
 If your change alters behavior a patient can see, run the project verification
 skill `.claude/skills/verify-healthflow` and capture its evidence. Tests are not
-a substitute: it drives the real app in a browser the way a user does.
+a substitute: it drives the real app in a browser the way a user does. Its
+screenshots land in gitignored `var/verify-evidence/`, so put what you rely on
+somewhere the commit or PR carries.
 
 **Do not commit an unverified user-visible change in this workflow.** A commit
 here closes the sub-issue, so "commit it and note why verification was skipped"

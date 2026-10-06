@@ -37,8 +37,9 @@ Before committing, run `uv sync --extra dev && uv run pytest && uv run ruff chec
 This repo HAS a project verification skill, `.claude/skills/verify-healthflow`.
 If your change alters behavior a patient can see, run that skill and capture
 its evidence before committing. Tests are not a substitute: it drives the real
-app in a browser the way a user does. If you cannot run it, say so and why in
-the commit body; do not report it as done.
+app in a browser the way a user does. Its screenshots land in gitignored
+`var/verify-evidence/`, so put what you rely on somewhere the commit carries.
+If you cannot run it, say so and why in the commit body; do not report it as done.
 
 # COMMIT
 
