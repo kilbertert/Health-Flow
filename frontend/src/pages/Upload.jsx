@@ -21,6 +21,7 @@ import {
   Upload,
 } from 'antd';
 import { CheckCircleOutlined, EyeOutlined, InboxOutlined, PictureOutlined, ReloadOutlined } from '@ant-design/icons';
+import Recommendations from '../components/Recommendations.jsx';
 import {
   assessReport,
   confirmReport,
@@ -462,7 +463,7 @@ function evidenceItemsFor(finding, detail) {
   }];
 }
 
-export function EvidenceResult({ result, onOpenSource }) {
+function EvidenceSummaryCard({ result, onOpenSource }) {
   if (!result) return null;
   const findings = Array.isArray(result.findings) ? result.findings : [];
   const patientReply = result.patient_reply && typeof result.patient_reply === 'object'
@@ -701,6 +702,23 @@ export function TechnicalDetails({ result, subjectConsistency, onSubjectConsiste
         {trace?.extraction_prompt_version || '—'}
       </Descriptions.Item>
     </Descriptions>
+  );
+}
+
+// 报告一旦评估完成（assessed），推荐就应当出现——它与报告详情页共用同一组渲染。
+// 上传完停在本页时，此前只挂了摘要，推荐只在报告详情挂载，于是「看不看得到商品」
+// 取决于用户走的是哪个入口，而不是取决于数据。这里让 assessed 的结果同时渲染
+// EvidenceSummaryCard 与 Recommendations，与报告详情保持一致。
+//
+// reportId 与 assessed 由调用方传入：本组件的 result 是 evidence_result 本身，
+// 它既没有 status 也没有 id，不能从里面推断「报告是否已评估」。
+export function EvidenceResult({ result, onOpenSource, reportId = null, assessed = false }) {
+  if (!result) return null;
+  return (
+    <>
+      <EvidenceSummaryCard result={result} onOpenSource={onOpenSource} />
+      {assessed && reportId ? <Recommendations reportId={reportId} /> : null}
+    </>
   );
 }
 
@@ -1284,7 +1302,12 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
               </Button>
             )}
           </Space>
-          <EvidenceResult result={result.evidence_result} onOpenSource={setSourceMetric} />
+          <EvidenceResult
+            result={result.evidence_result}
+            onOpenSource={setSourceMetric}
+            reportId={result.id}
+            assessed={result.status === 'assessed'}
+          />
         </Card>
       )}
       <Modal
