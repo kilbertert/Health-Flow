@@ -97,15 +97,17 @@ curl -sf "http://127.0.0.1:${PORT}/health"   # only when a run is live; 200 = se
 - **Port busy** → a previous run was killed uncleanly. Find and stop *that* process
   (never by name matching, see Cleanup), or re-run with a fresh `HEALTHFLOW_E2E_PORT`.
 
-**⚠️ A custom `HEALTHFLOW_E2E_PORT` is only half-wired.** The `webServer` respects it,
-but `loginWithSeed` in `fixtures.js` plants the session cookie against a **hard-coded**
-`http://127.0.0.1:8137`. Change the port and the server moves but the seeded session does
-not — every `loginWithSeed` call then lands unauthenticated. So:
+**自定义端口是可用的**（已实测）。`playwright.config.js` 把最终端口写进
+`HEALTHFLOW_E2E_PORT` 并传给 server、seed 与 worker 三处，所以
+`HEALTHFLOW_E2E_PORT=8237 npm run test:e2e` 全链路成立 —— 已跑通。
 
-- Treat a non-default port as **advanced**: it works for driving via `page.goto`, but the
-  seed fixture must be adjusted first.
-- When Doctor probes, report the port you actually used — do not present a green probe on
-  a custom port as proof the seeded flows work.
+一个容易误判的点：`fixtures.js` 里 `addCookies` 的 `url:` 写的是固定的
+`http://127.0.0.1:8137`，看起来像是"自定义端口就会掉会话"。**实测不是**：
+把该 URL 指到一个根本没有监听的端口，用例照样通过。端口不匹配只影响 cookie 的
+domain 匹配，而 Playwright 的 cookie 注入在 `context.addCookies` 之后即生效。
+
+**所以：不要为了这个看起来的硬编码去改 `fixtures.js`。** 实测不支持那个改动，
+改了只是无谓地碰产品外的既有文件。
 
 ## Drive
 
