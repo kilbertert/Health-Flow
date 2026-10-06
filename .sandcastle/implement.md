@@ -15,9 +15,17 @@ Requirements:
    behavior you change.
 3. Run `uv sync --extra dev && uv run pytest && uv run ruff check` before
    committing. Do not weaken or skip checks.
-4. Run `node .sandcastle/policy-check.mjs commit` before committing.
-5. Inspect `git diff --check` and the changed-file list before committing.
-6. Commit the completed work with a Conventional Commit message.
+4. This repo HAS a project verification skill, `.claude/skills/verify-healthflow`.
+   If your change alters behavior a patient can see, run that skill and capture
+   its evidence before committing. Tests are not a substitute: it drives the
+   real app in a browser the way a user does. The skill writes its screenshots
+   under `var/verify-evidence/`, which is gitignored — so before committing,
+   copy the evidence you are relying on somewhere the commit will carry (the PR
+   body, or a committed path if the repo already keeps fixtures there). If you
+   cannot run it, say so and why in the commit body; do not report it as done.
+5. Run `node .sandcastle/policy-check.mjs commit` before committing.
+6. Inspect `git diff --check` and the changed-file list before committing.
+7. Commit the completed work with a Conventional Commit message.
 
 If the issue is complete, print `<promise>COMPLETE</promise>` after the commit.
 If a required human decision, credential, or external environment is missing,
