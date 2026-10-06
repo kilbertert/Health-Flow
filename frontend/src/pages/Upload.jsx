@@ -242,8 +242,22 @@ export function displayFlag(metric) {
   return deterministicFlag(metric) || (isAbnormal(metric?.abnormal_flag) ? '待核对' : metric?.abnormal_flag);
 }
 
+// 值与参考范围能否解析出**一个**数。规则必须与后端 evidence_bridge._single_number 一致：
+// 后端要求恰好一个数，解析不出就整行丢弃（reason=invalid_value）。
+function valueIsUsable(metric) {
+  const valueText = metric?.confirmed_value || metric?.metric_value;
+  if (!valueText || /[<>≤≥]/.test(String(valueText))) return false;
+  if (singleNumber(valueText) === null) return false;
+  const [low, high] = parseReferenceRange(metric?.confirmed_reference_range || metric?.reference_range);
+  return low !== null || high !== null;
+}
+
 function initialDecision(metric) {
   const flag = deterministicFlag(metric);
+  // 解析不出单一数值的行**不能**默认「确认」：后端会把它整行丢掉，而界面却让它
+  // 一路走到「已生成健康提示」——用户从没被告知那个值没被采纳（报告 44 的三个
+  // 异常项就是这么消失的）。默认「待核对」，逼一次显式选择。
+  if (!valueIsUsable(metric) && isAbnormal(metric?.abnormal_flag)) return 'pending';
   if ((flag === 'H' || flag === 'L') && metric?.evidence_text && metric?.page_number) return 'confirmed';
   if (flag === 'H' || flag === 'L') return 'pending';
   return flag === null && isAbnormal(metric?.abnormal_flag) ? 'pending' : 'excluded';
@@ -283,6 +297,10 @@ function MetricCard({ metric, draft, metricCatalog, disabled, onUpdateDraft, onO
             {metric.unit ? ` ${metric.unit}` : ''}
           </span>
           {abnormalTag(displayFlag(metric))}
+          {/* 多值/带符号的行：先告诉用户「这个值用不了」，而不是等它被后端悄悄丢掉 */}
+          {!valueIsUsable(metric) && isAbnormal(metric?.abnormal_flag) && (
+            <Tag color="orange">数值无法识别为单个数字</Tag>
+          )}
         </button>
         {metric.page_number ? (
           <Tooltip title="查看原文定位">
@@ -969,11 +987,22 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
       message.warning('请先确认所有文件属于同一主体');
       return;
     }
-    const unresolved = (result.metrics || []).filter(
-      (metric) => (drafts[metric.id]?.decision || initialDecision(metric)) === 'pending',
-    );
+    const decisionOf = (metric) => drafts[metric.id]?.decision || initialDecision(metric);
+    const unresolved = (result.metrics || []).filter((metric) => decisionOf(metric) === 'pending');
     if (unresolved.length > 0) {
       message.warning(`还有 ${unresolved.length} 个异常候选项需要确认、修正或排除`);
+      return;
+    }
+    // 显式选了「确认」但值仍是多值/带符号的行：接受它就等于接受一次**静默丢弃**。
+    // 后端要求恰好一个数，这种值它会连行一起丢掉（reason=invalid_value），
+    // 而用户会以为已经确认过了。挡在这里，明确要求修正或排除。
+    const unusable = (result.metrics || []).filter(
+      (metric) => decisionOf(metric) === 'confirmed' && !valueIsUsable(metric),
+    );
+    if (unusable.length > 0) {
+      message.warning(
+        `有 ${unusable.length} 项的数值无法识别为单个数字（如「5.4 5.5」），无法参与匹配；请「修正」为单个数值或「排除」。`,
+      );
       return;
     }
     setConfirming(true);
@@ -1031,7 +1060,18 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
     { title: '模型值', dataIndex: 'metric_value', width: 90 },
     { title: '单位', dataIndex: 'unit', width: 80 },
     { title: '参考范围', dataIndex: 'reference_range', width: 110 },
-    { title: '异常', key: 'abnormal_flag', width: 90, render: (_, record) => abnormalTag(displayFlag(record)) },
+    {
+      title: '异常', key: 'abnormal_flag', width: 90,
+      render: (_, record) => (
+        <Space size={4} wrap>
+          {abnormalTag(displayFlag(record))}
+          {/* 表形态下同样要标出来——这是桌面端默认视图 */}
+          {!valueIsUsable(record) && isAbnormal(record?.abnormal_flag) && (
+            <Tag color="orange">数值无法识别为单个数字</Tag>
+          )}
+        </Space>
+      ),
+    },
     { title: '证据原文', dataIndex: 'evidence_text', width: 220, ellipsis: true },
     {
       title: '原文', key: 'source', width: 62,
