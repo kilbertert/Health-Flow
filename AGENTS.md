@@ -1,6 +1,6 @@
 # Health-Flow agent instructions
 
-Read the project-specific `CLAUDE.md`, `CONTEXT.md`, `docs/`, and applicable
+Read the project-specific `CLAUDE.md`, `GLOSSARY.md`, `docs/`, and applicable
 ADRs before changing code. Keep user-visible health language within the
 project's domain glossary and run the documented Python checks.
 
