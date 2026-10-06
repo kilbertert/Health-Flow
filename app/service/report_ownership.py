@@ -1,7 +1,7 @@
 """Single source of truth for report ownership.
 
 "Whose report is this, and who may see it" is the first boundary every patient
-endpoint crosses (CONTEXT.md's 报告上传 entry says it "establishes ownership and
+endpoint crosses (GLOSSARY.md's 报告上传 entry says it "establishes ownership and
 the access boundary").  Before this module the answer came from three parallel
 channels — a ``request.state.owner_id`` written by the basic-auth middleware, a
 ``request.state.account_id`` written by the session resolver, and a priority
