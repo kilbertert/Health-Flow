@@ -42,11 +42,15 @@ Use red-green-refactor where applicable.
 Before committing, run `uv sync --extra dev`, `uv run pytest`, and
 `uv run ruff check`, then `node .sandcastle/policy-check.mjs commit`.
 
-If your change alters behavior a patient can see, also run the project
-verification skill `.claude/skills/verify-healthflow` and capture its evidence.
-Tests are not a substitute: it drives the real app in a browser the way a user
-does. If you cannot run it, say so and why in the commit body; do not report it
-as done.
+If your change alters behavior a patient can see, run the project verification
+skill `.claude/skills/verify-healthflow` and capture its evidence. Tests are not
+a substitute: it drives the real app in a browser the way a user does.
+
+**Do not commit an unverified user-visible change in this workflow.** A commit
+here closes the sub-issue, so "commit it and note why verification was skipped"
+records an unverified change as done. If verification cannot run, output
+`<promise>BLOCKED</promise>` with the reason and stop — that is the correct
+outcome, not a commit.
 
 # COMMIT
 

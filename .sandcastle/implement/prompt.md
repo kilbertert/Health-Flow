@@ -27,6 +27,12 @@ Use red-green-refactor where applicable.
 Before committing, run `uv sync --extra dev && uv run pytest && uv run ruff check`, then
 `node .sandcastle/policy-check.mjs commit`.
 
+This repo HAS a project verification skill, `.claude/skills/verify-healthflow`.
+If your change alters behavior a patient can see, run that skill and capture
+its evidence before committing. Tests are not a substitute: it drives the real
+app in a browser the way a user does. If you cannot run it, say so and why in
+the commit body; do not report it as done.
+
 # COMMIT
 
 Make one or more git commits on `{{BRANCH}}`. Use conventional-commit messages (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`). Do NOT use a `RALPH:` prefix — that prefix is reserved for the RALPH loop.

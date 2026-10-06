@@ -22,8 +22,15 @@ it done: invoke the `verify-healthflow` skill, drive the affected feature in a
 real browser, and keep the captured evidence.
 
 `verify-healthflow` lists the covered features in its `features/` map — check
-there first rather than inventing a new harness. It reports `clean`, `changed`,
-or `blocked`; `blocked` must name what stopped it, never be reported as passed.
+there first rather than inventing a new harness. Because it follows a feature
+map rather than a change set, "the suite passed" is not the claim: say which
+features you drove and where the evidence is.
+
+When it cannot run — a missing browser, a service that will not start, a
+feature named on the map but unreachable — that is `blocked`: name the
+prerequisite and the route attempted. A blocked verification is never reported
+as a pass, and in the PRD workflow it is `<promise>BLOCKED</promise>` rather
+than a commit.
 
 <!-- afk-bootstrap:managed:start -->
 ## AFK workflow gate
