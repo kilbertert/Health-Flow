@@ -59,16 +59,21 @@ e0f9a133822f34bdc03e0350133674f4ea9dba88ed2c7c4ab813b7f6bc893160  products/zhizh
 （16/16 逐字节相同）。命令：
 
 ```bash
-# 本机
+# 本机（注意：先把带 dist/ 前缀的路径交给 sha256sum，**之后**才去掉前缀显示；
+# 顺序反过来会让 sha256sum 找不到文件，得到的是空清单而不是 16 行）
 cd frontend && rm -rf dist && npm run build
-find dist -type f | sed 's|^dist/||' | sort | xargs sha256sum > /tmp/local.txt
+find dist -type f | sort | xargs sha256sum | sed 's|  dist/|  |' > /tmp/local.txt
 
 # 主机
 dev-host exec 36 --allow-service-exec -- "sh -c 'cd /opt/health-flow/frontend && \
-  find . -type f | sed \"s|^\\./||\" | sort | xargs sha256sum'" > /tmp/host.txt
+  find . -type f | sort | xargs sha256sum | sed \"s|  \\./|  |\"'" > /tmp/host.txt
 
 diff <(sort /tmp/local.txt) <(sort /tmp/host.txt)   # 期望无输出
+wc -l /tmp/local.txt /tmp/host.txt                  # 期望各 16
 ```
+
+`wc -l` 一并留着：**「diff 无输出」在命令写错时同样成立**（两边都空也是空 diff）。
+先确认两边各 16 行，diff 才有意义——这正是本节命令第一版写错的地方。
 
 ### 3. 线上入口实际提供的就是这一版
 
