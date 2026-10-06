@@ -15,10 +15,19 @@
 
 ```js
 const seeded = await seed({ reports: ['assessed'] });
-await loginWithSeed(page, seeded);
-await page.getByRole('button', { name: '查看' }).first().click();
+
+await loginWithSeed(page, seeded);                                  // -> 首页
+await page.getByRole('button', { name: '个人中心', exact: true }).click();
+await page.getByRole('button', { name: '查看' }).click();            // -> 报告详情
 await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible();
-// 推荐区在详情下方；断言空态/降级文案时可在此后定位
+
+// 推荐区在报告详情下方。要断言「浏览器不请求商城域名」，先挂监听再导航：
+const mallRequests = [];
+page.on('request', (r) => {
+  if (new URL(r.url()).host === 'lkf.h5.mall.qushiyun.com') mallRequests.push(r.url());
+});
+// ...驱动推荐区...
+expect(mallRequests).toEqual([]);
 ```
 
 ## Gotchas

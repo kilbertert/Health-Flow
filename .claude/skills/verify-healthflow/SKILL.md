@@ -44,11 +44,16 @@ What the run actually does:
 
 ```bash
 cd frontend
-ls node_modules/.bin/playwright   # missing -> npm install
-ls dist/index.html                # missing -> npm run build  (server refuses to start without it)
-ls ../.venv/bin/uvicorn           # NOT just ../.venv — exist-without-uvicorn is the trap
-ls ~/.cache/ms-playwright         # missing -> npm run e2e:install
+ls node_modules/.bin/playwright              # missing -> npm install
+ls dist/index.html                           # missing -> npm run build  (server refuses to start without it)
+ls ../.venv/bin/uvicorn                      # NOT just ../.venv — exist-without-uvicorn is the trap
+node -e 'require("@playwright/test")'        # resolves -> package installed (see note below)
+ls ~/.cache/ms-playwright                    # hint only — NOT a reliable browser check
 ```
+
+Do **not** treat `~/.cache/ms-playwright` as proof Chromium is present: it passes with an
+empty or stale cache, and `PLAYWRIGHT_BROWSERS_PATH` moves the real location elsewhere.
+Only a launch proves it — `npm run e2e:install` if Playwright reports a missing browser.
 
 **A fresh worktree has none of these.** `node_modules/`, `dist/`, and `.venv/` are all
 build artifacts or gitignored. Set up once per worktree:
@@ -82,7 +87,8 @@ any failed drive, and whenever output looks wrong.
 
 ```bash
 cd frontend
-curl -sf http://127.0.0.1:8137/health   # only when a run is live; 200 = server up
+PORT="${HEALTHFLOW_E2E_PORT:-8137}"     # the override is real — do not hardcode 8137
+curl -sf "http://127.0.0.1:${PORT}/health"   # only when a run is live; 200 = server up
 ```
 
 - **Server not up** → you are not inside a run. Playwright owns the lifecycle; just run it.
@@ -96,13 +102,23 @@ curl -sf http://127.0.0.1:8137/health   # only when a run is live; 200 = server 
 Import `test`/`expect` from `./fixtures.js` — never from `@playwright/test` — so you get
 the `seed` fixture bound to this run's database.
 
-```js
-import { test, expect } from './fixtures.js';
-import { loginWithSeed } from './fixtures.js';
+**`loginWithSeed()` lands on 首页 and nothing else.** Almost every feature is on a deeper
+page, so an example that stops there times out. Traverse per the canonical paths in
+`features/README.md`:
 
-test('示例', async ({ page, seed }) => {
+```js
+import { test, expect, loginWithSeed } from './fixtures.js';
+
+test('示例：已完成报告的指标总览', async ({ page, seed }) => {
   const seeded = await seed({ reports: ['assessed', 'pending_confirmation'] });
-  await loginWithSeed(page, seeded);       // plants the subject session cookie, opens '/'
+  await loginWithSeed(page, seeded);            // plants the session cookie, opens '/'
+
+  await page.getByRole('button', { name: '个人中心', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '个人中心' })).toBeVisible();
+  await page.getByRole('button', { name: '查看' }).click();      // -> 报告详情
+  await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible();
+  await expect(page.getByText('指标总览', { exact: true })).toBeVisible();
+
   // seeded.reports[i] = { id, status, report_type, access_token }
 });
 ```
@@ -110,21 +126,29 @@ test('示例', async ({ page, seed }) => {
 - There is **no login page** — a session is a cookie the seed plants. `loginWithSeed`
   does it and asserts the home heading.
 - `seed()` creates a **fresh account per call** (unique email), so cases never interact.
-- Viewport is mobile-first (375px). Override per-file with `test.use({ viewport: {...} })`
-  when driving the desktop layouts.
+- Viewport is mobile-first (375px). For desktop layouts put
+  `test.use({ viewport: { width: 1280, height: 800 } })` at **file or `describe` scope** —
+  calling it inside a test body aborts with "did not expect test.use() to be called here".
 
 **Prefer role/name selectors** — the real ones already in use:
 
-| Target | Selector |
-|---|---|
-| home heading | `getByRole('heading', { name: '呵护您的健康' })` |
-| report history | `getByRole('heading', { name: '体检报告解读' })` |
-| report detail | `getByRole('heading', { name: '报告详情' })` |
-| profile | `getByRole('heading', { name: '个人中心' })` |
-| mobile bottom nav | `getByRole('navigation', { name: '移动端主导航' })` |
-| service nav | `getByRole('navigation', { name: '健康服务' })` |
-| continue confirm | `getByRole('button', { name: '继续确认' })` |
-| original-text popup | `getByRole('button', { name: /^查看.+原文$/ })` |
+| Target | Selector | Where |
+|---|---|---|
+| home heading | `getByRole('heading', { name: '呵护您的健康' })` | 首页 |
+| profile | `getByRole('heading', { name: '个人中心' })` | 个人中心 |
+| report history | `getByRole('heading', { name: '报告历史' })` | 个人中心内 |
+| history row | `.history-section .ant-list-item` | 个人中心内 |
+| report detail | `getByRole('heading', { name: '报告详情' })` | 报告详情 |
+| upload page | `getByText('点击或拖拽多张报告文件到此区域')` | 上传页 |
+| nav → upload | `getByRole('button', { name: '体检报告解读' })` | 首页导航 |
+| parsing result | `getByText(/解析结果/)` | 确认流程 |
+| mobile bottom nav | `getByRole('navigation', { name: '移动端主导航' })` | 375px |
+| service nav | `getByRole('navigation', { name: '健康服务' })` | 桌面 |
+| continue confirm | `getByRole('button', { name: '继续确认' })` | 报告详情内 |
+| original-text popup | `getByRole('button', { name: /^查看.+原文$/ })` | 报告详情内 |
+
+**「体检报告解读」是双关**：首页上它是一个导航按钮（→ 上传页），确认流程里它是一级标题。
+按 name 找 heading 会撞车——用所在页面或伴随文本区分。
 
 There are **no `data-testid` attributes** in this codebase. Accessible roles and visible
 Chinese copy are the stable handles; do not invent ids.

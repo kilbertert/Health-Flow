@@ -17,22 +17,30 @@
 
 ```js
 const seeded = await seed({ reports: ['assessed'] });
-await loginWithSeed(page, seeded);
-await page.getByRole('button', { name: '查看' }).first().click();
-await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible();
+const reportId = seeded.reports[0].id;
 
-// 原文溯源：按钮名形如「查看<指标名>原文」
+// 路径一：从个人中心进入
+await loginWithSeed(page, seeded);                                  // -> 首页
+await page.getByRole('button', { name: '个人中心', exact: true }).click();
+await expect(page.getByRole('heading', { name: '个人中心' })).toBeVisible();
+await page.getByRole('button', { name: '查看' }).click();
+await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible();
+expect(page.url()).toContain(`#/report/${reportId}`);
+
+// 路径二：深链直达（不需要经过列表）
+await page.goto(`/#/report/${reportId}`);
+await expect(page.getByText('指标总览', { exact: true })).toBeVisible();
+
+// 原文溯源：按钮 accessible name 形如「查看<指标名>原文」
 await page.getByRole('button', { name: '查看空腹血糖原文' }).click();
-
-// 深链：刷新后应恢复到同一报告
-await page.reload();
-await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible();
 ```
 
 ## Gotchas
 
-- **深链刷新必须单独断言。** 应用内跳转通过，不代表刷新后能恢复 —— 这是 hash 路由
-  最容易漏的一条。
+- **`loginWithSeed` 只到首页。** 报告详情在「个人中心」下，不经这一步
+  `getByRole('button', { name: '查看' })` 必然超时。
+- **深链刷新必须单独断言** —— 应用内跳转通过，不代表刷新后能恢复。这是 hash 路由
+  最容易漏的一条，也是两条独立的真实用例。
 - 打印行为用 `page.emulateMedia({ media: 'print' })` 驱动，不要靠截图肉眼判断。
 - 原文弹窗在桌面视口保留 960px 宽度；移动端全屏。视口不同断言不同，用
   `test.use({ viewport })` 明确声明。
