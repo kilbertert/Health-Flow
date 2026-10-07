@@ -118,8 +118,10 @@ def test_apply_declaration_settles_to_same():
 
 
 def test_apply_declaration_keeps_an_already_same_report():
+    """落定的是**闸门判定出的**值（gate 的返回值），不是患者的原始表态。"""
     report = SimpleNamespace(subject_consistency="same")
-    assert apply_declaration(report, None) == "same"
+    assert apply_declaration(report, "same") == "same"
+    assert report.subject_consistency == "same"
 
 
 def test_can_enter_reading_only_when_same():

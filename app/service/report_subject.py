@@ -73,12 +73,12 @@ def is_stop_declaration(declared: str | None) -> bool:
     return declared is not None and declared != "same"
 
 
-def apply_declaration(report: Any, declared: str | None) -> SubjectConsistency:
-    """把患者的表态落定到报告上，返回落定值。
+def apply_declaration(report: Any, settled: str | None) -> SubjectConsistency:
+    """把**闸门判定出的**一致性落定到报告上，返回落定值。
 
-    调用方应当先过 :func:`gate`（它会拒掉「停止」的表态）；这里只做写入，
-    保持「判定 / 闸门 / 写入」三者各自单一职责。
+    参数是 :func:`gate` 的返回值（``"same"``），不是患者的原始表态 —— 原始表态
+    可能已被闸门拒掉。这里只做写入，保持「判定 / 闸门 / 写入」各自单一职责。
     """
-    settled: SubjectConsistency = "same" if declared == "same" or report.subject_consistency == "same" else "uncertain"
-    report.subject_consistency = settled
-    return settled
+    value: SubjectConsistency = "same" if settled == "same" else "uncertain"
+    report.subject_consistency = value
+    return value

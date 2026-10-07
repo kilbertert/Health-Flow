@@ -867,3 +867,31 @@ def test_stop_declaration_does_not_confirm_or_assess():
     session.refresh(report)
     assert report.status != "confirmed", "「停止」不该把报告推进到已确认"
     assert report.subject_consistency == "same", "列不该被改写成 different"
+
+
+def test_historical_different_report_cannot_be_assessed():
+    """历史行的兼容闸门：列是 `different` 的已确认报告不能生成合并解读。
+
+    本次收敛前，列已是 `same` 的报告可被二次确认改写成 `different` 并照常评估
+    —— 那些报告已经存在。评估端点的准入现在也过主体闸门，它们不再继续产出
+    一份「不同主体的合并解读」。
+    """
+    from app.api.report import assess_report
+
+    session, report = _assessment_fixture(confirmation_status="confirmed")
+    report.owner_id = "account:t:u"
+    report.status = "confirmed"
+    report.subject_consistency = "different"
+    session.commit()
+
+    with (
+        patch(
+            "app.api.report.resolve_owner",
+            return_value=SimpleNamespace(storage_id="account:t:u", subject="account:t:u"),
+        ),
+        pytest.raises(HTTPException) as excinfo,
+    ):
+        asyncio.run(assess_report(report.id, SimpleNamespace(), session, owner_id=None))
+
+    assert excinfo.value.status_code == 409
+    assert "同一主体" in excinfo.value.detail

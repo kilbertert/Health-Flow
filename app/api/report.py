@@ -56,7 +56,13 @@ from app.service.mall_goods import fetch_goods, label_pairs_for, serialized
 from app.service.metric_effective_value import effective_value
 from app.service.report_ownership import UNOWNED_SENTINEL, resolve_owner
 from app.service.report_status import transition
-from app.service.report_subject import SubjectGateError, gate, initial_consistency
+from app.service.report_subject import (
+    SubjectGateError,
+    apply_declaration,
+    can_enter_reading,
+    gate,
+    initial_consistency,
+)
 from app.service.vision_encoder import ParsedReport, get_vision_encoder_service
 
 #: 只有这些状态的报告才谈得上加购：未完成确认/评估的报告没有可据以取货的风险。
@@ -707,7 +713,7 @@ async def confirm_report(
         metric.confirmed_at = now
         (corrected_ids if item.decision == "corrected" else confirmed_ids).append(metric.id)
     transition(report, "confirmed", db=db, action="confirmed", actor=resolve_owner(request).subject)
-    report.subject_consistency = settled
+    apply_declaration(report, settled)
     report.evidence_result = None
     _audit(
         db,
@@ -742,6 +748,10 @@ async def assess_report(
     )
     if report.status not in {"confirmed", "assessed"}:
         raise HTTPException(status_code=409, detail="请先确认报告指标")
+    if not can_enter_reading(report.subject_consistency):
+        # 历史行的兼容闸门：本次收敛前，列已是 `same` 的报告可被二次确认改写成
+        # `different` 并照常评估 —— 那些报告不该继续生成合并解读。
+        raise HTTPException(status_code=409, detail="这批文件不属于同一主体，不能生成合并解读；请分开上传")
     if _processing_warnings(report):
         raise HTTPException(
             status_code=409,
@@ -760,6 +770,8 @@ async def _assess_report(
     # 这里不再从 parsed_content 重新推导闸门 —— 那是旧的双通道。
     if report.status not in {"confirmed", "assessed"}:
         raise EvidenceBridgeError("报告当前状态不允许生成健康提示")
+    if not can_enter_reading(report.subject_consistency):
+        raise EvidenceBridgeError("这批文件不属于同一主体，不能生成合并解读")
     metrics = _ordered_metrics(db, report.id).all()
     # 权威目录:落定编码为空的指标在这里被重新裁决一次(确认那刻目录不可用的情况)。
     # 目录读不到时降级为 None —— 那些指标保持 unmatched,不猜。
