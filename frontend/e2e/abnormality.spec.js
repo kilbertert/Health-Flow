@@ -193,3 +193,37 @@ test.describe('异常判定口径 vs 抽取模型标记', () => {
     await expect(page.locator('.report-abnormal-summary')).toContainText('异常指标 3 项');
   });
 });
+
+// ---------------------------------------------------------------------------
+// 回归:Devin Review 在 #138 指出的两条
+// ---------------------------------------------------------------------------
+
+test.describe('排除与旧响应不能被误报或漏报', () => {
+  test.use({ viewport: { width: 375, height: 667 } });
+
+  test('字段出现之前的响应:可解析的多值异常仍被拦下', async ({ page, seed }) => {
+    const seeded = await seed({ reports: ['pending_confirmation'] });
+    const reportId = seeded.reports[0].id;
+    // 去掉判定字段,模拟 #134 之前的响应形状(契约是向后兼容的)。
+    const legacy = (report) => ({
+      ...report,
+      metrics: (report.metrics || []).map(({ inferred_abnormal_flag, ...rest }) => rest),
+    });
+    await page.route(`**/api/health/report/${reportId}`, async (route) => {
+      const res = await route.fetch();
+      await route.fulfill({ response: res, json: legacy(await res.json()) });
+    });
+    await page.route(`**/api/health/report/${reportId}/metrics`, async (route) => {
+      const res = await route.fetch();
+      await route.fulfill({ response: res, json: { metrics: legacy({ metrics: (await res.json()).metrics }).metrics } });
+    });
+
+    await loginWithSeed(page, seeded);
+    await page.getByRole('button', { name: '个人中心', exact: true }).click();
+    await page.getByRole('button', { name: '查看' }).click();
+    await page.getByRole('button', { name: '继续确认' }).click();
+    await expect(page.getByRole('heading', { name: '体检报告解读' })).toBeVisible();
+    // 旧响应里异常候选默认仍是「待核对」,不是「确认」。
+    await expect(page.getByText(/项异常候选项需要确认|其中 \d+ 项需要确认/)).toBeVisible();
+  });
+});

@@ -65,8 +65,8 @@ test('修正后的指标值优先展示', async ({ page, seed }) => {
           unit: 'mmol/L',
           reference_range: '3.9-6.1',
           abnormal_flag: 'H',
-          // 患者把 6.5 修正为 6.4,参考范围 3.9-6.1 —— 修正后仍在范围内,判定为 N。
-          inferred_abnormal_flag: 'N',
+          // 患者把 6.5 修正为 6.4,参考范围 3.9-6.1 —— 6.4 仍高于上限,判定为 H。
+          inferred_abnormal_flag: 'H',
           page_number: 1,
           evidence_text: '空腹血糖 6.4 mmol/L ↑',
           confirmation_status: 'corrected',

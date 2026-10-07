@@ -216,16 +216,31 @@ function needsReview(metric) {
 
 // 「这个值进入解读了吗」——患者可见的一句诚实说明。
 //
-// 两个条件都是服务端的答案，前端只做映射：判定为空（说明这个值用不了）**且**
-// 模型宣称它异常（说明这条本来会被当成异常项）。合起来正是「模型说它异常、
-// 但它没能进入解读」——#129 的场景：多值/带符号的值会被后端整行丢掉，界面必须
-// 在患者确认之前说清，而不是让它一路走到「已生成健康提示」。
+// 判据分两段，各自对应一种真实的、患者必须被告知的情况：
+//
+//   1. **服务端给了判定为空**：值为空（还没解析）、提示比较符、或多值/带符号
+//      解析不出一个数、没有参考范围。值本身就是用不了的。
+//   2. **服务端根本没给这个字段**（`undefined`，字段出现之前的响应）：退回
+//      原始标记的纯展示映射，不自行推导。
+//
+// 被患者**排除**的指标不算「用不了」——服务端对排除项也返回空判定，但那是
+// 患者自己的决定，值本身完全可解析；把它们标成「数值无法识别」是误导。
+//
+// 两个条件都落在服务端已知的事实上：判定为空（或用不了）**且** 模型宣称它异常
+// （说明这条本来会被当成异常项）。合起来正是「模型说它异常、但它没能进入解读」
+// ——#129 的场景：多值/带符号的值会被后端整行丢掉，界面必须在患者确认之前说清，
+// 而不是让它一路走到「已生成健康提示」。
 //
 // 取代了原先的 `valueIsUsable`：那个函数在本文件里又复刻了一遍后端的数值与
-// 范围解析规则（注释里写着「必须与后端 evidence_bridge._single_number 一致」），
-// 而服务端现在已经把「能不能判」直接告诉前端了。
-function valueUnusable(metric) {
-  return metric?.inferred_abnormal_flag === null && isAbnormal(metric?.abnormal_flag);
+// 范围解析规则（注释里写着「必须与后端 evidence_bridge._single_number 一致」）。
+export function valueUnusable(metric) {
+  // 患者排除的指标：服务端同样返回空判定，但那是患者自己的决定，值本身可解析。
+  if (metric?.confirmation_status === 'excluded') return false;
+  if (metric?.inferred_abnormal_flag === undefined) {
+    // 字段出现之前的响应：displayFlag 在这里恰好以「待核对」表达同一件事。
+    return displayFlag(metric) === '待核对';
+  }
+  return metric.inferred_abnormal_flag === null && isAbnormal(metric?.abnormal_flag);
 }
 
 // 一条指标在界面上应显示的异常标记。
