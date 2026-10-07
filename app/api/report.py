@@ -466,22 +466,6 @@ def _parse_report(
                         confirmation_status="pending",
                     )
                 )
-            _audit(
-                db,
-                report,
-                "extraction_partial" if warnings else "extraction_completed",
-                {
-                    "metric_count": len(parsed_metrics),
-                    "provider": report.extraction_provider,
-                    "model": report.extraction_model,
-                    "prompt_version": report.extraction_prompt_version,
-                    "prompt_hash": report.extraction_prompt_hash,
-                    "run_id": report.extraction_run_id,
-                    "provider_run_ids": provider_runs,
-                    "warnings": warnings,
-                },
-                actor="ai:report-extractor",
-            )
             db.commit()
         return not warnings
     except Exception as exc:

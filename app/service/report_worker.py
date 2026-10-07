@@ -11,7 +11,7 @@ from pathlib import Path
 from sqlalchemy import update
 from sqlalchemy.orm import sessionmaker
 
-from app.api.report import _parse_report
+from app.api.report import _audit, _parse_report
 from app.config import get_settings
 from app.data.models import (
     MedicalReport,
@@ -45,15 +45,29 @@ def recover_stale_jobs(factory) -> int:
             job.started_at = None
             job.updated_at = now
             report = db.get(MedicalReport, job.report_id)
+            # 回收的语义是「任务还卡在 running」,而报告可能早就解析完了
+            # (解析成功但 worker 在 ack 之前重启)。那种报告已经是
+            # pending_confirmation,把它退回 processing 会让患者核对过的行
+            # 被重新解析清空 —— 迁移表会拒绝,而且拒绝得对。所以只在报告
+            # 确实还没离开解析阶段时才动它;无论如何审计都要留痕。
             if report is not None:
-                transition(
-                    report,
-                    "processing",
-                    db=db,
-                    action="status_recovered",
-                    actor="system:report-worker",
-                    detail={"job_id": job.id, "reason": "stale_running_job"},
-                )
+                if report.status == "processing":
+                    transition(
+                        report,
+                        "processing",
+                        db=db,
+                        action="status_recovered",
+                        actor="system:report-worker",
+                        detail={"job_id": job.id, "reason": "stale_running_job"},
+                    )
+                else:
+                    _audit(
+                        db,
+                        report,
+                        "status_recovered",
+                        {"job_id": job.id, "reason": "stale_running_job", "report_status": report.status},
+                        actor="system:report-worker",
+                    )
         db.commit()
         return len(stale)
 

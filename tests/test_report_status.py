@@ -138,3 +138,53 @@ def test_recover_stale_jobs_leaves_an_audit_trail():
         events = db.query(ReportAuditEvent).all()
         assert [event.action for event in events] == ["status_recovered"]
         assert events[0].detail["reason"] == "stale_running_job"
+
+
+def test_recover_stale_jobs_leaves_a_finished_report_alone():
+    """回收卡住的任务时，不把**已经解析完**的报告退回解析中。
+
+    这条是评审发现的：解析成功、worker 在 ack 之前重启时，任务仍是 running，
+    但报告已经是 pending_confirmation。把它退回 processing 会让患者核对过的行
+    被重新解析清空 —— 迁移表拒绝这次迁移是对的。回收只动任务，报告只在它确实
+    还没离开解析阶段时才改；无论哪种情况都留审计。
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from app.data.models import Base, MedicalReport, ReportAuditEvent, ReportExtractionJob
+    from app.service.report_worker import recover_stale_jobs
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    SessionLocal = sessionmaker(bind=engine)
+    stale_at = datetime.now(UTC) - timedelta(hours=2)
+    with SessionLocal() as db:
+        finished = MedicalReport(patient_id="P", owner_id="account:t:u", status="pending_confirmation")
+        db.add(finished)
+        db.flush()
+        db.add(ReportExtractionJob(report_id=finished.id, status="running", started_at=stale_at, updated_at=stale_at))
+        db.commit()
+
+    assert recover_stale_jobs(SessionLocal) == 1
+
+    with SessionLocal() as db:
+        assert db.query(ReportExtractionJob).one().status == "queued"
+        report = db.query(MedicalReport).one()
+        assert report.status == "pending_confirmation"  # 没有被退回解析中
+        events = db.query(ReportAuditEvent).all()
+        assert [event.action for event in events] == ["status_recovered"]
+        assert events[0].detail["report_status"] == "pending_confirmation"
+
+
+def test_parse_writes_exactly_one_audit_event_per_run():
+    """一次解析只留一条 extraction_* 事件（迁移入口与旧的手写审计不重复）。"""
+    import inspect
+
+    from app.api import report as report_api
+
+    source = inspect.getsource(report_api._parse_report)
+    assert source.count('action="extraction_partial" if warnings else "extraction_completed"') == 1
+    assert "_audit(\n                db,\n                report,\n                \"extraction_partial\"" not in source
