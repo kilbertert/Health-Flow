@@ -256,6 +256,8 @@ def test_confirmed_non_hdl_abnormal_is_sent_to_evidence_service():
             evidence_text="Non-HDL 4.00 mmol/L (<3.40)",
             source_file_index=1,
             confirmation_status="confirmed",
+            # 确认时落定的编码(收敛后评估只消费它)。
+            metric_code="non_hdl_c",
         )
     )
     session.commit()
@@ -299,6 +301,8 @@ def test_non_hdl_metric_builds_auditable_observation():
         evidence_text="Non-HDL 4.00 mmol/L (<3.40)",
         source_file_index=1,
         confirmation_status="confirmed",
+        # 确认时落定的编码。收敛后评估**只**消费它,不再从名字重新推导。
+        metric_code="non_hdl_c",
     )
     observations, skipped, unmatched = build_observations_with_unmatched([metric])
 
@@ -704,3 +708,94 @@ def test_report_parse_keeps_successful_files_when_one_file_fails():
     assert saved.provider_run_id == "provider-good"
     assert json.loads(saved.provider_run_ids) == ["provider-good", "provider-bad"]
     session.close()
+
+
+def test_confirmation_survives_a_catalog_outage():
+    """目录不可用时，患者核对好的决策**仍然落库**。
+
+    收敛前 `fetch_metric_catalog()` 位于确认的主事务前部，一次 503 就让全部决策
+    一条都不保存（保存发生在 `db.commit()`，在目录读取之后）。患者核对了二十项
+    指标，因为目录抖动全部丢失。
+
+    现在降级保存：编码留作「待目录恢复后由评估路径重新裁决」，决策本身不丢。
+    这是 ARCHITECTURE.md 既定降级哲学在指标目录上的延伸。
+    """
+    from app.api.report import confirm_report
+    from app.schema.report import MetricConfirmation, ReportConfirmationRequest
+    from app.service.evidence_bridge import EvidenceBridgeError
+
+    session, report = _assessment_fixture(confirmation_status="pending", metric_code=None)
+    report.owner_id = "account:t:u"
+    session.commit()
+    request = ReportConfirmationRequest(
+        observations=[MetricConfirmation(metric_id=1, decision="confirmed")],
+        subject_consistency="same",
+    )
+
+    with (
+        patch("app.api.report.fetch_metric_catalog", side_effect=EvidenceBridgeError("目录暂不可用")),
+        patch("app.api.report._assess_report", side_effect=EvidenceBridgeError("证据服务暂不可用")),
+        patch(
+            "app.api.report.resolve_owner",
+            return_value=SimpleNamespace(storage_id="account:t:u", subject="account:t:u"),
+        ),
+    ):
+        import asyncio
+
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as excinfo:
+            asyncio.run(confirm_report(report.id, SimpleNamespace(), request, session, owner_id=None))
+        # 目录不可用不再让确认本身失败：失败的是紧随其后的评估。
+        assert excinfo.value.status_code == 503
+        assert "证据服务" in str(excinfo.value.detail)
+
+    session.refresh(report)
+    assert report.status == "confirmed", "目录不可用不该挡住确认落库"
+    assert report.metrics[0].confirmation_status == "confirmed"
+
+
+def test_stale_selected_code_falls_back_to_the_metric_name():
+    """患者选定的编码已下架时，确认回落到**按目录验证过的指标名**。
+
+    评审在 #149 指出：只试编码会让一个下架的旧编码把本来能解析的名称一起挡掉，
+    一个可识别的异常指标因此变成 unmatched。
+    """
+    from app.api.report import confirm_report
+    from app.schema.report import MetricConfirmation, ReportConfirmationRequest
+    from app.service.evidence_bridge import EvidenceBridgeError
+
+    session, report = _assessment_fixture(
+        metric_name="LDL-C",
+        metric_code="ldl_c_removed",  # 目录里没有这个编码了
+        confirmation_status="pending",
+        abnormal_flag="H",
+        metric_value="3.63",
+        reference_range="<2.60",
+        evidence_text="LDL-C 3.63 mmol/L (<2.60)",
+    )
+    report.owner_id = "account:t:u"
+    session.commit()
+    request = ReportConfirmationRequest(
+        observations=[MetricConfirmation(metric_id=1, decision="confirmed", metric_code="ldl_c_removed")],
+        subject_consistency="same",
+    )
+
+    with (
+        patch("app.api.report.fetch_metric_catalog", return_value=[{"code": "ldl_c", "label": "LDL-C"}]),
+        patch("app.api.report._assess_report", side_effect=EvidenceBridgeError("证据服务暂不可用")),
+        patch(
+            "app.api.report.resolve_owner",
+            return_value=SimpleNamespace(storage_id="account:t:u", subject="account:t:u"),
+        ),
+    ):
+        import asyncio
+
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException):
+            asyncio.run(confirm_report(report.id, SimpleNamespace(), request, session, owner_id=None))
+
+    session.refresh(report)
+    # 下架的编码挡不住名称解析：落定的是目录验证过的 ldl_c。
+    assert report.metrics[0].metric_code == "ldl_c"

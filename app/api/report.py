@@ -50,7 +50,7 @@ from app.service.evidence_bridge import (
     fetch_metric_catalog,
     infer_abnormal_flag_for_metric,
     match_published_evidence,
-    metric_code_for_name,
+    resolve_metric_code,
 )
 from app.service.mall_goods import fetch_goods, label_pairs_for, serialized
 from app.service.metric_effective_value import effective_value
@@ -357,7 +357,8 @@ def _parse_report(
             item.model_copy(
                 update={
                     "source_file_index": file_index,
-                    "metric_code": metric_code_for_name(item.metric_name),
+                    # 解析时写入：目录此刻还不可用（尚未到确认），只做名称归一化并标记待裁决。
+                    "metric_code": resolve_metric_code(item.metric_name, None),
                     "source_id": (
                         f"file-{file_index}/"
                         f"{item.source_id or ('p' + str(item.page_number or 1) + '-m' + str(metric_index))}"
@@ -629,11 +630,15 @@ async def confirm_report(
     supplied = {item.metric_id: item for item in confirmation.observations}
     if len(supplied) != len(confirmation.observations) or not set(supplied) <= set(by_id):
         raise HTTPException(status_code=422, detail="确认列表包含重复或未知指标")
+    # 目录读不到时**不挡死写路径**：患者核对好的二十项决策必须落库。
+    # 降级为「维持模型值/清空」保存，等目录恢复再由评估时的权威目录重新裁决。
+    # 这是 ARCHITECTURE.md 既定降级哲学（服务不可用时返回空证据并让上层继续运行，
+    # 不伪造检索结果）在指标目录上的延伸。
     try:
         metric_catalog = await fetch_metric_catalog()
-    except EvidenceBridgeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    canonical_codes = {item["code"] for item in metric_catalog}
+    except EvidenceBridgeError:
+        metric_catalog = None
+    canonical_codes = {item["code"] for item in metric_catalog} if metric_catalog is not None else None
     now = datetime.now()
     corrected_ids: list[int] = []
     confirmed_ids: list[int] = []
@@ -649,8 +654,12 @@ async def confirm_report(
             metric.confirmed_at = now
             excluded_ids.append(metric.id)
             continue
+        # 先试患者选定的编码，再试指标名 —— 两者都必须**回目录验证**。
+        # （只试编码会让一个目录里下架的旧编码把本来能解析的名称也一起挡掉。）
         requested_code = (item.metric_code or metric.metric_code or "").strip()
-        code = requested_code if requested_code in canonical_codes else metric_code_for_name(metric.metric_name or "")
+        code = resolve_metric_code(requested_code, canonical_codes) or resolve_metric_code(
+            metric.metric_name or "", canonical_codes
+        )
         if item.decision == "corrected":
             if not item.value or not item.unit:
                 raise HTTPException(status_code=422, detail=f"指标 {metric.id} 的修正值不完整")
@@ -660,7 +669,11 @@ async def confirm_report(
                 raise HTTPException(status_code=422, detail=f"指标 {metric.id} 的修正值必须是单个数字") from exc
             if not math.isfinite(corrected_value):
                 raise HTTPException(status_code=422, detail=f"指标 {metric.id} 的修正值无效")
-        if code not in canonical_codes:
+        # 目录不可用（降级）：无法仲裁编码，维持别名归一化的候选并清空 ——
+        # 与「目录里没有这个编码」同路：不跨证据边界，评估时表现为 unmatched，
+        # 等目录恢复后由评估路径按权威目录重新裁决。
+        code_is_canonical = canonical_codes is not None and code in canonical_codes
+        if not code_is_canonical:
             # Confirmed unknown anomalies stay auditable but never cross the
             # evidence boundary; assessment reports them as unmatched.
             metric.metric_code = None
@@ -743,7 +756,13 @@ async def _assess_report(
     if report.status not in {"confirmed", "assessed"}:
         raise EvidenceBridgeError("报告当前状态不允许生成健康提示")
     metrics = _ordered_metrics(db, report.id).all()
-    observations, local_skipped, local_unmatched = build_observations_with_unmatched(metrics)
+    # 权威目录:落定编码为空的指标在这里被重新裁决一次(确认那刻目录不可用的情况)。
+    # 目录读不到时降级为 None —— 那些指标保持 unmatched,不猜。
+    try:
+        catalog = [item["code"] for item in await fetch_metric_catalog()]
+    except EvidenceBridgeError:
+        catalog = None
+    observations, local_skipped, local_unmatched = build_observations_with_unmatched(metrics, catalog)
     typed_result = EvidenceMatchResponse.model_validate(await match_published_evidence(observations))
     source_by_id = {
         observation["observation_id"]: SourceObservation.model_validate(
