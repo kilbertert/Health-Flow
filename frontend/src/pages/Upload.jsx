@@ -988,11 +988,16 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
       // 里面就有队列生命周期。任务失败时立刻停并说明原因，任务重试时把次数
       // 告诉患者，别让他们对着一个不动的时间轴干等。
       //
-      // 上限必须**不短于**服务端的回收阈值：`REPORT_JOB_STALE_SECONDS` 默认
-      // 1200 秒（20 分钟）—— 一份报告可能一直在重试到那时才被回收。客户端先
-      // 放弃，患者就会停在一个再也不动的「解析中」，而服务端随后把它跑完了。
+      // 660 次（22 分钟）是**轮询的上限，不是完成的保证**：
+      // `REPORT_JOB_STALE_SECONDS` 衡量的是运行中任务的不活跃时长，排队延迟与
+      // 多轮重试都能超过它。取这个量级是为了覆盖一次典型的回收周期，而不是
+      // 断言报告一定会在窗口内跑完。
+      //
+      // 超时后可恢复：状态由服务端单点拥有，患者刷新或从历史列表重进会读到真实
+      // 状态，不会永远卡在「解析中」。后台续轮询（页面级轮询直到完成）属于交互
+      // 设计改动，不在本次状态收敛的范围。
       const POLL_INTERVAL_MS = 2000;
-      const MAX_ATTEMPTS = 660; // 22 分钟 > REPORT_JOB_STALE_SECONDS(1200s)
+      const MAX_ATTEMPTS = 660;
       for (let attempt = 0; data.status === 'processing' && attempt < MAX_ATTEMPTS; attempt += 1) {
         const job = data.extraction_job;
         if (job?.status === 'failed') {
