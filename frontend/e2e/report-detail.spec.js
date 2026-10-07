@@ -374,3 +374,118 @@ test.describe('指标生效值（重入确认页，移动端卡片）', () => {
     await expect(overview.getByText('被排除的指标')).toHaveCount(0);
   });
 });
+
+// 原文定位的形状与缺失（#163）：三个入口喂同一个形状，定位缺失时不猜。
+test.describe('原文定位', () => {
+  test.use({ viewport: { width: 375, height: 667 } });
+
+  /** 一份已完成报告，指标行带定位（`page_number`）。 */
+  function locatedReport(seeded, reportId, bboxNormalized = [60, 170, 140, 180]) {
+    return {
+      id: reportId,
+      patient_id: seeded.subject.owner_id,
+      report_type: '体检报告',
+      department: '健康管理中心',
+      created_at: new Date().toISOString(),
+      status: 'assessed',
+      subject_consistency: 'same',
+      metrics: [
+        {
+          id: 1,
+          report_id: reportId,
+          metric_name: '空腹血糖',
+          metric_value: '6.5',
+          unit: 'mmol/L',
+          reference_range: '3.9-6.1',
+          abnormal_flag: 'H',
+          inferred_abnormal_flag: 'H',
+          confirmation_status: 'confirmed',
+          bbox: [120.0, 340.0, 280.0, 360.0],
+          bbox_normalized: bboxNormalized,
+          source_file_index: 1,
+          page_number: 1,
+          source_id: 'file-1/p1-m1',
+          evidence_text: '空腹血糖 6.5 mmol/L ↑',
+        },
+      ],
+      files: [
+        {
+          file_index: 1,
+          original_filename: '报告.png',
+          media_type: 'image/png',
+          page_count: 1,
+          source_url: `/api/health/report/${reportId}/files/1/pages/1`,
+        },
+      ],
+      evidence_result: null,
+      processing_warnings: [],
+    };
+  }
+
+  test('报告单指标行的「查看原文」打开定位弹窗并高亮', async ({ page, seed }) => {
+    const seeded = await seed({ reports: ['assessed'] });
+    const reportId = seeded.reports[0].id;
+    await page.route(`**/api/health/report/${reportId}`, (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(locatedReport(seeded, reportId)) }),
+    );
+
+    await loginWithSeed(page, seeded);
+    await page.goto(`/#/report/${reportId}`);
+    await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible();
+    await page.getByRole('button', { name: /^查看.+原文$/ }).first().click();
+    await expect(page.getByText(/第 1 页/)).toBeVisible();
+    await expect(page.getByLabel('指标原文位置')).toBeVisible();
+  });
+
+  test('定位缺失时如实说明「无原文定位」，不猜第 1 页', async ({ page, seed }) => {
+    const seeded = await seed({ reports: ['assessed'] });
+    const reportId = seeded.reports[0].id;
+    const report = locatedReport(seeded, reportId);
+    // 页码缺失（词条允许多个组件为空 —— 定位即为空）。
+    report.metrics[0].page_number = null;
+    report.metrics[0].source_id = null;
+    await page.route(`**/api/health/report/${reportId}`, (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(report) }),
+    );
+    let pageRequests = 0;
+    await page.route('**/api/health/report/*/files/*/pages/*', (route) => {
+      pageRequests += 1;
+      return route.fulfill({ status: 404, contentType: 'application/json', body: '{}' });
+    });
+
+    await loginWithSeed(page, seeded);
+    await page.goto(`/#/report/${reportId}`);
+    await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible();
+    await page.getByRole('button', { name: /^查看.+原文$/ }).first().click();
+
+    await expect(page.getByText('无原文定位')).toBeVisible();
+    // 不猜：既没有请求第 1 页，也没有把页码说成 1。
+    expect(pageRequests).toBe(0);
+    await expect(page.getByText(/第 1 页/)).toHaveCount(0);
+  });
+});
+
+test.describe('原文定位（坐标缺失但页码在）', () => {
+  test.use({ viewport: { width: 375, height: 667 } });
+
+  test('没有坐标时定位到本页并说明「没有高亮区域」', async ({ page, seed }) => {
+    const seeded = await seed({ reports: ['assessed'] });
+    const reportId = seeded.reports[0].id;
+    await page.route(`**/api/health/report/${reportId}`, async (route) => {
+      const res = await route.fetch();
+      const json = await res.json();
+      json.metrics = json.metrics.map((metric) => ({ ...metric, bbox_normalized: null, bbox: null }));
+      await route.fulfill({ response: res, json });
+    });
+
+    await loginWithSeed(page, seeded);
+    await page.goto(`/#/report/${reportId}`);
+    await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible();
+    await page.getByRole('button', { name: /^查看.+原文$/ }).first().click();
+
+    // 定位到本页（页码在），但**说清**没有高亮区域 —— 不能让患者以为整页都是位置。
+    await expect(page.getByText(/第 1 页/)).toBeVisible();
+    await expect(page.getByText(/没有位置坐标/)).toBeVisible();
+    await expect(page.getByLabel('指标原文位置')).toHaveCount(0);
+  });
+});
