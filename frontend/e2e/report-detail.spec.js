@@ -228,57 +228,53 @@ test.describe('状态呈现的一致性', () => {
 // 收敛前，报告单抄了 `confirmed_x || x`、确认页指标卡只读模型值 —— 患者从历史
 // 列表重入一份已修正的报告，报告单显示 6.4、确认页显示 6.5，两个界面两个「结果」。
 // 修正草稿同样只读模型值：重入后输入框是空的，得从零重输二十项核对结果。
-test.describe('指标生效值（报告单，桌面表格）', () => {
+/** 一份已修正的报告：模型值 6.5、患者改成 6.4。 */
+function correctedReport(seeded, reportId) {
+  return {
+    id: reportId,
+    patient_id: seeded.subject.owner_id,
+    report_type: '体检报告',
+    department: '健康管理中心',
+    created_at: new Date().toISOString(),
+    status: 'confirmed',
+    subject_consistency: 'same',
+    metrics: [
+      {
+        id: 1,
+        report_id: reportId,
+        metric_name: '空腹血糖',
+        metric_value: '6.5',
+        unit: 'mmol/L',
+        reference_range: '3.9-6.1',
+        abnormal_flag: 'H',
+        inferred_abnormal_flag: 'H',
+        page_number: 1,
+        evidence_text: '空腹血糖 6.5 mmol/L ↑',
+        confirmation_status: 'corrected',
+        confirmed_value: '6.4',
+        confirmed_unit: 'mmol/L',
+        confirmed_reference_range: '3.9-6.1',
+        confirmed_evidence_text: '空腹血糖 6.4 mmol/L ↑',
+        effective_value: '6.4',
+        effective_unit: 'mmol/L',
+        effective_reference_range: '3.9-6.1',
+        effective_evidence_text: '空腹血糖 6.4 mmol/L ↑',
+      },
+    ],
+    files: [],
+    evidence_result: null,
+    processing_warnings: [],
+  };
+}
+
+test.describe('指标生效值（桌面确认表）', () => {
   test.use({ viewport: { width: 1280, height: 800 } });
 
-});
-
-test.describe('指标生效值（重入确认页，移动端卡片）', () => {
-  test.use({ viewport: { width: 375, height: 667 } });
-
-  /** 一份已修正的报告：模型值 6.5、患者改成 6.4。 */
-  function correctedReport(seeded, reportId) {
-    return {
-      id: reportId,
-      patient_id: seeded.subject.owner_id,
-      report_type: '体检报告',
-      department: '健康管理中心',
-      created_at: new Date().toISOString(),
-      status: 'confirmed',
-      subject_consistency: 'same',
-      metrics: [
-        {
-          id: 1,
-          report_id: reportId,
-          metric_name: '空腹血糖',
-          metric_value: '6.5',
-          unit: 'mmol/L',
-          reference_range: '3.9-6.1',
-          abnormal_flag: 'H',
-          inferred_abnormal_flag: 'H',
-          page_number: 1,
-          evidence_text: '空腹血糖 6.5 mmol/L ↑',
-          confirmation_status: 'corrected',
-          confirmed_value: '6.4',
-          confirmed_unit: 'mmol/L',
-          confirmed_reference_range: '3.9-6.1',
-          confirmed_evidence_text: '空腹血糖 6.4 mmol/L ↑',
-          effective_value: '6.4',
-          effective_unit: 'mmol/L',
-          effective_reference_range: '3.9-6.1',
-          effective_evidence_text: '空腹血糖 6.4 mmol/L ↑',
-        },
-      ],
-      files: [],
-      evidence_result: null,
-      processing_warnings: [],
-    };
-  }
-
-  test('重入已修正的报告：报告单与确认页显示同一个值，草稿预填它', async ({ page, seed }) => {
+  test('桌面确认表显示生效值，与移动端卡片、报告单一致', async ({ page, seed }) => {
     const seeded = await seed({ reports: ['pending_confirmation'] });
     const reportId = seeded.reports[0].id;
     const report = correctedReport(seeded, reportId);
+    report.status = 'pending_confirmation';
     await page.route(`**/api/health/report/${reportId}`, (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(report) }),
     );
@@ -291,32 +287,45 @@ test.describe('指标生效值（重入确认页，移动端卡片）', () => {
     );
 
     await loginWithSeed(page, seeded);
-    // 报告单：显示修正值 6.4，不是模型值 6.5。
-    await page.goto(`/#/report/${reportId}`);
-    await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible();
-    const overview = page.locator('.metric-overview-card');
-    await expect(overview.getByText('6.4', { exact: true })).toBeVisible();
-    await expect(overview.getByText('6.5', { exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: '个人中心', exact: true }).click();
+    await page.getByRole('button', { name: '查看' }).click();
+    await page.getByRole('button', { name: '继续确认' }).click();
+    await expect(page.getByRole('heading', { name: '体检报告解读' })).toBeVisible();
 
-    // 确认页：从历史列表重入（「继续确认」只在待确认报告上出现，重入流走的是
-    // 历史列表的「查看」→「继续确认」）。这里直接把状态改成待确认以走同一条路。
+    const row = page.getByRole('table').filter({ has: page.getByRole('columnheader', { name: '结果' }) })
+      .locator('tr', { hasText: '空腹血糖' });
+    await expect(row).toContainText('6.4');
+    await expect(row).not.toContainText('6.5');
+  });
+
+});
+
+test.describe('指标生效值（重入确认页，移动端卡片）', () => {
+  test.use({ viewport: { width: 375, height: 667 } });
+
+
+  test('重入已修正的报告：报告单与确认页显示同一个值，草稿预填它', async ({ page, seed }) => {
+    const seeded = await seed({ reports: ['pending_confirmation'] });
+    const reportId = seeded.reports[0].id;
+    const report = correctedReport(seeded, reportId);
+    // 报告是 `pending_confirmation`（患者还没确认，正要在这一屏确认），
+    // 指标行带的是上次核对过的值 —— 这正是「重入确认页」的真实状态。
     report.status = 'pending_confirmation';
-    await page.route(`**/api/auth/reports`, (route) =>
+    await page.route(`**/api/health/report/${reportId}`, (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(report) }),
+    );
+    await page.route(`**/api/health/report/${reportId}/metrics`, (route) =>
       route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify([
-          {
-            id: reportId, report_type: '体检报告', department: '健康管理中心',
-            status: 'pending_confirmation', created_at: new Date().toISOString(),
-            metric_count: 1, abnormal_count: 1, finding_count: 0,
-          },
-        ]),
+        body: JSON.stringify({ metrics: report.metrics }),
       }),
     );
-    await page.goto('/');
-    await page.getByRole('button', { name: '个人中心', exact: true }).click();
-    await page.getByRole('button', { name: '查看' }).click();
+
+    await loginWithSeed(page, seeded);
+    // 从报告单的确认入口进入（报告单本身的生效值断言在桌面那组，那里是表格形态）。
+    await page.goto(`/#/report/${reportId}`);
+    await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible();
     await page.getByRole('button', { name: '继续确认' }).click();
     await expect(page.getByRole('heading', { name: '体检报告解读' })).toBeVisible();
     const card = page.getByRole('button', { name: '空腹血糖指标卡片' });

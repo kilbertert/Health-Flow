@@ -1110,9 +1110,20 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
   const metricColumns = useMemo(() => [
     { title: '文件', dataIndex: 'source_file_index', width: 60, render: (v) => `#${v}` },
     { title: '指标', dataIndex: 'metric_name', width: 140 },
-    { title: '模型值', dataIndex: 'metric_value', width: 90 },
-    { title: '单位', dataIndex: 'unit', width: 80 },
-    { title: '参考范围', dataIndex: 'reference_range', width: 110 },
+    // 与移动端卡片、报告单显示同一份值：确认过/修正过的指标显示生效值，
+    // 否则显示模型值（那就是它的临时生效值）。
+    {
+      title: '结果', key: 'effective_value', width: 90,
+      render: (_, record) => record.effective_value || record.metric_value || '—',
+    },
+    {
+      title: '单位', key: 'effective_unit', width: 80,
+      render: (_, record) => record.effective_unit || record.unit || '—',
+    },
+    {
+      title: '参考范围', key: 'effective_reference_range', width: 110,
+      render: (_, record) => record.effective_reference_range || record.reference_range || '—',
+    },
     {
       title: '异常', key: 'abnormal_flag', width: 90,
       render: (_, record) => (
@@ -1125,7 +1136,10 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
         </Space>
       ),
     },
-    { title: '证据原文', dataIndex: 'evidence_text', width: 220, ellipsis: true },
+    {
+      title: '证据原文', key: 'effective_evidence_text', width: 220, ellipsis: true,
+      render: (_, record) => record.effective_evidence_text || record.evidence_text || '—',
+    },
     {
       title: '原文', key: 'source', width: 62,
       render: (_, record) => record.page_number ? (
