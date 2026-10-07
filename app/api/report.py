@@ -654,8 +654,12 @@ async def confirm_report(
             metric.confirmed_at = now
             excluded_ids.append(metric.id)
             continue
+        # 先试患者选定的编码，再试指标名 —— 两者都必须**回目录验证**。
+        # （只试编码会让一个目录里下架的旧编码把本来能解析的名称也一起挡掉。）
         requested_code = (item.metric_code or metric.metric_code or "").strip()
-        code = resolve_metric_code(requested_code or metric.metric_name or "", canonical_codes)
+        code = resolve_metric_code(requested_code, canonical_codes) or resolve_metric_code(
+            metric.metric_name or "", canonical_codes
+        )
         if item.decision == "corrected":
             if not item.value or not item.unit:
                 raise HTTPException(status_code=422, detail=f"指标 {metric.id} 的修正值不完整")
@@ -752,7 +756,13 @@ async def _assess_report(
     if report.status not in {"confirmed", "assessed"}:
         raise EvidenceBridgeError("报告当前状态不允许生成健康提示")
     metrics = _ordered_metrics(db, report.id).all()
-    observations, local_skipped, local_unmatched = build_observations_with_unmatched(metrics)
+    # 权威目录:落定编码为空的指标在这里被重新裁决一次(确认那刻目录不可用的情况)。
+    # 目录读不到时降级为 None —— 那些指标保持 unmatched,不猜。
+    try:
+        catalog = [item["code"] for item in await fetch_metric_catalog()]
+    except EvidenceBridgeError:
+        catalog = None
+    observations, local_skipped, local_unmatched = build_observations_with_unmatched(metrics, catalog)
     typed_result = EvidenceMatchResponse.model_validate(await match_published_evidence(observations))
     source_by_id = {
         observation["observation_id"]: SourceObservation.model_validate(

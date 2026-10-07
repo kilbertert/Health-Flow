@@ -106,10 +106,18 @@ def test_cleared_code_is_not_revived_by_the_name():
         confirmation_status="confirmed",
         metric_code=None,  # 确认时被清空
     )
+    # 目录不可用：不复活（没有目录就没有验证，宁可不匹配也不猜）。
     observations, _, unmatched = build_observations_with_unmatched([metric])
-
-    assert observations == [], "清空过的编码不该被复活成 observation"
+    assert observations == [], "目录不可用时清空过的编码不该被复活"
     assert unmatched and unmatched[0]["metric_code"] is None
+
+    # 目录可用且能验证这个名称：允许重新裁决（这是「等目录恢复后重新裁决」的兑现）。
+    observations, _, _ = build_observations_with_unmatched([metric], CATALOG)
+    assert observations and observations[0]["metric_code"] == "non_hdl_c"
+
+    # 目录可用但**不认**这个名称：保持 unmatched —— 别名表不是第二套事实来源。
+    observations, _, unmatched = build_observations_with_unmatched([metric], ["some_other_code"])
+    assert observations == []
 
 
 def test_confirmed_code_is_what_crosses_the_boundary():
@@ -131,3 +139,38 @@ def test_confirmed_code_is_what_crosses_the_boundary():
     )
     observations, _, _ = build_observations_with_unmatched([metric])
     assert observations[0]["metric_code"] == "non_hdl_c"
+
+
+# ---------------------------------------------------------------------------
+# 复审发现的三条（#149）
+# ---------------------------------------------------------------------------
+
+def test_catalog_outage_does_not_permanently_unmatch():
+    """目录中断时落定的空编码，**目录恢复后会被重新裁决**。
+
+    评审指出：确认时目录不可用 → 编码清空；如果评估路径也从不重新解析，那些
+    指标就**永久**变成 unmatched，目录恢复也救不回来。
+    """
+    from app.data.models import MetricRecord as MetricModel
+    from app.service.evidence_bridge import build_observations_with_unmatched
+
+    metric = MetricModel(
+        id=1, report_id=1, metric_name="Non-HDL", metric_value="4.00", unit="mmol/L",
+        reference_range="<3.40", page_number=1, evidence_text="Non-HDL 4.00 mmol/L (<3.40)",
+        source_file_index=1, confirmation_status="confirmed", metric_code=None,
+    )
+    observations, _, _ = build_observations_with_unmatched([metric], CATALOG)
+    assert observations and observations[0]["metric_code"] == "non_hdl_c"
+
+
+def test_stale_requested_code_falls_back_to_the_metric_name():
+    """患者选定的编码若已从目录下架，**回落到按目录验证过的指标名**。
+
+    评审指出：只试编码会让一个下架的旧编码把本来能解析的名称一起挡掉 —— 一个
+    可识别的异常指标因此变成 unmatched。
+    """
+    # 下架的编码 + 能解析的名称 → 按名称解析成功。
+    assert resolve_metric_code("ldl_c_removed", CATALOG) is None
+    assert resolve_metric_code("LDL-C", CATALOG) == "ldl_c"
+    # 两者都解析不出才是 unmatched。
+    assert resolve_metric_code("完全未知", CATALOG) is None

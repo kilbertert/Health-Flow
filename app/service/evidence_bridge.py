@@ -150,6 +150,7 @@ def build_observations_with_skipped(
 
 def build_observations_with_unmatched(
     metrics: Iterable[Any],
+    catalog: Iterable[str] | None = None,
 ) -> tuple[
     list[dict[str, object]],
     list[dict[str, object]],
@@ -165,8 +166,13 @@ def build_observations_with_unmatched(
         effective = effective_value(metric)
         value_text = effective.value
         unit = effective.unit
-        # 只消费确认时落定的编码：确认时清空就是清空，不再从名字重新推导。
+        # 优先消费确认时落定的编码。落定为空时（确认那刻目录不可用，或该编码
+        # 当时不在目录里）**用权威目录重新裁决一次** —— 但只在目录**可用**时。
+        # 目录不可用时保持 unmatched：没有目录就没有验证，宁可不匹配也不猜。
+        # 这条正是旧代码的反面 —— 旧代码在目录不可用时用本地别名快照复活。
         code = metric.metric_code
+        if not code and catalog is not None:
+            code = resolve_metric_code(metric.metric_name or "", catalog)
         evidence = effective.evidence_text
         if not unit or not evidence or metric.page_number is None:
             reason = (

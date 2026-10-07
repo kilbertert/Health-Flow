@@ -753,3 +753,49 @@ def test_confirmation_survives_a_catalog_outage():
     session.refresh(report)
     assert report.status == "confirmed", "目录不可用不该挡住确认落库"
     assert report.metrics[0].confirmation_status == "confirmed"
+
+
+def test_stale_selected_code_falls_back_to_the_metric_name():
+    """患者选定的编码已下架时，确认回落到**按目录验证过的指标名**。
+
+    评审在 #149 指出：只试编码会让一个下架的旧编码把本来能解析的名称一起挡掉，
+    一个可识别的异常指标因此变成 unmatched。
+    """
+    from app.api.report import confirm_report
+    from app.schema.report import MetricConfirmation, ReportConfirmationRequest
+    from app.service.evidence_bridge import EvidenceBridgeError
+
+    session, report = _assessment_fixture(
+        metric_name="LDL-C",
+        metric_code="ldl_c_removed",  # 目录里没有这个编码了
+        confirmation_status="pending",
+        abnormal_flag="H",
+        metric_value="3.63",
+        reference_range="<2.60",
+        evidence_text="LDL-C 3.63 mmol/L (<2.60)",
+    )
+    report.owner_id = "account:t:u"
+    session.commit()
+    request = ReportConfirmationRequest(
+        observations=[MetricConfirmation(metric_id=1, decision="confirmed", metric_code="ldl_c_removed")],
+        subject_consistency="same",
+    )
+
+    with (
+        patch("app.api.report.fetch_metric_catalog", return_value=[{"code": "ldl_c", "label": "LDL-C"}]),
+        patch("app.api.report._assess_report", side_effect=EvidenceBridgeError("证据服务暂不可用")),
+        patch(
+            "app.api.report.resolve_owner",
+            return_value=SimpleNamespace(storage_id="account:t:u", subject="account:t:u"),
+        ),
+    ):
+        import asyncio
+
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException):
+            asyncio.run(confirm_report(report.id, SimpleNamespace(), request, session, owner_id=None))
+
+    session.refresh(report)
+    # 下架的编码挡不住名称解析：落定的是目录验证过的 ldl_c。
+    assert report.metrics[0].metric_code == "ldl_c"
