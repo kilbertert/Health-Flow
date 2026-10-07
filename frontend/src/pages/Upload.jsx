@@ -715,10 +715,20 @@ function initialDrafts(metrics) {
   ]));
 }
 
+// 主体一致性的两个派生问题。它们与服务端 `app/service/report_subject.py` 的
+// `can_enter_reading` / `is_stop_declaration` 一一对应 —— 前端只做映射，不重新
+// 发明语义（此前这两处在两个组件里各推导一遍）。
+function needsSubjectDeclaration(result) {
+  return result?.status === 'pending_confirmation' && result?.subject_consistency !== 'same';
+}
+
+function isSubjectStop(declared) {
+  return Boolean(declared) && declared !== 'same';
+}
+
 export function TechnicalDetails({ result, subjectConsistency, onSubjectConsistencyChange }) {
   const trace = result.extraction_trace;
-  const subjectNeedsConfirmation = result.status === 'pending_confirmation'
-    && result.subject_consistency !== 'same';
+  const subjectNeedsConfirmation = needsSubjectDeclaration(result);
   return (
     <Descriptions column={{ xs: 1, sm: 2, md: 2 }} size="small" bordered>
       <Descriptions.Item label="文件主体一致性">
@@ -732,7 +742,12 @@ export function TechnicalDetails({ result, subjectConsistency, onSubjectConsiste
               { label: '不同主体，停止', value: 'different' },
               { label: '无法确认，停止', value: 'uncertain' },
             ]}
-            onChange={onSubjectConsistencyChange}
+            onChange={(value) => {
+              onSubjectConsistencyChange(value);
+              if (value && value !== 'same') {
+                message.warning('这批文件不属于同一主体，不能合并解读；请返回上传页分开上传。');
+              }
+            }}
             style={{ width: '100%', maxWidth: 220 }}
           />
         ) : (result.subject_consistency || '—')}
@@ -821,8 +836,7 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
     return () => { active = false; };
   }, [initialReportId]);
 
-  const subjectGateOpen = result?.status === 'pending_confirmation'
-    && result?.subject_consistency !== 'same';
+  const subjectGateOpen = needsSubjectDeclaration(result);
   useEffect(() => {
     if (subjectGateOpen) setTechnicalDetailsOpen(true);
   }, [subjectGateOpen]);
@@ -1034,6 +1048,11 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
     if (!result) return;
     if (Array.isArray(result.processing_warnings) && result.processing_warnings.length > 0) {
       message.warning('仍有文件未完成解析，不能生成健康提示');
+      return;
+    }
+    if (isSubjectStop(subjectConsistency)) {
+      // 「停止」不是一次失败的提交，而是一个明确的结论：这批文件不该合并解读。
+      message.warning('这批文件不属于同一主体，不能合并解读；请返回上传页分开上传。');
       return;
     }
     if (result.subject_consistency !== 'same' && subjectConsistency !== 'same') {
