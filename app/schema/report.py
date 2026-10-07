@@ -154,7 +154,7 @@ class MedicalReportResponse(BaseModel):
     status: Literal["processing", "pending_confirmation", "confirmed", "assessed", "failed"] = (
         "pending_confirmation"
     )
-    subject_consistency: str | None = None
+    subject_consistency: Literal["same", "different", "uncertain"] | None = None
     evidence_result: EvidenceMatchResponse | None = None
     processing_error: str | None = None
     processing_warnings: list[str] = Field(default_factory=list)
