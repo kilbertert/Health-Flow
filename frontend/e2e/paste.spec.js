@@ -20,7 +20,10 @@ function uploadResponse(seeded, files) {
     department: '',
     created_at: new Date().toISOString(),
     status: 'pending_confirmation',
-    subject_consistency: files.length === 1 ? 'same' : 'uncertain',
+    // 这里不再手抄上传时的初始判定规则（单文件 same / 多文件 uncertain）。
+    // 那条规则属于服务端（app/service/report_subject.py 的 initial_consistency）。
+    // 本用例只关心粘贴入列，用 `same` 让闸门保持关闭即可。
+    subject_consistency: 'same',
     metrics: [],
     files: files.map((file, index) => ({
       file_index: index + 1,

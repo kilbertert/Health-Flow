@@ -356,7 +356,6 @@ export default function ReportDetailPage({ account, reportId, onBack, onContinue
                 <TechnicalDetails
                   result={result}
                   subjectConsistency={result.subject_consistency || ''}
-                  onSubjectConsistencyChange={() => {}}
                 />
               ),
             }]}

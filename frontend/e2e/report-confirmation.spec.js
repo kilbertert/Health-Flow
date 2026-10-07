@@ -170,3 +170,65 @@ test.describe('标准指标目录不可用', () => {
     expect(confirmationBody.observations.length).toBeGreaterThan(0);
   });
 });
+
+// 主体一致性的「停止」（#152）：它是一条真实的结论，不是一次失败的提交。
+//
+// 收敛前：确认面板提供「不同主体，停止」「无法确认，停止」，但本地闸门对任何非
+// `same` 一律拦下、发送体又写死 `|| 'same'` —— **这两个选项在代码里没有出路**，
+// 患者选了它，报告永远停在待确认且没有任何指引。
+test.describe('主体一致性的「停止」', () => {
+  test.use({ viewport: { width: 375, height: 667 } });
+
+  /** 一份待确认的报告，服务端已判 `uncertain`（多文件形态）。
+   *
+   * 种子的报告都是单文件的（服务端会把它自动判为 `same`），而 `uncertain` 只在
+   * **多文件**上传时出现 —— 所以这里用 `page.route` 改的是**服务端会给出的那份
+   * 响应**，不是伪造一个不存在的状态：多文件 + `uncertain` 正是这个闸门存在的
+   * 理由。seed 支持多文件后可以改为直接种出来。
+   */
+  async function openUncertainReport(page, seed) {
+    const seeded = await seed({ reports: ['pending_confirmation'] });
+    const reportId = seeded.reports[0].id;
+    await page.route(`**/api/health/report/${reportId}`, async (route) => {
+      const res = await route.fetch();
+      const json = await res.json();
+      await route.fulfill({ response: res, json: { ...json, subject_consistency: 'uncertain' } });
+    });
+    await loginWithSeed(page, seeded);
+    await page.getByRole('button', { name: '个人中心', exact: true }).click();
+    await page.getByRole('button', { name: '查看' }).click();
+    await page.getByRole('button', { name: '继续确认' }).click();
+    await expect(page.getByRole('heading', { name: '体检报告解读' })).toBeVisible();
+    return reportId;
+  }
+
+  test('选「不同主体，停止」：给出分开上传的引导，且不发出确认请求', async ({ page, seed }) => {
+    let confirmCalls = 0;
+    const reportId = await openUncertainReport(page, seed);
+    await page.route(`**/api/health/report/${reportId}/confirm`, (route) => {
+      confirmCalls += 1;
+      return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+    });
+
+    // 主体面板在「技术详情」里（闸门打开时自动展开）。
+    await page.getByLabel('确认文件属于同一主体').click();
+    await page.locator('.ant-select-item-option').filter({ hasText: '不同主体，停止' }).click();
+
+    // 选择的那一刻就给出引导 —— 不必等患者点提交。措辞是「不属于同一主体」。
+    await expect(page.getByText(/这批文件不属于同一主体.*分开上传/).first()).toBeVisible();
+
+    // 仍然点提交：不发出确认请求，引导仍在。
+    await page.getByRole('button', { name: '确认并生成健康提示' }).click();
+    await expect(page.getByText(/这批文件不属于同一主体.*分开上传/).first()).toBeVisible();
+    expect(confirmCalls).toBe(0);
+  });
+
+  test('选「无法确认，停止」：措辞是「无法确认」而不是「不属于同一主体」', async ({ page, seed }) => {
+    await openUncertainReport(page, seed);
+    await page.getByLabel('确认文件属于同一主体').click();
+    await page.locator('.ant-select-item-option').filter({ hasText: '无法确认，停止' }).click();
+    await expect(page.getByText(/无法确认这批文件属于同一主体.*分开上传/).first()).toBeVisible();
+    // 不替患者下结论。
+    await expect(page.getByText(/这批文件不属于同一主体/)).toHaveCount(0);
+  });
+});
