@@ -35,6 +35,7 @@ from app.schema.evidence import (
     Skipped,
     SourceObservation,
     Unmatched,
+    build_patient_notices,
 )
 from app.schema.report import (
     CartLinkResponse,
@@ -807,26 +808,11 @@ async def _assess_report(
                 ]
             }
         )
-    if typed_result.unmatched:
-        finding_count = len(typed_result.findings)
-        unmatched_count = len(typed_result.unmatched)
-        summary = (
-            f"发现 {finding_count} 个可能相关健康问题；另有 {unmatched_count} 条指标与健康问题关联暂无已审核知识卡。"
-            if finding_count
-            else f"发现 {unmatched_count} 个异常指标，但暂无已审核内容。"
-        )
-        typed_result = typed_result.model_copy(
-            update={
-                "message": summary,
-                "patient_reply": typed_result.patient_reply.model_copy(
-                    update={
-                        "summary": summary,
-                        "unmatched_count": unmatched_count,
-                    }
-                ),
-            }
-        )
-    report.evidence_result = typed_result.model_dump(mode="json")
+    # 患者投影：从证据服务响应**确定性**构造，唯一的出域形状。
+    # 摘要**无条件**由这里产出 —— 此前只在 `unmatched` 非空时才改写 message 与
+    # patient_reply.summary，两者可以各说各话。
+    notices = build_patient_notices(typed_result, unmatched=typed_result.unmatched, skipped=typed_result.skipped)
+    report.evidence_result = notices.model_dump(mode="json")
     report.evidence_correlation_id = typed_result.correlation_id
     _audit(
         db,

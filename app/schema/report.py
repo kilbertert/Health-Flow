@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.schema.evidence import EvidenceMatchResponse
+from app.schema.evidence import PatientNotices
 
 
 class MetricRecord(BaseModel):
@@ -155,7 +155,8 @@ class MedicalReportResponse(BaseModel):
         "pending_confirmation"
     )
     subject_consistency: Literal["same", "different", "uncertain"] | None = None
-    evidence_result: EvidenceMatchResponse | None = None
+    # 患者可见的健康风险提示（唯一出域的形状）。内部事实层不出域。
+    evidence_result: PatientNotices | None = None
     processing_error: str | None = None
     processing_warnings: list[str] = Field(default_factory=list)
     extraction_job: ReportExtractionJobResponse | None = None

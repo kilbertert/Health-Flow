@@ -192,6 +192,135 @@ class PatientReply(StrictModel):
     disclaimer: str
 
 
+class PatientNotices(StrictModel):
+    """患者可见的健康风险提示（GLOSSARY.md 的「健康风险提示」）。
+
+    这是**唯一**出域给浏览器的形状。内部事实层（`Finding` 的 `sorting` /
+    `epidemiology_background` / `card.published_at` 等）留在服务端 —— 它此前
+    连同患者投影一起经 `evidence_result` 原样透出，客户端再用 `condition_code`
+    当场 join 两个数组。
+
+    `summary` 与 `PatientReply.summary` 恒等：投影由一个函数产出，摘要也就只有
+    一个来源（此前端点只在 `unmatched` 非空时改写，两处可以各说各话）。
+    """
+
+    correlation_id: str
+    title: Literal["体检报告解读与健康风险提示"]
+    summary: str
+    findings: list[PatientFinding]
+    unmatched: list[Unmatched]
+    skipped: list[Skipped]
+    unmatched_count: int = Field(ge=0)
+    disclaimer: str
+
+
+def build_patient_notices(
+    result: "EvidenceMatchResponse",
+    *,
+    unmatched: list[Unmatched] | None = None,
+    skipped: list[Skipped] | None = None,
+) -> PatientNotices:
+    """从证据服务响应构造**唯一的患者可见投影**（GLOSSARY.md 的「健康风险提示」）。
+
+    这是本仓库里唯一允许决定「患者看到什么」的函数：
+
+    - **形状**：只输出 `PatientNotices` —— 内部事实层的 `sorting` /
+      `epidemiology_background` / `card.published_at` 等不出域；
+    - **摘要**：无条件的单一来源。此前端点在 `unmatched` 非空时才改写
+      `message` 与 `patient_reply.summary`，两者可以各说各话；
+    - **v2→v3 归一**：v2 单卡（`PatientFinding.card_id`）在这里就转成
+      `evidence_items`，不在浏览器渲染函数里做（`Upload.jsx` 曾用已废弃的 v2
+      字段现场合成一份 `EvidenceItem`）；
+    - **身份**：由 `EvidenceMatchResponse.validate_condition_identity` 保证唯一
+      且与内部事实层对应。
+    """
+    final_unmatched = unmatched if unmatched is not None else result.unmatched
+    final_skipped = skipped if skipped is not None else result.skipped
+    finding_count = len(result.findings)
+    unmatched_count = len(final_unmatched)
+    if finding_count and unmatched_count:
+        summary = (
+            f"发现 {finding_count} 个可能相关健康问题；"
+            f"另有 {unmatched_count} 条指标与健康问题关联暂无已审核知识卡。"
+        )
+    elif finding_count:
+        summary = f"发现 {finding_count} 个可能相关健康问题。"
+    elif unmatched_count:
+        summary = f"发现 {unmatched_count} 个异常指标，但暂无已审核内容。"
+    else:
+        summary = "本次报告的指标均在参考区间内，未见需要关注的问题。"
+
+    findings = [_patient_finding(finding) for finding in result.findings]
+    return PatientNotices(
+        correlation_id=result.correlation_id,
+        title=result.patient_reply.title,
+        summary=summary,
+        findings=findings,
+        unmatched=final_unmatched,
+        skipped=final_skipped,
+        unmatched_count=unmatched_count,
+        disclaimer=result.patient_reply.disclaimer,
+    )
+
+
+def _patient_finding(finding: "Finding") -> PatientFinding:
+    """内部事实层 → 患者可见层。**v2→v3 的归一只在这里做一次。**
+
+    此前这一步在浏览器的渲染函数里（`Upload.jsx` 的 `evidenceItemsFor`）：两个
+    形状都没有 `evidence_items` 时，用已废弃的 v2 单卡字段现场合成一个
+    `EvidenceItem`。契约版本迁移写在 React 里，就是「契约没有家」。
+
+    v3 直接搬运 `evidence_items`；v2（只有 `card` 与 deprecated 字段）在服务端
+    转成 v3 形状。v2 且没有来源观测时保留 v2 形态（`card_id` 等），
+    让 `PatientFinding` 自己的 v2 分支接住 —— 不伪造一条不存在的观测。
+    """
+    common = {
+        "condition_code": finding.condition_code,
+        "condition_name": finding.condition_name,
+        "urgency": finding.urgency,
+        "abnormality_severity": finding.abnormality_severity,
+        "evidence_strength": finding.evidence_strength,
+        "needs_recheck": finding.needs_recheck,
+        "department": finding.department,
+        "recheck_direction": finding.recheck_direction,
+        "source_observation_ids": finding.source_observation_ids,
+        "source_observations": finding.source_observations,
+    }
+    if finding.evidence_items:
+        return PatientFinding(**common, evidence_items=finding.evidence_items)
+    if finding.card is None:
+        # 既无 evidence_items 也无 card：`Finding` 的校验保证不会走到这里。
+        return PatientFinding(**common, evidence_items=[])
+    if not finding.source_observations:
+        # v2 且没有来源观测：保留 v2 形态，不伪造观测。
+        return PatientFinding(
+            **common,
+            card_id=finding.card.id,
+            card_version=finding.card.version,
+            evidence_profile_id=finding.card.evidence_profile_id,
+            patient_visible_body=finding.card.patient_visible_body,
+            sources=finding.card.sources,
+        )
+    metric_code = (finding.card.scope_key or "metric:").split(":", 1)[1]
+    return PatientFinding(
+        **common,
+        evidence_items=[
+            EvidenceItem(
+                metric_code=metric_code,
+                metric_label=finding.condition_name,
+                card=finding.card,
+                evidence_strength=(
+                    finding.evidence_strength
+                    if finding.evidence_strength in {"high", "moderate", "low", "very_low"}
+                    else "moderate"
+                ),
+                source_observation_ids=finding.source_observation_ids,
+                source_observations=finding.source_observations,
+            )
+        ],
+    )
+
+
 class EvidenceMatchResponse(StrictModel):
     schema_version: Literal["2", "3"]
     sorting_version: Literal["published-card-reference-range-v1"]
@@ -209,4 +338,35 @@ class EvidenceMatchResponse(StrictModel):
                 raise ValueError("schema v3 findings require metric-level evidence_items")
             if any(not finding.evidence_items for finding in self.patient_reply.findings):
                 raise ValueError("schema v3 patient findings require evidence_items")
+        return self
+
+    @model_validator(mode="after")
+    def validate_condition_identity(self) -> "EvidenceMatchResponse":
+        """健康问题的身份在投影内唯一，且与内部事实层一一对应。
+
+        此前没有任何校验：客户端拿 `condition_code` 当 join key 用一个 `Map`
+        合并两个数组，重复时**静默折叠最后一条**（两张卡片共用它的证据与推荐）。
+        本仓库对「指标↔卡」的一致性早就有先例（`EvidenceItem.validate_scope`），
+        条件码的一致性一直没有。
+
+        校验失败走调用方既有的「证据服务返回格式无效」路径，而不是让客户端
+        猜。内部事实层的每个健康问题**必须**在投影里出现且只出现一次 ——
+        投影是 `Finding` 的患者可见形态，不是它的子集。
+        """
+        internal = [finding.condition_code for finding in self.findings]
+        if len(set(internal)) != len(internal):
+            raise ValueError("findings contain duplicate condition_code")
+        projected = [finding.condition_code for finding in self.patient_reply.findings]
+        if len(set(projected)) != len(projected):
+            raise ValueError("patient_reply.findings contain duplicate condition_code")
+        # 投影里的每个健康问题都必须在内部事实层里有对应项 —— 否则客户端拿着
+        # 一个 join 不到的 key。**不要求反向**：内部层可以比投影多（投影是
+        # 患者可见的部分），且这是跨仓契约（证据服务在另一个仓库），
+        # 不该由消费方单方面要求两侧集合相等。
+        if not set(projected) <= set(internal):
+            raise ValueError("patient_reply.findings must correspond to findings")
+        for finding in self.findings:
+            for item in finding.evidence_items:
+                if item.card.condition_code != finding.condition_code:
+                    raise ValueError("evidence item card condition does not match its finding")
         return self

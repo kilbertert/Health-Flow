@@ -133,21 +133,6 @@ def metric_code_for_name(name: str) -> str | None:
     return resolve_metric_code(name, None)
 
 
-def build_observations(metrics: Iterable[Any]) -> list[dict[str, object]]:
-    """Build confirmed observations, preserving the legacy list return type."""
-
-    observations, _ = build_observations_with_skipped(metrics)
-    return observations
-
-
-def build_observations_with_skipped(
-    metrics: Iterable[Any],
-) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-    """Build confirmed observations and rows that cannot cross."""
-    observations, skipped, _ = build_observations_with_unmatched(metrics)
-    return observations, skipped
-
-
 def build_observations_with_unmatched(
     metrics: Iterable[Any],
     catalog: Iterable[str] | None = None,
