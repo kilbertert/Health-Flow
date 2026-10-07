@@ -418,7 +418,10 @@ function MetricCard({ metric, draft, metricCatalog, disabled, onUpdateDraft, onO
 export function SourceEvidence({ reportId, reportToken, metric, file }) {
   const [sourceUrl, setSourceUrl] = useState('');
   const [sourceError, setSourceError] = useState('');
-  const page = metric?.page_number || metric?.source_page || 1;
+  // 位置只有一个适配器：两种词汇（指标行用 `page_number`、来源观测用
+  // `source_page`）→ 一个对象。这里**不兜底到第 1 页** —— 定位缺失时如实说
+  // 「无原文定位」，而不是把患者送到错误的页（词条的「不猜测」）。
+  const page = metric?.page_number ?? metric?.source_page ?? null;
   const fileIndex = metric?.source_file_index;
   useEffect(() => {
     if (!metric) return undefined;
@@ -426,6 +429,10 @@ export function SourceEvidence({ reportId, reportToken, metric, file }) {
     let objectUrl = '';
     setSourceUrl('');
     setSourceError('');
+    if (page === null || fileIndex === undefined) {
+      // 定位为空 —— 不请求，也不猜一页。
+      return undefined;
+    }
     fetchReportPage(reportId, fileIndex, page, reportToken)
       .then((blob) => {
         if (!active) return;
@@ -441,6 +448,21 @@ export function SourceEvidence({ reportId, reportToken, metric, file }) {
     };
   }, [reportId, reportToken, fileIndex, page, metric]);
   if (!metric) return null;
+  if (page === null || fileIndex === undefined) {
+    return (
+      <div>
+        <Alert
+          type="info"
+          showIcon
+          title="无原文定位"
+          description="这条指标没有可用的原文位置（文件编号或页码缺失），无法定位到报告页面。"
+        />
+        <Typography.Paragraph copyable style={{ marginTop: 12 }}>
+          {metric.evidence_text || '未提取到原文片段'}
+        </Typography.Paragraph>
+      </div>
+    );
+  }
   const box = metric.bbox_normalized;
   const highlight = Array.isArray(box) && box.length === 4 ? {
     left: `${box[0] / 10}%`,
@@ -651,11 +673,12 @@ function EvidenceSummaryCard({ result, onOpenSource }) {
                         type="text"
                         icon={<EyeOutlined />}
                         aria-label={`查看${item.metric_label || '异常指标'}原文`}
+                        // 三种入口喂**同一个形状**：观测形状本身（`source_page`）
+                        // 就够 —— `SourceEvidence` 的适配器认识两种词汇，
+                        // 这里不需要再手工改写一遍。
                         onClick={() => onOpenSource?.({
                           ...source,
-                          page_number: source.source_page,
                           metric_name: item.metric_label,
-                          evidence_text: source.evidence_text,
                         })}
                       />
                     </Tooltip>,

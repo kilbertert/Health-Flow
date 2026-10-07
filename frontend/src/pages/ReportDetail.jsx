@@ -83,7 +83,9 @@ function metricColumns(onOpenSource) {
       title: '原文',
       key: 'source',
       width: 70,
-      render: (_, record) => (record.page_number ? (
+      // 定位缺失时不再是一个沉默的「—」：按钮照常在，弹窗如实说明
+      // 「无原文定位」（#163）。
+      render: (_, record) => (
         <Tooltip title="查看报告原文定位">
           <Button
             type="text"
@@ -92,7 +94,7 @@ function metricColumns(onOpenSource) {
             onClick={() => onOpenSource(record)}
           />
         </Tooltip>
-      ) : '—'),
+      ),
     },
   ];
 }
