@@ -134,9 +134,9 @@ test.describe('异常判定口径', () => {
     await page.goto(`/#/report/${reportId}`);
     await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible();
     await expect(page.locator('.report-abnormal-summary')).toContainText('未见异常指标');
-    // 被排除的那一项仍列在指标总览里（它是报告的一部分），但不带异常标记。
-    const excludedRow = page.locator('.metric-overview-card').getByText('甘油三酯');
-    await expect(excludedRow).toBeVisible();
+    // #144 起：患者明确排除的指标**不再出现在报告单总览**（服务端不给生效值，
+    // 前端只按它过滤）。患者不会看到自己刚排除的指标还挂在报告上。
+    await expect(page.locator('.metric-overview-card').getByText('甘油三酯')).toHaveCount(0);
     await expect(page.locator('.report-abnormal-summary')).not.toContainText('异常指标 1 项');
   });
 });

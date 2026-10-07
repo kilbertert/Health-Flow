@@ -323,8 +323,8 @@ function MetricCard({ metric, draft, metricCatalog, disabled, onUpdateDraft, onO
         >
           <span className="metric-card-name">{metric.metric_name}</span>
           <span className="metric-card-value">
-            {metric.metric_value}
-            {metric.unit ? ` ${metric.unit}` : ''}
+            {metric.effective_value}
+            {metric.effective_unit ? ` ${metric.effective_unit}` : ''}
           </span>
           {abnormalTag(displayFlag(metric))}
           {/* 多值/带符号的行：先告诉用户「这个值用不了」，而不是等它被后端悄悄丢掉 */}
@@ -705,10 +705,12 @@ function initialDrafts(metrics) {
     {
       decision: initialDecision(metric),
       metric_code: metric.metric_code || '',
-      value: metric.metric_value || '',
-      unit: metric.unit || '',
-      reference_range: metric.reference_range || '',
-      evidence_text: metric.evidence_text || '',
+      // 生效值：pending 指标就是模型值（临时生效值），已确认/已修正的指标是
+      // 患者上次核对过的值 —— 重入时输入框预填它，不用从零重输二十项。
+      value: metric.effective_value || '',
+      unit: metric.effective_unit || '',
+      reference_range: metric.effective_reference_range || '',
+      evidence_text: metric.effective_evidence_text || '',
     },
   ]));
 }
@@ -1108,9 +1110,20 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
   const metricColumns = useMemo(() => [
     { title: '文件', dataIndex: 'source_file_index', width: 60, render: (v) => `#${v}` },
     { title: '指标', dataIndex: 'metric_name', width: 140 },
-    { title: '模型值', dataIndex: 'metric_value', width: 90 },
-    { title: '单位', dataIndex: 'unit', width: 80 },
-    { title: '参考范围', dataIndex: 'reference_range', width: 110 },
+    // 与移动端卡片、报告单显示同一份值：确认过/修正过的指标显示生效值，
+    // 否则显示模型值（那就是它的临时生效值）。
+    {
+      title: '结果', key: 'effective_value', width: 90,
+      render: (_, record) => record.effective_value || record.metric_value || '—',
+    },
+    {
+      title: '单位', key: 'effective_unit', width: 80,
+      render: (_, record) => record.effective_unit || record.unit || '—',
+    },
+    {
+      title: '参考范围', key: 'effective_reference_range', width: 110,
+      render: (_, record) => record.effective_reference_range || record.reference_range || '—',
+    },
     {
       title: '异常', key: 'abnormal_flag', width: 90,
       render: (_, record) => (
@@ -1123,7 +1136,10 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
         </Space>
       ),
     },
-    { title: '证据原文', dataIndex: 'evidence_text', width: 220, ellipsis: true },
+    {
+      title: '证据原文', key: 'effective_evidence_text', width: 220, ellipsis: true,
+      render: (_, record) => record.effective_evidence_text || record.evidence_text || '—',
+    },
     {
       title: '原文', key: 'source', width: 62,
       render: (_, record) => record.page_number ? (

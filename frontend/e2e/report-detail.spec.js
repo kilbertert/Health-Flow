@@ -74,6 +74,11 @@ test('修正后的指标值优先展示', async ({ page, seed }) => {
           confirmed_unit: 'mmol/L',
           confirmed_reference_range: '3.9-6.1',
           confirmed_evidence_text: '空腹血糖 6.4 mmol/L ↑',
+          // 生效值由服务端算好；夹具必须给出真实形状，否则测的是不存在的响应。
+          effective_value: '6.4',
+          effective_unit: 'mmol/L',
+          effective_reference_range: '3.9-6.1',
+          effective_evidence_text: '空腹血糖 6.4 mmol/L ↑',
         }],
         files: [],
         evidence_result: null,
@@ -215,5 +220,157 @@ test.describe('状态呈现的一致性', () => {
     const statusTag = page.locator('.report-heading .ant-tag');
     await expect(statusTag).toContainText('解析失败');
     await expect(statusTag).toHaveClass(/ant-tag-error/);
+  });
+});
+
+// 指标生效值（#144）：确认页与报告单必须显示**同一个**值。
+//
+// 收敛前，报告单抄了 `confirmed_x || x`、确认页指标卡只读模型值 —— 患者从历史
+// 列表重入一份已修正的报告，报告单显示 6.4、确认页显示 6.5，两个界面两个「结果」。
+// 修正草稿同样只读模型值：重入后输入框是空的，得从零重输二十项核对结果。
+/** 一份已修正的报告：模型值 6.5、患者改成 6.4。 */
+function correctedReport(seeded, reportId) {
+  return {
+    id: reportId,
+    patient_id: seeded.subject.owner_id,
+    report_type: '体检报告',
+    department: '健康管理中心',
+    created_at: new Date().toISOString(),
+    status: 'confirmed',
+    subject_consistency: 'same',
+    metrics: [
+      {
+        id: 1,
+        report_id: reportId,
+        metric_name: '空腹血糖',
+        metric_value: '6.5',
+        unit: 'mmol/L',
+        reference_range: '3.9-6.1',
+        abnormal_flag: 'H',
+        inferred_abnormal_flag: 'H',
+        page_number: 1,
+        evidence_text: '空腹血糖 6.5 mmol/L ↑',
+        confirmation_status: 'corrected',
+        confirmed_value: '6.4',
+        confirmed_unit: 'mmol/L',
+        confirmed_reference_range: '3.9-6.1',
+        confirmed_evidence_text: '空腹血糖 6.4 mmol/L ↑',
+        effective_value: '6.4',
+        effective_unit: 'mmol/L',
+        effective_reference_range: '3.9-6.1',
+        effective_evidence_text: '空腹血糖 6.4 mmol/L ↑',
+      },
+    ],
+    files: [],
+    evidence_result: null,
+    processing_warnings: [],
+  };
+}
+
+test.describe('指标生效值（桌面确认表）', () => {
+  test.use({ viewport: { width: 1280, height: 800 } });
+
+  test('桌面确认表显示生效值，与移动端卡片、报告单一致', async ({ page, seed }) => {
+    const seeded = await seed({ reports: ['pending_confirmation'] });
+    const reportId = seeded.reports[0].id;
+    const report = correctedReport(seeded, reportId);
+    report.status = 'pending_confirmation';
+    await page.route(`**/api/health/report/${reportId}`, (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(report) }),
+    );
+    await page.route(`**/api/health/report/${reportId}/metrics`, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ metrics: report.metrics }),
+      }),
+    );
+
+    await loginWithSeed(page, seeded);
+    await page.getByRole('button', { name: '个人中心', exact: true }).click();
+    await page.getByRole('button', { name: '查看' }).click();
+    await page.getByRole('button', { name: '继续确认' }).click();
+    await expect(page.getByRole('heading', { name: '体检报告解读' })).toBeVisible();
+
+    const row = page.getByRole('table').filter({ has: page.getByRole('columnheader', { name: '结果' }) })
+      .locator('tr', { hasText: '空腹血糖' });
+    await expect(row).toContainText('6.4');
+    await expect(row).not.toContainText('6.5');
+  });
+
+});
+
+test.describe('指标生效值（重入确认页，移动端卡片）', () => {
+  test.use({ viewport: { width: 375, height: 667 } });
+
+
+  test('重入已修正的报告：报告单与确认页显示同一个值，草稿预填它', async ({ page, seed }) => {
+    const seeded = await seed({ reports: ['pending_confirmation'] });
+    const reportId = seeded.reports[0].id;
+    const report = correctedReport(seeded, reportId);
+    // 报告是 `pending_confirmation`（患者还没确认，正要在这一屏确认），
+    // 指标行带的是上次核对过的值 —— 这正是「重入确认页」的真实状态。
+    report.status = 'pending_confirmation';
+    await page.route(`**/api/health/report/${reportId}`, (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(report) }),
+    );
+    await page.route(`**/api/health/report/${reportId}/metrics`, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ metrics: report.metrics }),
+      }),
+    );
+
+    await loginWithSeed(page, seeded);
+    // 从报告单的确认入口进入（报告单本身的生效值断言在桌面那组，那里是表格形态）。
+    await page.goto(`/#/report/${reportId}`);
+    await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible();
+    await page.getByRole('button', { name: '继续确认' }).click();
+    await expect(page.getByRole('heading', { name: '体检报告解读' })).toBeVisible();
+    const card = page.getByRole('button', { name: '空腹血糖指标卡片' });
+    await expect(card).toContainText('6.4');
+    await expect(card).not.toContainText('6.5');
+
+    // 展开卡片：修正草稿预填 6.4（不是空，也不是 6.5）。
+    await card.click();
+    await expect(page.getByLabel('空腹血糖修正值')).toHaveValue('6.4');
+  });
+
+  test('患者排除的指标不出现在报告单总览', async ({ page, seed }) => {
+    const seeded = await seed({ reports: ['pending_confirmation'] });
+    const reportId = seeded.reports[0].id;
+    const report = correctedReport(seeded, reportId);
+    report.status = 'assessed';
+    report.metrics = [
+      ...report.metrics,
+      {
+        id: 2,
+        report_id: reportId,
+        metric_name: '被排除的指标',
+        metric_value: '9.9',
+        unit: 'mmol/L',
+        reference_range: '3.9-6.1',
+        abnormal_flag: 'H',
+        inferred_abnormal_flag: null,
+        page_number: 1,
+        evidence_text: '被排除的指标 9.9 mmol/L ↑',
+        confirmation_status: 'excluded',
+        effective_value: null,
+        effective_unit: null,
+        effective_reference_range: null,
+        effective_evidence_text: null,
+      },
+    ];
+    await page.route(`**/api/health/report/${reportId}`, (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(report) }),
+    );
+
+    await loginWithSeed(page, seeded);
+    await page.goto(`/#/report/${reportId}`);
+    await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible();
+    const overview = page.locator('.metric-overview-card');
+    await expect(overview.locator('tr', { hasText: '空腹血糖' })).toHaveCount(1);
+    await expect(overview.getByText('被排除的指标')).toHaveCount(0);
   });
 });
