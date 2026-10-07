@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { reportStatusColor, reportStatusLabel } from '../reportStatus.js';
 import {
   ArrowLeftOutlined,
   CheckCircleOutlined,
@@ -34,25 +35,6 @@ import {
 } from './Upload.jsx';
 
 const COMPLETED_STATUSES = new Set(['confirmed', 'assessed']);
-
-export function statusLabel(status) {
-  return {
-    processing: '解析中',
-    pending_confirmation: '待确认',
-    confirmed: '已确认',
-    assessed: '已完成',
-    failed: '解析失败',
-  }[status] || status;
-}
-
-function statusColor(status) {
-  if (status === 'assessed') return 'green';
-  if (status === 'confirmed') return 'blue';
-  if (status === 'pending_confirmation') return 'gold';
-  if (status === 'processing') return 'processing';
-  if (status === 'failed') return 'error';
-  return 'default';
-}
 
 function shortReportNumber(reportId) {
   return `#${reportId}`;
@@ -316,7 +298,7 @@ export default function ReportDetailPage({ account, reportId, onBack, onContinue
           <p className="eyebrow">健康管理 · 报告详情</p>
           <h1>报告详情</h1>
         </div>
-        <Tag color={statusColor(result.status)}>{statusLabel(result.status)}</Tag>
+        <Tag color={reportStatusColor(result.status)}>{reportStatusLabel(result.status)}</Tag>
       </div>
 
       {wechatBrowser && (
@@ -339,7 +321,7 @@ export default function ReportDetailPage({ account, reportId, onBack, onContinue
               <Descriptions.Item label="账户昵称">{account?.display_name || '—'}</Descriptions.Item>
               <Descriptions.Item label="报告编号">{shortReportNumber(result.id)}</Descriptions.Item>
               <Descriptions.Item label="生成时间">{formatDateTime(result.created_at)}</Descriptions.Item>
-              <Descriptions.Item label="状态">{statusLabel(result.status)}</Descriptions.Item>
+              <Descriptions.Item label="状态">{reportStatusLabel(result.status)}</Descriptions.Item>
             </Descriptions>
           </Card>
 
