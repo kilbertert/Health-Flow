@@ -1190,12 +1190,13 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
       render: (_, record) => record.effective_evidence_text || record.evidence_text || '—',
     },
     {
+      // 桌面形态同样把「定位缺失」与「没做定位」分开：按钮照常在，弹窗如实说明。
       title: '原文', key: 'source', width: 62,
-      render: (_, record) => record.page_number ? (
+      render: (_, record) => (
         <Tooltip title="查看原文定位">
           <Button type="text" icon={<EyeOutlined />} aria-label={`查看${record.metric_name}原文`} onClick={() => setSourceMetric(record)} />
         </Tooltip>
-      ) : '—',
+      ),
     },
     {
       title: '标准指标', key: 'metric_code', width: 210,
