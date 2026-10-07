@@ -15,26 +15,47 @@ from app.api.report import _parse_report
 from app.config import get_settings
 from app.data.models import (
     MedicalReport,
-    ReportAuditEvent,
     ReportExtractionJob,
     ReportFile,
 )
 from app.data.mysql_client import get_mysql_client
+from app.service.report_status import transition
 
 
 def recover_stale_jobs(factory) -> int:
+    """把卡在 running 的抽取任务翻回 queued。
+
+    以前这里是一次批量 ``update()``，**不写任何审计事件** —— 任务状态被改而审计
+    无痕，事后无法回答「这份报告为什么又被解析了一遍」。现在逐条迁移：既改任务，
+    也把这次回收记在报告上（action ``status_recovered``）。
+    """
     cutoff = _now() - timedelta(seconds=get_settings().REPORT_JOB_STALE_SECONDS)
     with factory() as db:
-        result = db.execute(
-            update(ReportExtractionJob)
-            .where(
+        stale = (
+            db.query(ReportExtractionJob)
+            .filter(
                 ReportExtractionJob.status == "running",
                 ReportExtractionJob.updated_at < cutoff,
             )
-            .values(status="queued", started_at=None, updated_at=_now())
+            .all()
         )
+        now = _now()
+        for job in stale:
+            job.status = "queued"
+            job.started_at = None
+            job.updated_at = now
+            report = db.get(MedicalReport, job.report_id)
+            if report is not None:
+                transition(
+                    report,
+                    "processing",
+                    db=db,
+                    action="status_recovered",
+                    actor="system:report-worker",
+                    detail={"job_id": job.id, "reason": "stale_running_job"},
+                )
         db.commit()
-        return int(result.rowcount or 0)
+        return len(stale)
 
 
 def claim_next_job(factory) -> int | None:
@@ -97,19 +118,18 @@ def run_next_job(factory) -> int | None:
             job = db.get(ReportExtractionJob, job_id)
             report = db.get(MedicalReport, job.report_id) if job else None
             if report is not None:
-                report.status = "failed"
+                transition(
+                    report,
+                    "failed",
+                    db=db,
+                    action="extraction_failed",
+                    actor="system:report-worker",
+                    detail={"error_type": "ReportFileReadError"},
+                )
                 report.parsed_content = {
                     **(report.parsed_content or {}),
                     "error": "报告原文读取失败，请重新上传或稍后重试。",
                 }
-                db.add(
-                    ReportAuditEvent(
-                        report_id=report.id,
-                        action="extraction_failed",
-                        actor="system:report-worker",
-                        detail={"error_type": "ReportFileReadError"},
-                    )
-                )
             db.commit()
     with factory() as db:
         job = db.get(ReportExtractionJob, job_id)
@@ -126,17 +146,16 @@ def run_next_job(factory) -> int | None:
             job.completed_at = None
             job.updated_at = now
             if report is not None:
-                report.status = "processing"
-                db.add(
-                    ReportAuditEvent(
-                        report_id=report.id,
-                        action="extraction_retry_queued",
-                        actor="system:report-worker",
-                        detail={
-                            "attempt_count": job.attempt_count,
-                            "max_attempts": max_attempts,
-                        },
-                    )
+                transition(
+                    report,
+                    "processing",
+                    db=db,
+                    action="extraction_retry_queued",
+                    actor="system:report-worker",
+                    detail={
+                        "attempt_count": job.attempt_count,
+                        "max_attempts": max_attempts,
+                    },
                 )
         else:
             job.status = "completed" if succeeded else "failed"
@@ -144,7 +163,14 @@ def run_next_job(factory) -> int | None:
             job.completed_at = now
             job.updated_at = now
             if not succeeded and report is not None:
-                report.status = "failed"
+                transition(
+                    report,
+                    "failed",
+                    db=db,
+                    action="extraction_failed",
+                    actor="system:report-worker",
+                    detail={"attempt_count": job.attempt_count},
+                )
                 error = (report.parsed_content or {}).get("error")
                 report.parsed_content = {
                     **(report.parsed_content or {}),
