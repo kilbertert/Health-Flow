@@ -54,6 +54,7 @@ from app.service.evidence_bridge import (
 )
 from app.service.mall_goods import fetch_goods, label_pairs_for, serialized
 from app.service.metric_effective_value import effective_value
+from app.service.metric_rows import deduplicate
 from app.service.report_ownership import UNOWNED_SENTINEL, resolve_owner
 from app.service.report_status import transition
 from app.service.report_subject import (
@@ -375,20 +376,10 @@ def _parse_report(
             for file_index, _, parsed, error in successful_reports
             for metric_index, item in enumerate(parsed.metrics, start=1)
         ]
-        unique_metrics: dict[tuple[object, ...], MetricRecord] = {}
-        for item in parsed_metrics:
-            identity = " ".join((item.evidence_text or item.metric_name).split()).casefold()
-            key = (
-                item.source_file_index,
-                item.page_number,
-                identity,
-                item.metric_value,
-                item.unit,
-                item.reference_range,
-            )
-            unique_metrics.setdefault(key, item)
+        # 唯一的同一观测执行点（app/service/metric_rows.py）。解析器里那份页内
+        # 去重已删除 —— 它没有文件编号、不看原文证据，对同一份内容给出不同的行数。
         parsed_metrics = sorted(
-            unique_metrics.values(),
+            deduplicate(parsed_metrics),
             key=lambda item: (
                 item.source_file_index,
                 item.page_number or 0,
