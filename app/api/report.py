@@ -56,6 +56,7 @@ from app.service.mall_goods import fetch_goods, label_pairs_for, serialized
 from app.service.metric_effective_value import effective_value
 from app.service.report_ownership import UNOWNED_SENTINEL, resolve_owner
 from app.service.report_status import transition
+from app.service.report_subject import SubjectGateError, gate, initial_consistency
 from app.service.vision_encoder import ParsedReport, get_vision_encoder_service
 
 #: 只有这些状态的报告才谈得上加购：未完成确认/评估的报告没有可据以取货的风险。
@@ -291,7 +292,7 @@ async def upload_report(
         report_type=report_type or "体检",
         department=department,
         parsed_content={"file_count": len(accepted_files)},
-        subject_consistency="same" if len(accepted_files) == 1 else "uncertain",
+        subject_consistency=initial_consistency(len(accepted_files)),
         owner_id=resolve_owner(request).storage_id,
         exam_date=datetime.now(),
     )
@@ -623,8 +624,12 @@ async def confirm_report(
             if _processing_warnings(report)
             else "报告当前状态不允许确认",
         )
-    if report.subject_consistency != "same" and confirmation.subject_consistency != "same":
-        raise HTTPException(status_code=422, detail="请先确认所有文件属于同一主体")
+    try:
+        # 闸门语义由 report_subject 单点拥有：非 same 的显式表态是「停止」，
+        # 不置 confirmed、不进入评估（旧实现会把它当 same 放行）。
+        settled = gate(report.subject_consistency, confirmation.subject_consistency)
+    except SubjectGateError as exc:
+        raise HTTPException(status_code=422, detail=exc.detail) from exc
     metrics = _ordered_metrics(db, report_id).all()
     by_id = {metric.id: metric for metric in metrics}
     supplied = {item.metric_id: item for item in confirmation.observations}
@@ -702,7 +707,7 @@ async def confirm_report(
         metric.confirmed_at = now
         (corrected_ids if item.decision == "corrected" else confirmed_ids).append(metric.id)
     transition(report, "confirmed", db=db, action="confirmed", actor=resolve_owner(request).subject)
-    report.subject_consistency = confirmation.subject_consistency or report.subject_consistency or "same"
+    report.subject_consistency = settled
     report.evidence_result = None
     _audit(
         db,

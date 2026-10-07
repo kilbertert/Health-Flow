@@ -832,3 +832,38 @@ def test_assessment_re_adjudicates_codes_once_the_catalog_is_back():
     # 重新裁决成功：这个指标带着目录验证过的编码跨过边界（而不是继续 unmatched）。
     assert match.call_args.args[0], "目录恢复后应当重新裁决并跨过边界"
     assert match.call_args.args[0][0]["metric_code"] == "non_hdl_c"
+
+
+def test_stop_declaration_does_not_confirm_or_assess():
+    """非 `same` 的显式表态是「停止」：不置 confirmed、不进入评估。
+
+    这是 #100 的核心修正之一。旧实现里闸门测的是**列的当前值**：列已是 `same`
+    时任何表态都放行，于是单文件报告 + 上报 `different` 会被写进列并照常确认。
+    """
+    from app.api.report import confirm_report
+    from app.schema.report import MetricConfirmation, ReportConfirmationRequest
+
+    session, report = _assessment_fixture(confirmation_status="pending")
+    report.owner_id = "account:t:u"
+    report.subject_consistency = "same"  # 单文件报告的自动判定
+    report.status = "pending_confirmation"  # fixture 默认是 confirmed,这里要的是确认前
+    session.commit()
+    request = ReportConfirmationRequest(
+        observations=[MetricConfirmation(metric_id=1, decision="confirmed")],
+        subject_consistency="different",
+    )
+
+    with (
+        patch("app.api.report.fetch_metric_catalog", return_value=[{"code": "fasting_glucose", "label": "空腹血糖"}]),
+        patch("app.api.report.resolve_owner", return_value=SimpleNamespace(storage_id="account:t:u", subject="a")),
+        pytest.raises(HTTPException) as excinfo,
+    ):
+        import asyncio
+
+        asyncio.run(confirm_report(report.id, SimpleNamespace(), request, session, owner_id=None))
+
+    assert excinfo.value.status_code == 422
+    assert "分开上传" in excinfo.value.detail
+    session.refresh(report)
+    assert report.status != "confirmed", "「停止」不该把报告推进到已确认"
+    assert report.subject_consistency == "same", "列不该被改写成 different"
