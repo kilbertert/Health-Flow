@@ -85,9 +85,26 @@ def _service_headers(settings: Settings, *, correlate: bool = False) -> dict[str
     return headers
 
 
-def metric_code_for_name(name: str) -> str | None:
+def resolve_metric_code(name: str, catalog: Iterable[str] | None) -> str | None:
+    """指标名 → 标准指标编码。**全仓库唯一的解析规则**（GLOSSARY.md 的「标准指标编码解析」）。
+
+    规则（顺序即优先级）：
+
+    1. **目录精确匹配**：名称归一化后直接在已发布目录里 —— 目录是唯一事实来源。
+    2. **别名归一化 + 回目录验证**：用本地别名表把名称归一成一个候选编码，候选
+       **必须回目录确认存在**才算解析成功。别名表只是「目录解析失败前的名称归一化
+       辅助」，不是第二套事实来源 —— 目录里没有的编码，别名解析出来也不算数。
+    3. **目录不可用**（``catalog is None``）：显式降级，只做别名归一化，不做存在性
+       验证。调用方据此把编码留作「待目录恢复后重新裁决」，而不是当成已确认。
+
+    解析不出来返回 ``None``：这样的指标不跨证据边界，保留为可追溯的未匹配项。
+    """
     text = unicodedata.normalize("NFKC", _PARENTHETICAL_RE.sub("", name)).casefold()
     normalized = "".join(text.split())
+    known = set(catalog) if catalog is not None else None
+    if known is not None and normalized in known:
+        return normalized
+    candidate: str | None = None
     for label, code in METRIC_ALIASES.items():
         alias = "".join(unicodedata.normalize("NFKC", label).casefold().split())
         suffix = normalized.removeprefix(alias) if normalized.startswith(alias) else ""
@@ -95,8 +112,25 @@ def metric_code_for_name(name: str) -> str | None:
             suffix
             and (suffix.startswith(("/", "／")) or (suffix.isascii() and re.fullmatch(r"[a-z0-9%+._-]+", suffix)))
         ):
-            return code
-    return normalized if normalized in set(METRIC_ALIASES.values()) else None
+            candidate = code
+            break
+    if candidate is None and normalized in set(METRIC_ALIASES.values()):
+        candidate = normalized
+    if candidate is None:
+        return None
+    # 目录可用时，别名候选必须回目录验证 —— 否则别名表就成了第二套事实来源。
+    if known is not None and candidate not in known:
+        return None
+    return candidate
+
+
+def metric_code_for_name(name: str) -> str | None:
+    """名称归一化，**不做目录验证**（``catalog=None`` 的降级形态）。
+
+    只保留给既有测试与「目录不可用时的降级路径」；正式的解析入口是
+    ``resolve_metric_code``，新代码不应直接调用本函数。
+    """
+    return resolve_metric_code(name, None)
 
 
 def build_observations(metrics: Iterable[Any]) -> list[dict[str, object]]:
@@ -131,7 +165,8 @@ def build_observations_with_unmatched(
         effective = effective_value(metric)
         value_text = effective.value
         unit = effective.unit
-        code = metric.metric_code or metric_code_for_name(metric.metric_name or "")
+        # 只消费确认时落定的编码：确认时清空就是清空，不再从名字重新推导。
+        code = metric.metric_code
         evidence = effective.evidence_text
         if not unit or not evidence or metric.page_number is None:
             reason = (
