@@ -895,3 +895,65 @@ def test_historical_different_report_cannot_be_assessed():
 
     assert excinfo.value.status_code == 409
     assert "同一主体" in excinfo.value.detail
+
+
+def test_parse_yields_the_same_row_count_for_text_and_scanned_input():
+    """同一份内容，文本 PDF 与扫描件/图片必须落成**同样的行数**。
+
+    #107 的核心断言。收敛前解析器里有一份「页内去重」，只跑在 `parse_text_pdf`
+    上，且它不看原文证据、没有文件编号 —— 于是同一页上「同名同值但原文证据不同」
+    的两行，在文本 PDF 上被合成一行、在扫描件上保留两行，患者看到的《报告历史》
+    的「N 项指标」随之漂移。
+    """
+    from app.api.report import _parse_report
+    from app.service.vision_encoder import ParsedReport
+
+    duplicate_rows = [
+        MetricRecord(
+            metric_name="空腹血糖",
+            metric_value="6.8",
+            unit="mmol/L",
+            reference_range="3.9-6.1",
+            page_number=1,
+            evidence_text="空腹血糖 6.8 mmol/L",
+        ),
+        MetricRecord(
+            metric_name="空腹血糖(GLU)",
+            metric_value="6.8",
+            unit="mmol/L",
+            reference_range="3.9-6.1",
+            page_number=1,
+            evidence_text="空腹血糖(GLU) 6.8 mmol/L",
+        ),
+    ]
+
+    def parse_with(report_type: str) -> int:
+        engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+        Base.metadata.create_all(engine)
+        session_factory = sessionmaker(bind=engine)
+        with session_factory() as seed:
+            report = ReportModel(patient_id=f"P-{report_type}", status="processing", subject_consistency="same")
+            seed.add(report)
+            seed.commit()
+            report_id = report.id
+
+        class _Vision:
+            def parse(self, content: bytes, filename: str) -> ParsedReport:
+                return ParsedReport(
+                    report_type=report_type,
+                    raw_text="",
+                    metrics=list(duplicate_rows),
+                    page_count=1,
+                    success=True,
+                )
+
+        with (
+            patch("app.api.report.get_vision_encoder_service", return_value=_Vision()),
+            patch("app.api.report.get_settings", return_value=SimpleNamespace(REPORT_PARSE_WORKERS=1)),
+        ):
+            assert _parse_report(report_id, [(1, "a.pdf", "application/pdf", b"x")], session_factory) is True
+
+        with session_factory() as check:
+            return check.query(MetricModel).filter(MetricModel.report_id == report_id).count()
+
+    assert parse_with("text_pdf") == parse_with("image")

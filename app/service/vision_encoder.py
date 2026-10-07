@@ -125,27 +125,17 @@ class VisionEncoderService:
                         errors.append(f"page {page_number}: {exc}")
             metrics = [metric for group, _ in page_results for metric in group]
             provider_run_ids = tuple(run_id for _, run_id in page_results if run_id)
-            unique_metrics = []
-            seen = set()
-            for metric in metrics:
-                key = (
-                    metric.page_number,
-                    metric.metric_name,
-                    metric.metric_value,
-                    metric.unit,
-                    metric.reference_range,
-                )
-                if key not in seen:
-                    seen.add(key)
-                    unique_metrics.append(metric)
+            # 去重不在这里做：同一观测的判定只有一个执行点（报告级，
+            # app/service/metric_rows.py），否则同一份内容在文本 PDF 与扫描件上
+            # 会得到不同的行数。success 按**未去重**的 metrics 计算。
             parsed = self._with_trace(
                 ParsedReport(
                     report_type="text_pdf",
                     raw_text=raw_text,
-                    metrics=unique_metrics,
+                    metrics=metrics,
                     page_count=page_count,
-                    success=bool(unique_metrics),
-                    error=("; ".join(errors) if errors else None if unique_metrics else "未提取到可确认的医学指标"),
+                    success=bool(metrics),
+                    error=("; ".join(errors) if errors else None if metrics else "未提取到可确认的医学指标"),
                 ),
                 self.llm_client,
             )
