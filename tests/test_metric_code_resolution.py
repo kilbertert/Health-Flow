@@ -83,12 +83,19 @@ def test_catalog_unavailable_degrades_to_alias_only():
 # 复活矛盾消失
 # ---------------------------------------------------------------------------
 
-def test_cleared_code_is_not_revived_by_the_name():
-    """确认时清空的编码，评估时**不再从名字复活**。
+def test_cleared_code_is_not_revived_without_catalog_validation():
+    """确认时清空的编码，评估时**不会靠本地别名表复活**。
 
-    这是本规格的核心断言：`build_observations_with_unmatched` 只消费确认时落定的
-    `metric_code`。收敛前它会用 `metric_code or metric_code_for_name(name)` 把刚
-    清空的编码原样复活，于是确认时的 “never cross” 承诺不成立。
+    这是本规格的核心断言，也是旧代码的病灶：它用
+    `metric_code or metric_code_for_name(name)` 把刚清空的编码原样复活 —— 那个
+    `metric_code_for_name` 是**本地别名快照**，不与目录对账，于是「确认时不在
+    目录里」的编码只要名字能被别名解析就必然跨过边界。
+
+    收敛后的规则按目录是否可用分成两种，**都不是本地快照复活**：
+
+    - 目录不可用：保持 unmatched（没有目录就没有验证，宁可不匹配也不猜）；
+    - 目录可用：按**权威目录**重新裁决（这正是「等目录恢复后重新裁决」的兑现，
+      名称必须被目录验证才算解析成功）。
     """
     from app.data.models import MetricRecord as MetricModel
     from app.service.evidence_bridge import build_observations_with_unmatched
@@ -106,12 +113,13 @@ def test_cleared_code_is_not_revived_by_the_name():
         confirmation_status="confirmed",
         metric_code=None,  # 确认时被清空
     )
-    # 目录不可用：不复活（没有目录就没有验证，宁可不匹配也不猜）。
+
+    # 目录不可用：不复活。
     observations, _, unmatched = build_observations_with_unmatched([metric])
     assert observations == [], "目录不可用时清空过的编码不该被复活"
     assert unmatched and unmatched[0]["metric_code"] is None
 
-    # 目录可用且能验证这个名称：允许重新裁决（这是「等目录恢复后重新裁决」的兑现）。
+    # 目录可用且能验证这个名称：允许重新裁决 —— 用的是目录，不是别名快照。
     observations, _, _ = build_observations_with_unmatched([metric], CATALOG)
     assert observations and observations[0]["metric_code"] == "non_hdl_c"
 
