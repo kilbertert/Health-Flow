@@ -232,3 +232,34 @@ test.describe('主体一致性的「停止」', () => {
     await expect(page.getByText(/这批文件不属于同一主体/)).toHaveCount(0);
   });
 });
+
+// 行数一致性（#156）：历史列表与确认页看到的「项数」来自**同一个**行集。
+//
+// 服务端从 #155 起只有一处「同一观测」判定（app/service/metric_rows.py），
+// 前端没有第二份——这条用例钉住患者可见的两处数字一致，防止以后有人在某一侧
+// 「顺手」加一个去重或漏掉一行。
+test.describe('指标行数一致性', () => {
+  test.use({ viewport: { width: 375, height: 667 } });
+
+  test('历史列表「N 项指标」与确认页「识别到 N 项指标」是同一个数', async ({ page, seed }) => {
+    const seeded = await seed({ reports: ['pending_confirmation'] });
+    await loginWithSeed(page, seeded);
+    await page.getByRole('button', { name: '个人中心', exact: true }).click();
+    await expect(page.getByRole('heading', { name: '报告历史' })).toBeVisible();
+
+    const historyItem = page.locator('.history-section .ant-list-item').first();
+    const historyText = await historyItem.innerText();
+    const historyCount = Number(/(\d+)\s*项指标/.exec(historyText)?.[1]);
+    expect(historyCount).toBeGreaterThan(0);
+
+    await page.getByRole('button', { name: '查看' }).click();
+    await page.getByRole('button', { name: '继续确认' }).click();
+    await expect(page.getByRole('heading', { name: '体检报告解读' })).toBeVisible();
+
+    // 确认页那行「识别到 N 项指标…」是页头提示文本，不是 Alert（页面上有别的
+    // Alert，例如目录降级提示）。
+    const confirmationText = await page.getByText(/识别到\s*\d+\s*项指标/).first().innerText();
+    const confirmationCount = Number(/识别到\s*(\d+)\s*项指标/.exec(confirmationText)?.[1]);
+    expect(confirmationCount).toBe(historyCount);
+  });
+});
