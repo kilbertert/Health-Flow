@@ -133,7 +133,6 @@ test.describe('异常判定口径', () => {
     const excludedRow = page.locator('.metric-overview-card').getByText('甘油三酯');
     await expect(excludedRow).toBeVisible();
     await expect(page.locator('.report-abnormal-summary')).not.toContainText('异常指标 1 项');
-    await page.screenshot({ path: '../var/verify-evidence/prd90-excluded-metric-detail.png', fullPage: true });
   });
 });
 
