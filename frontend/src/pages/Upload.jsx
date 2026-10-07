@@ -726,6 +726,14 @@ function isSubjectStop(declared) {
   return Boolean(declared) && declared !== 'same';
 }
 
+// 「停止」的两种成因说法不同 —— `uncertain` 是「你没能确认」，不是「他们不是同一
+// 个人」。把两者说成一回事是替患者下结论（评审在 #154 指出）。
+function subjectStopMessage(declared) {
+  return declared === 'different'
+    ? '这批文件不属于同一主体，不能合并解读；请返回上传页分开上传。'
+    : '无法确认这批文件属于同一主体，不能合并解读；请返回上传页分开上传。';
+}
+
 export function TechnicalDetails({ result, subjectConsistency, onSubjectConsistencyChange }) {
   const trace = result.extraction_trace;
   const subjectNeedsConfirmation = needsSubjectDeclaration(result);
@@ -744,9 +752,7 @@ export function TechnicalDetails({ result, subjectConsistency, onSubjectConsiste
             ]}
             onChange={(value) => {
               onSubjectConsistencyChange(value);
-              if (value && value !== 'same') {
-                message.warning('这批文件不属于同一主体，不能合并解读；请返回上传页分开上传。');
-              }
+              if (isSubjectStop(value)) message.warning(subjectStopMessage(value));
             }}
             style={{ width: '100%', maxWidth: 220 }}
           />
@@ -1052,7 +1058,7 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
     }
     if (isSubjectStop(subjectConsistency)) {
       // 「停止」不是一次失败的提交，而是一个明确的结论：这批文件不该合并解读。
-      message.warning('这批文件不属于同一主体，不能合并解读；请返回上传页分开上传。');
+      message.warning(subjectStopMessage(subjectConsistency));
       return;
     }
     if (result.subject_consistency !== 'same' && subjectConsistency !== 'same') {
