@@ -157,3 +157,39 @@ test.describe('异常判定口径（桌面端）', () => {
     await expect(triglycerideRow).not.toContainText(TAG_N);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 分歧样本:模型标记与判定不一致时，患者看到的以**判定**为准
+// ---------------------------------------------------------------------------
+
+test.describe('异常判定口径 vs 抽取模型标记', () => {
+  test.use({ viewport: { width: 1280, height: 800 } });
+
+  test('模型误标 H 但数值在范围内 → 显示正常、不计入摘要；模型漏标但超范围 → 显示异常、计入摘要', async ({
+    page,
+    seed,
+  }) => {
+    const seeded = await seed({ reports: ['assessed'] });
+    const reportId = seeded.reports[0].id;
+    await loginWithSeed(page, seeded);
+
+    // 历史摘要:种子 5 项里判定为异常的是 3 项(原有两条 + 漏标的那条)。
+    // 误标的那条贡献的是「0」—— 报告页显示正常，摘要也不计数。
+    await page.getByRole('button', { name: '个人中心', exact: true }).click();
+    const historyItem = page.locator('.history-section .ant-list-item').first();
+    await expect(historyItem).toContainText('5 项指标');
+    await expect(historyItem).toContainText('3 项偏高/偏低');
+
+    // 报告页:两条分歧样本各自的标记。
+    await page.goto(`/#/report/${reportId}`);
+    await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible();
+    const overview = page.locator('.metric-overview-card');
+    const mislabelled = overview.locator('tr', { hasText: '误标的餐后血糖' });
+    const unlabelled = overview.locator('tr', { hasText: '漏标的总胆固醇' });
+    await expect(mislabelled).toContainText('N 正常');
+    await expect(mislabelled).not.toContainText('H 偏高');
+    await expect(unlabelled).toContainText('H 偏高');
+    // 摘要里的数字与这两行一致:误标的不算、漏标的算。
+    await expect(page.locator('.report-abnormal-summary')).toContainText('异常指标 3 项');
+  });
+});

@@ -20,6 +20,8 @@ const MULTI_VALUE = {
   page_number: 1,
   evidence_text: '* Non-HDL 非高密度脂蛋白胆固醇 3.87 4.00 mmol/L (<3.40)',
   confirmation_status: null,
+  // 服务端的判定:两个数解析不出一个数 → 判定为空（reason=invalid_value）。
+  inferred_abnormal_flag: null,
   confirmed_value: null,
   confirmed_unit: null,
   confirmed_reference_range: null,
@@ -32,6 +34,7 @@ const SINGLE_VALUE = {
   metric_name: 'Triglyceride 三酸甘油酯',
   metric_value: '1.05',
   reference_range: '<1.70',
+  inferred_abnormal_flag: 'N',
   evidence_text: 'Triglyceride 三酸甘油酯 1.05 mmol/L (<1.70)',
 };
 
