@@ -81,6 +81,42 @@ def _subject_session(session_factory):
     yield {SESSION_COOKIE: token}
 
 
+def _evidence_items_from_v2(finding):
+    """把 v2 单卡形态转成 v3 的 evidence_items（服务端契约收敛的那一步）。"""
+    card = finding.get("card")
+    if not card:
+        return []
+    observations = finding.get("source_observations") or []
+    if not observations:
+        # v2 夹具没有来源观测 —— **不伪造一条**。v3 的 evidence_items 要求至少
+        # 一条来源观测，所以这种形态保留 v2（card_id 等），由 PatientFinding
+        # 自己的 v2 分支接住。伪造一条 value=0.0 的观测会让测试去测一个
+        # 从未发生过的形态（评审在 #161 指出）。
+        return []
+    return [
+        {
+            "metric_code": (card.get("scope_key") or "metric:").split(":", 1)[1],
+            "metric_label": card.get("label") or finding.get("condition_name") or "",
+            "card": card,
+            "evidence_strength": finding.get("evidence_strength") or "moderate",
+            "source_observation_ids": finding.get("source_observation_ids") or [],
+            "source_observations": observations,
+        }
+    ]
+
+
+_PATIENT_FINDING_FIELDS = {
+    "condition_code",
+    "condition_name",
+    "urgency",
+    "abnormality_severity",
+    "evidence_strength",
+    "needs_recheck",
+    "department",
+    "recheck_direction",
+}
+
+
 def _evidence_result(*, findings=None, unmatched=None, skipped=None):
     return {
         "schema_version": "2",
@@ -93,7 +129,29 @@ def _evidence_result(*, findings=None, unmatched=None, skipped=None):
         "patient_reply": {
             "title": "体检报告解读与健康风险提示",
             "summary": "",
-            "findings": [],
+            # 投影必须覆盖与内部事实层**同一批**健康问题（#159 新增的一致性校验）。
+            # 这个夹具此前留空 —— 正是「两份形状靠人肉同步」的物证。
+            "findings": [
+                {
+                    **{k: v for k, v in finding.items() if k in _PATIENT_FINDING_FIELDS},
+                    "source_observation_ids": finding.get("source_observation_ids") or [],
+                    "source_observations": finding.get("source_observations") or [],
+                    "evidence_items": finding.get("evidence_items") or _evidence_items_from_v2(finding),
+            # v2 且无来源观测时，投影保留 v2 形态。
+            **(
+                {
+                    "card_id": finding["card"]["id"],
+                    "card_version": finding["card"]["version"],
+                    "evidence_profile_id": finding["card"]["evidence_profile_id"],
+                    "patient_visible_body": finding["card"]["patient_visible_body"],
+                    "sources": finding["card"]["sources"],
+                }
+                if not (finding.get("evidence_items") or _evidence_items_from_v2(finding))
+                else {}
+            ),
+                }
+                for finding in (findings or [])
+            ],
             "unmatched_count": len(unmatched or []),
             "disclaimer": "仅供健康信息参考。",
         },
@@ -627,7 +685,16 @@ def test_multi_file_confirmation_matches_published_card(tmp_path):
             assert confirmed.status_code == 200, confirmed.text
             result = confirmed.json()
             assert result["status"] == "assessed"
-            assert result["evidence_result"]["findings"][0]["card"]["version"] == "1.0.0"
+            # 内部事实层不再出域（#159）：患者拿到的 health notice 里，
+            # 卡片在 evidence_items 下，不是内部层的裸 `card`。
+            patient = result["evidence_result"]
+            assert "sorting" not in patient, "内部事实层不再出域"
+            notice = patient["findings"][0]
+            if notice["evidence_items"]:
+                assert notice["evidence_items"][0]["card"]["version"] == "1.0.0"
+            else:
+                # v2 且无来源观测：保留 v2 形态，不伪造观测。
+                assert notice["card_version"] == "1.0.0"
             assert evidence_match.call_args.args[0][0]["metric_code"] == "custom_glucose"
 
     assert sorted(vision.calls) == ["first.png", "second.png"]

@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.schema.evidence import EvidenceMatchResponse
+from app.schema.evidence import PatientNotices
 
 
 class MetricRecord(BaseModel):
@@ -155,7 +155,13 @@ class MedicalReportResponse(BaseModel):
         "pending_confirmation"
     )
     subject_consistency: Literal["same", "different", "uncertain"] | None = None
-    evidence_result: EvidenceMatchResponse | None = None
+    # 患者可见的健康风险提示（唯一出域的形状）。内部事实层不出域。
+    #
+    # 历史行存的是旧形状（含 `schema_version` / `patient_reply` / 内部层
+    # `findings`）—— 那是**已写入库的数据**，读路径必须能读。所以这个字段按
+    # 「新形状，或旧形状的原始 dump」两者都收，由 `app/api/report.py` 负责
+    # 把旧行归一成新形状后再出域（见 `_patient_notices_from_stored`）。
+    evidence_result: PatientNotices | dict | None = None
     processing_error: str | None = None
     processing_warnings: list[str] = Field(default_factory=list)
     extraction_job: ReportExtractionJobResponse | None = None

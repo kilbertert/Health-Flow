@@ -35,6 +35,7 @@ from app.schema.evidence import (
     Skipped,
     SourceObservation,
     Unmatched,
+    build_patient_notices,
 )
 from app.schema.report import (
     CartLinkResponse,
@@ -511,6 +512,35 @@ def _confirmed_condition_codes(report: ReportModel) -> list[str]:
     return codes
 
 
+def _patient_notices_from_stored(stored: object) -> dict | None:
+    """把库里存的 `evidence_result` 归一成当前的患者投影形状。
+
+    库里可能存着两种：**新形状**（`PatientNotices` 的 dump）与**旧形状**
+    （`EvidenceMatchResponse` 的 dump，含 `schema_version` / `patient_reply` /
+    内部层 `findings`）。旧行是已经写进数据库的数据 —— 读路径必须能读。
+
+    旧行按**已投影过的患者字段**（`patient_reply`）重建，而不是把内部层
+    `findings` 重新投影一次：那份 dump 当时就是按当时的规则投影的，重投影会
+    引入一个从未发生过的形状变化。
+    """
+    if not isinstance(stored, dict):
+        return stored
+    if "schema_version" not in stored:
+        return stored  # 已经是新形状
+    patient_reply = stored.get("patient_reply") or {}
+    unmatched = list(stored.get("unmatched") or [])
+    return {
+        "correlation_id": stored.get("correlation_id") or "",
+        "title": patient_reply.get("title") or "体检报告解读与健康风险提示",
+        "summary": patient_reply.get("summary") or stored.get("message") or "",
+        "findings": list(patient_reply.get("findings") or []),
+        "unmatched": unmatched,
+        "skipped": list(stored.get("skipped") or []),
+        "unmatched_count": patient_reply.get("unmatched_count", len(unmatched)),
+        "disclaimer": patient_reply.get("disclaimer") or "",
+    }
+
+
 def _report_response(
     report: ReportModel,
     metrics: list[MetricModel],
@@ -539,7 +569,7 @@ def _report_response(
         created_at=report.created_at,
         status=report.status or "pending_confirmation",
         subject_consistency=report.subject_consistency,
-        evidence_result=report.evidence_result,
+        evidence_result=_patient_notices_from_stored(report.evidence_result),
         processing_error=(report.parsed_content or {}).get("error"),
         processing_warnings=list((report.parsed_content or {}).get("warnings") or []),
         extraction_job=(
@@ -807,26 +837,11 @@ async def _assess_report(
                 ]
             }
         )
-    if typed_result.unmatched:
-        finding_count = len(typed_result.findings)
-        unmatched_count = len(typed_result.unmatched)
-        summary = (
-            f"发现 {finding_count} 个可能相关健康问题；另有 {unmatched_count} 条指标与健康问题关联暂无已审核知识卡。"
-            if finding_count
-            else f"发现 {unmatched_count} 个异常指标，但暂无已审核内容。"
-        )
-        typed_result = typed_result.model_copy(
-            update={
-                "message": summary,
-                "patient_reply": typed_result.patient_reply.model_copy(
-                    update={
-                        "summary": summary,
-                        "unmatched_count": unmatched_count,
-                    }
-                ),
-            }
-        )
-    report.evidence_result = typed_result.model_dump(mode="json")
+    # 患者投影：从证据服务响应**确定性**构造，唯一的出域形状。
+    # 摘要**无条件**由这里产出 —— 此前只在 `unmatched` 非空时才改写 message 与
+    # patient_reply.summary，两者可以各说各话。
+    notices = build_patient_notices(typed_result, unmatched=typed_result.unmatched, skipped=typed_result.skipped)
+    report.evidence_result = notices.model_dump(mode="json")
     report.evidence_correlation_id = typed_result.correlation_id
     _audit(
         db,
