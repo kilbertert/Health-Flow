@@ -236,11 +236,22 @@ function needsReview(metric) {
 export function valueUnusable(metric) {
   // 患者排除的指标：服务端同样返回空判定，但那是患者自己的决定，值本身可解析。
   if (metric?.confirmation_status === 'excluded') return false;
+  // 模型没宣称异常的行，从来不是这个提示的对象。
+  if (!isAbnormal(metric?.abnormal_flag)) return false;
   if (metric?.inferred_abnormal_flag === undefined) {
-    // 字段出现之前的响应：displayFlag 在这里恰好以「待核对」表达同一件事。
-    return displayFlag(metric) === '待核对';
+    // 字段出现之前的响应。这里**不能用 displayFlag**：它对原始异常一律返回
+    // 「待核对」（那是对的，患者需要看到异常候选），于是可解析的异常也会被
+    // 本谓词判成「用不了」——患者被挡在一个完全能确认的指标前面。
+    //
+    // 精确的回答需要后端的 `abnormal_flag_reason`，但它在回复里被 Pydantic 的
+    // 响应模型过滤掉了（响应只声明了 `inferred_abnormal_flag`）。前置审查披露
+    // 后会导致旧客户端不再被挡——本部署里前后端同进同出，不承担这个代价。
+    // 所以旧响应下本谓词只能保守返回 false：宁可少提示，不可误报（患者排除
+    // 掉那条的值往往完全可解析）。代价是 #129 的多值守卫在旧响应下不生效，
+    // 而该场景要成立需要「前端版本早于 #134」，同一部署里这不会发生。
+    return false;
   }
-  return metric.inferred_abnormal_flag === null && isAbnormal(metric?.abnormal_flag);
+  return metric.inferred_abnormal_flag === null;
 }
 
 // 一条指标在界面上应显示的异常标记。

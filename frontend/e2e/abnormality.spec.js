@@ -201,7 +201,7 @@ test.describe('异常判定口径 vs 抽取模型标记', () => {
 test.describe('排除与旧响应不能被误报或漏报', () => {
   test.use({ viewport: { width: 375, height: 667 } });
 
-  test('字段出现之前的响应:可解析的多值异常仍被拦下', async ({ page, seed }) => {
+  test('字段出现之前的响应:确认页仍可用，异常候选仍可见', async ({ page, seed }) => {
     const seeded = await seed({ reports: ['pending_confirmation'] });
     const reportId = seeded.reports[0].id;
     // 去掉判定字段,模拟 #134 之前的响应形状(契约是向后兼容的)。
@@ -223,7 +223,7 @@ test.describe('排除与旧响应不能被误报或漏报', () => {
     await page.getByRole('button', { name: '查看' }).click();
     await page.getByRole('button', { name: '继续确认' }).click();
     await expect(page.getByRole('heading', { name: '体检报告解读' })).toBeVisible();
-    // 旧响应里异常候选默认仍是「待核对」,不是「确认」。
-    await expect(page.getByText(/项异常候选项需要确认|其中 \d+ 项需要确认/)).toBeVisible();
+    // 旧响应下患者仍能看见并处理异常候选（默认「待核对」）。
+    await expect(page.getByText(/其中 \d+ 项需要确认/)).toBeVisible();
   });
 });

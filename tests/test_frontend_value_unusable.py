@@ -71,15 +71,18 @@ CASES = [
     # 判定为 H:值可用,正常参与解读。
     {"name": "abnormal", "metric": {"abnormal_flag": "H", "metric_value": "6.9",
                                      "inferred_abnormal_flag": "H"}, "expected": False},
-    # 旧响应(字段缺失)+ 模型标 H + 无参考范围 → displayFlag 给「待核对」→ 用不了。
-    {"name": "legacy_flag_no_range", "metric": {"abnormal_flag": "H", "metric_value": "5.2"}, "expected": True},
+    # 旧响应(字段缺失):没有判定字段就无从知道值能不能用,**保守返回 false**
+    # (宁可少提示,不可误报——把可解析的异常挡在确认之外更糟)。
+    {"name": "legacy_flag_no_range", "metric": {"abnormal_flag": "H", "metric_value": "5.2"}, "expected": False},
+    {"name": "legacy_flag_multi_value",
+     "metric": {"abnormal_flag": "H", "metric_value": "3.87 4.00"}, "expected": False},
     # 旧响应 + 模型标 N → 不是用不了。
     {"name": "legacy_normal", "metric": {"abnormal_flag": "N", "metric_value": "138"}, "expected": False},
 ]
 
 
 @pytest.mark.skipif(NODE is None, reason="需要 node 才能驱动前端模块")
-def test_value_unusable_follows_the_server_decision(tmp_path):
+def test_value_unusable_follows_the_server_decision():
     import os
     import shutil as _shutil
 
@@ -87,7 +90,7 @@ def test_value_unusable_follows_the_server_decision(tmp_path):
     # 驱动与被转译的模块都写在 frontend/node_modules 下:node 的裸模块解析从
     # **文件所在目录**向上找 node_modules,写在 /tmp 里就找不到 esbuild / react。
     # 这个位置本身是 gitignored 的构建产物目录,不污染仓库。
-    work = frontend / "node_modules" / ".tmp-value-unusable"
+    work = frontend / "node_modules" / f".tmp-value-unusable-{os.getpid()}"
     _shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
     try:
