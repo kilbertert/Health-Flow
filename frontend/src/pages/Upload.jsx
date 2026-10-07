@@ -323,8 +323,8 @@ function MetricCard({ metric, draft, metricCatalog, disabled, onUpdateDraft, onO
         >
           <span className="metric-card-name">{metric.metric_name}</span>
           <span className="metric-card-value">
-            {metric.metric_value}
-            {metric.unit ? ` ${metric.unit}` : ''}
+            {metric.effective_value}
+            {metric.effective_unit ? ` ${metric.effective_unit}` : ''}
           </span>
           {abnormalTag(displayFlag(metric))}
           {/* 多值/带符号的行：先告诉用户「这个值用不了」，而不是等它被后端悄悄丢掉 */}
@@ -705,10 +705,12 @@ function initialDrafts(metrics) {
     {
       decision: initialDecision(metric),
       metric_code: metric.metric_code || '',
-      value: metric.metric_value || '',
-      unit: metric.unit || '',
-      reference_range: metric.reference_range || '',
-      evidence_text: metric.evidence_text || '',
+      // 生效值：pending 指标就是模型值（临时生效值），已确认/已修正的指标是
+      // 患者上次核对过的值 —— 重入时输入框预填它，不用从零重输二十项。
+      value: metric.effective_value || '',
+      unit: metric.effective_unit || '',
+      reference_range: metric.effective_reference_range || '',
+      evidence_text: metric.effective_evidence_text || '',
     },
   ]));
 }

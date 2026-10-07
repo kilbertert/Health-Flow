@@ -58,19 +58,20 @@ function metricColumns(onOpenSource) {
       title: '结果',
       key: 'value',
       width: 110,
-      render: (_, record) => record.confirmed_value || record.metric_value || '—',
+      // 生效值由服务端算好（GLOSSARY.md 的「指标生效值」）——前端不再自己回退。
+      render: (_, record) => record.effective_value || '—',
     },
     {
       title: '单位',
       key: 'unit',
       width: 90,
-      render: (_, record) => record.confirmed_unit || record.unit || '—',
+      render: (_, record) => record.effective_unit || '—',
     },
     {
       title: '参考区间',
       key: 'reference_range',
       width: 140,
-      render: (_, record) => record.confirmed_reference_range || record.reference_range || '—',
+      render: (_, record) => record.effective_reference_range || '—',
     },
     {
       title: '异常标记',
@@ -98,7 +99,9 @@ function metricColumns(onOpenSource) {
 
 function MetricOverview({ result, onOpenSource }) {
   const columns = useMemo(() => metricColumns(onOpenSource), [onOpenSource]);
-  const metrics = result.metrics || [];
+  // 患者明确排除的指标没有生效值（服务端语义），不进报告单总览 ——
+  // 否则患者会看到自己刚排除的指标还挂在报告上。
+  const metrics = (result.metrics || []).filter((metric) => metric.confirmation_status !== 'excluded');
   const abnormalMetrics = metrics.filter((metric) => isAbnormal(displayFlag(metric)));
   const abnormalNames = abnormalMetrics.map((metric) => metric.metric_name).join('、');
   return (
