@@ -822,8 +822,9 @@ def test_assessment_re_adjudicates_codes_once_the_catalog_is_back():
         evidence_text="Non-HDL 4.00 mmol/L (<3.40)",
     )
 
+    catalog = [{"code": "non_hdl_c", "label": "非高密度脂蛋白胆固醇"}]
     with (
-        patch("app.api.report.fetch_metric_catalog", return_value=[{"code": "non_hdl_c", "label": "非高密度脂蛋白胆固醇"}]),
+        patch("app.api.report.fetch_metric_catalog", return_value=catalog),
         patch("app.api.report.match_published_evidence", return_value=_evidence_result()) as match,
     ):
         asyncio.run(_assess_report(report, session))
