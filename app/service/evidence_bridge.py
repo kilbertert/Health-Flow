@@ -315,9 +315,9 @@ async def fetch_metric_catalog(*, settings: Settings | None = None) -> list[dict
 def _inference_inputs(metric: Any) -> tuple[str, str | None]:
     """异常判定的输入：当前最佳值（确认值优先）与当前参考范围（确认范围优先）。
 
-    证据门禁在同一段逻辑里逐字写着这两条优先级；它是全仓库唯一的第二处，
-    而且只在这一处。改变优先级要同时改这里与 ``build_observations_with_unmatched``
-    —— 或者把那里也改成调用本函数（本票不做，避免扩大改动面）。
+    两条优先级本身在 ``app/service/metric_effective_value.py`` 里 —— 那里是唯一
+    实现，证据门禁、异常判定与响应契约都消费它。本函数只负责把生效值转成判定
+    需要的形状（值转字符串、参考范围原样）。
     """
     effective = effective_value(metric)
     return str(effective.value or ""), effective.reference_range

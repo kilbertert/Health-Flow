@@ -158,6 +158,7 @@ def _metric_response(metric: MetricModel) -> MetricRecord:
         except (TypeError, json.JSONDecodeError):
             return None
 
+    effective = effective_value(metric)
     return MetricRecord(
         id=metric.id,
         report_id=metric.report_id,
@@ -180,10 +181,10 @@ def _metric_response(metric: MetricModel) -> MetricRecord:
         confirmed_unit=metric.confirmed_unit,
         confirmed_reference_range=metric.confirmed_reference_range,
         confirmed_evidence_text=metric.confirmed_evidence_text,
-        **{
-            f"effective_{name}": getattr(effective_value(metric), name)
-            for name in ("value", "unit", "reference_range", "evidence_text")
-        },
+        effective_value=effective.value,
+        effective_unit=effective.unit,
+        effective_reference_range=effective.reference_range,
+        effective_evidence_text=effective.evidence_text,
     )
 
 
