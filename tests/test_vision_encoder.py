@@ -267,3 +267,62 @@ def test_render_pdf_to_images_fallback():
     # With no pymupdf, should return empty list
     result = service._render_pdf_to_images(b"fake pdf content")
     assert isinstance(result, list)
+
+
+def test_text_pdf_no_longer_deduplicates(monkeypatch):
+    """文本 PDF 路径**不再**自己做页内去重（#107）。
+
+    同一观测的判定只有一个执行点（报告级，`app/service/metric_rows.py`）。解析器
+    里那份页内去重没有文件编号、不看原文证据，而且只跑在这一条路径上 —— 于是
+    同样的内容在文本 PDF 与扫描件上得到不同的行数。这里断言解析器**原样返回**
+    它抽到的每一行，去重留给报告级。
+
+    连带修正：`success` 按未去重的行数计算，所以「两行同名同值」不再让
+    `success` 因为去重后为空而翻转。
+    """
+    from app.schema.report import MetricRecord
+    from app.service.vision_encoder import VisionEncoderService
+
+    class Page:
+        def extract_text(self):
+            return "page one"
+
+        def extract_tables(self):
+            return []
+
+    class Document:
+        def __init__(self):
+            self.pages = [Page()]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setitem(sys.modules, "pdfplumber", SimpleNamespace(open=lambda _: Document()))
+    service = VisionEncoderService()
+
+    duplicate_rows = [
+        MetricRecord(
+            metric_name="空腹血糖",
+            metric_value="6.5",
+            unit="mmol/L",
+            reference_range="3.9-6.1",
+            page_number=1,
+            evidence_text="空腹血糖 6.5 mmol/L 3.9-6.1",
+        ),
+        MetricRecord(
+            metric_name="空腹血糖",
+            metric_value="6.5",
+            unit="mmol/L",
+            reference_range="3.9-6.1",
+            page_number=1,
+            evidence_text="空腹血糖 6.5 mmol/L 3.9-6.1",
+        ),
+    ]
+    service._extract_text_page = lambda page: (list(duplicate_rows), "")
+
+    parsed = service.parse_text_pdf(b"pdf")
+    assert len(parsed.metrics) == 2, "解析器不再去重 —— 那是报告级的职责"
+    assert parsed.success is True
