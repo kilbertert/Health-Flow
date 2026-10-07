@@ -78,6 +78,32 @@ _ASSESSED_METRICS: tuple[dict[str, Any], ...] = (
         "bbox_normalized": [60.0, 220.0, 130.0, 230.0],
         "page_number": 1,
     },
+    # 分歧样本一：抽取模型标了 H，但数值在参考范围内 —— 判定为 N，
+    # 报告页显示正常、历史摘要不计数。
+    {
+        "metric_name": "误标的餐后血糖",
+        "metric_value": "5.0",
+        "unit": "mmol/L",
+        "reference_range": "3.9-6.1",
+        "abnormal_flag": "H",
+        "evidence_text": "误标的餐后血糖 5.0 mmol/L 3.9-6.1",
+        "bbox": [120.0, 490.0, 300.0, 510.0],
+        "bbox_normalized": [60.0, 245.0, 150.0, 255.0],
+        "page_number": 1,
+    },
+    # 分歧样本二：抽取模型没有标记，但数值超出参考范围 —— 判定为 H，
+    # 报告页显示异常、历史摘要计数。
+    {
+        "metric_name": "漏标的总胆固醇",
+        "metric_value": "6.9",
+        "unit": "mmol/L",
+        "reference_range": "0.0-5.2",
+        "abnormal_flag": None,
+        "evidence_text": "漏标的总胆固醇 6.9 mmol/L 0.0-5.2",
+        "bbox": [120.0, 540.0, 320.0, 560.0],
+        "bbox_normalized": [60.0, 270.0, 160.0, 280.0],
+        "page_number": 1,
+    },
 )
 
 # 待确认(pending_confirmation)报告的指标:解析完成、等待用户核对。

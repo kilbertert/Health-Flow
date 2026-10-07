@@ -207,39 +207,51 @@ export function isAbnormal(flag) {
   return ['H', 'HIGH', '高', 'L', 'LOW', '低', 'A', '*'].includes(String(flag || '').toUpperCase());
 }
 
-function singleNumber(value) {
-  const matches = String(value || '').match(/-?\d+(?:\.\d+)?/g) || [];
-  return matches.length === 1 ? Number(matches[0]) : null;
-}
-
-function parseReferenceRange(value) {
-  const text = String(value || '').trim();
-  let match = text.match(/(-?\d+(?:\.\d+)?)\s*(?:-|~|至|到)\s*(-?\d+(?:\.\d+)?)/);
-  if (match) return [Number(match[1]), Number(match[2])];
-  match = text.match(/(?:<|<=|≤)\s*(-?\d+(?:\.\d+)?)/);
-  if (match) return [null, Number(match[1])];
-  match = text.match(/(?:>|>=|≥)\s*(-?\d+(?:\.\d+)?)/);
-  if (match) return [Number(match[1]), null];
-  return [null, null];
-}
-
-function deterministicFlag(metric) {
-  const valueText = metric?.confirmed_value || metric?.metric_value;
-  const reference = metric?.confirmed_reference_range || metric?.reference_range;
-  if (!valueText || /[<>≤≥]/.test(String(valueText))) return null;
-  const value = singleNumber(valueText);
-  const [low, high] = parseReferenceRange(reference);
-  if (value === null || (low === null && high === null)) return null;
-  if (low !== null && value < low) return 'L';
-  if (high !== null && value > high) return 'H';
-  return 'N';
-}
-
 function needsReview(metric) {
   // 「这条指标值不值得患者看一眼」= 它显示的标记是偏高/偏低/待核对。
   // 直接复用 displayFlag，避免「显示的标记」与「计入异常候选」再次分叉。
   const flag = displayFlag(metric);
   return flag === 'H' || flag === 'L' || flag === '待核对';
+}
+
+// 「这个值进入解读了吗」——患者可见的一句诚实说明。
+//
+// 判据分两段，各自对应一种真实的、患者必须被告知的情况：
+//
+//   1. **服务端给了判定为空**：值为空（还没解析）、提示比较符、或多值/带符号
+//      解析不出一个数、没有参考范围。值本身就是用不了的。
+//   2. **服务端根本没给这个字段**（`undefined`，字段出现之前的响应）：退回
+//      原始标记的纯展示映射，不自行推导。
+//
+// 被患者**排除**的指标不算「用不了」——服务端对排除项也返回空判定，但那是
+// 患者自己的决定，值本身完全可解析；把它们标成「数值无法识别」是误导。
+//
+// 两个条件都落在服务端已知的事实上：判定为空（或用不了）**且** 模型宣称它异常
+// （说明这条本来会被当成异常项）。合起来正是「模型说它异常、但它没能进入解读」
+// ——#129 的场景：多值/带符号的值会被后端整行丢掉，界面必须在患者确认之前说清，
+// 而不是让它一路走到「已生成健康提示」。
+//
+// 取代了原先的 `valueIsUsable`：那个函数在本文件里又复刻了一遍后端的数值与
+// 范围解析规则（注释里写着「必须与后端 evidence_bridge._single_number 一致」）。
+export function valueUnusable(metric) {
+  // 患者排除的指标：服务端同样返回空判定，但那是患者自己的决定，值本身可解析。
+  if (metric?.confirmation_status === 'excluded') return false;
+  // 模型没宣称异常的行，从来不是这个提示的对象。
+  if (!isAbnormal(metric?.abnormal_flag)) return false;
+  if (metric?.inferred_abnormal_flag === undefined) {
+    // 字段出现之前的响应。这里**不能用 displayFlag**：它对原始异常一律返回
+    // 「待核对」（那是对的，患者需要看到异常候选），于是可解析的异常也会被
+    // 本谓词判成「用不了」——患者被挡在一个完全能确认的指标前面。
+    //
+    // 精确的回答需要后端的 `abnormal_flag_reason`，但它在回复里被 Pydantic 的
+    // 响应模型过滤掉了（响应只声明了 `inferred_abnormal_flag`）。前置审查披露
+    // 后会导致旧客户端不再被挡——本部署里前后端同进同出，不承担这个代价。
+    // 所以旧响应下本谓词只能保守返回 false：宁可少提示，不可误报（患者排除
+    // 掉那条的值往往完全可解析）。代价是 #129 的多值守卫在旧响应下不生效，
+    // 而该场景要成立需要「前端版本早于 #134」，同一部署里这不会发生。
+    return false;
+  }
+  return metric.inferred_abnormal_flag === null;
 }
 
 // 一条指标在界面上应显示的异常标记。
@@ -269,25 +281,15 @@ export function displayFlag(metric) {
   return isAbnormal(raw) ? '待核对' : raw;
 }
 
-// 值与参考范围能否解析出**一个**数。规则必须与后端 evidence_bridge._single_number 一致：
-// 后端要求恰好一个数，解析不出就整行丢弃（reason=invalid_value）。
-function valueIsUsable(metric) {
-  const valueText = metric?.confirmed_value || metric?.metric_value;
-  if (!valueText || /[<>≤≥]/.test(String(valueText))) return false;
-  if (singleNumber(valueText) === null) return false;
-  const [low, high] = parseReferenceRange(metric?.confirmed_reference_range || metric?.reference_range);
-  return low !== null || high !== null;
-}
-
 function initialDecision(metric) {
-  const flag = deterministicFlag(metric);
-  // 解析不出单一数值的行**不能**默认「确认」：后端会把它整行丢掉，而界面却让它
-  // 一路走到「已生成健康提示」——用户从没被告知那个值没被采纳（报告 44 的三个
-  // 异常项就是这么消失的）。默认「待核对」，逼一次显式选择。
-  if (!valueIsUsable(metric) && isAbnormal(metric?.abnormal_flag)) return 'pending';
+  const flag = displayFlag(metric);
+  // 用不了的值**不能**默认「确认」：后端会把它连行一起丢掉，而界面却让它一路
+  // 走到「已生成健康提示」——用户从没被告知那个值没被采纳（报告 44 的三个异常项
+  // 就是这么消失的）。默认「待核对」，逼一次显式选择。
+  if (valueUnusable(metric)) return 'pending';
   if ((flag === 'H' || flag === 'L') && metric?.evidence_text && metric?.page_number) return 'confirmed';
   if (flag === 'H' || flag === 'L') return 'pending';
-  return flag === null && isAbnormal(metric?.abnormal_flag) ? 'pending' : 'excluded';
+  return flag === '待核对' ? 'pending' : 'excluded';
 }
 
 function useNarrowViewport() {
@@ -325,7 +327,7 @@ function MetricCard({ metric, draft, metricCatalog, disabled, onUpdateDraft, onO
           </span>
           {abnormalTag(displayFlag(metric))}
           {/* 多值/带符号的行：先告诉用户「这个值用不了」，而不是等它被后端悄悄丢掉 */}
-          {!valueIsUsable(metric) && isAbnormal(metric?.abnormal_flag) && (
+          {valueUnusable(metric) && (
             <Tag color="orange">数值无法识别为单个数字</Tag>
           )}
         </button>
@@ -1024,7 +1026,7 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
     // 后端要求恰好一个数，这种值它会连行一起丢掉（reason=invalid_value），
     // 而用户会以为已经确认过了。挡在这里，明确要求修正或排除。
     const unusable = (result.metrics || []).filter(
-      (metric) => decisionOf(metric) === 'confirmed' && !valueIsUsable(metric),
+      (metric) => decisionOf(metric) === 'confirmed' && valueUnusable(metric),
     );
     if (unusable.length > 0) {
       message.warning(
@@ -1093,7 +1095,7 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
         <Space size={4} wrap>
           {abnormalTag(displayFlag(record))}
           {/* 表形态下同样要标出来——这是桌面端默认视图 */}
-          {!valueIsUsable(record) && isAbnormal(record?.abnormal_flag) && (
+          {valueUnusable(record) && (
             <Tag color="orange">数值无法识别为单个数字</Tag>
           )}
         </Space>

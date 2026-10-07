@@ -157,3 +157,73 @@ test.describe('异常判定口径（桌面端）', () => {
     await expect(triglycerideRow).not.toContainText(TAG_N);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 分歧样本:模型标记与判定不一致时，患者看到的以**判定**为准
+// ---------------------------------------------------------------------------
+
+test.describe('异常判定口径 vs 抽取模型标记', () => {
+  test.use({ viewport: { width: 1280, height: 800 } });
+
+  test('模型误标 H 但数值在范围内 → 显示正常、不计入摘要；模型漏标但超范围 → 显示异常、计入摘要', async ({
+    page,
+    seed,
+  }) => {
+    const seeded = await seed({ reports: ['assessed'] });
+    const reportId = seeded.reports[0].id;
+    await loginWithSeed(page, seeded);
+
+    // 历史摘要:种子 5 项里判定为异常的是 3 项(原有两条 + 漏标的那条)。
+    // 误标的那条贡献的是「0」—— 报告页显示正常，摘要也不计数。
+    await page.getByRole('button', { name: '个人中心', exact: true }).click();
+    const historyItem = page.locator('.history-section .ant-list-item').first();
+    await expect(historyItem).toContainText('5 项指标');
+    await expect(historyItem).toContainText('3 项偏高/偏低');
+
+    // 报告页:两条分歧样本各自的标记。
+    await page.goto(`/#/report/${reportId}`);
+    await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible();
+    const overview = page.locator('.metric-overview-card');
+    const mislabelled = overview.locator('tr', { hasText: '误标的餐后血糖' });
+    const unlabelled = overview.locator('tr', { hasText: '漏标的总胆固醇' });
+    await expect(mislabelled).toContainText('N 正常');
+    await expect(mislabelled).not.toContainText('H 偏高');
+    await expect(unlabelled).toContainText('H 偏高');
+    // 摘要里的数字与这两行一致:误标的不算、漏标的算。
+    await expect(page.locator('.report-abnormal-summary')).toContainText('异常指标 3 项');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 回归:Devin Review 在 #138 指出的两条
+// ---------------------------------------------------------------------------
+
+test.describe('排除与旧响应不能被误报或漏报', () => {
+  test.use({ viewport: { width: 375, height: 667 } });
+
+  test('字段出现之前的响应:确认页仍可用，异常候选仍可见', async ({ page, seed }) => {
+    const seeded = await seed({ reports: ['pending_confirmation'] });
+    const reportId = seeded.reports[0].id;
+    // 去掉判定字段,模拟 #134 之前的响应形状(契约是向后兼容的)。
+    const legacy = (report) => ({
+      ...report,
+      metrics: (report.metrics || []).map(({ inferred_abnormal_flag, ...rest }) => rest),
+    });
+    await page.route(`**/api/health/report/${reportId}`, async (route) => {
+      const res = await route.fetch();
+      await route.fulfill({ response: res, json: legacy(await res.json()) });
+    });
+    await page.route(`**/api/health/report/${reportId}/metrics`, async (route) => {
+      const res = await route.fetch();
+      await route.fulfill({ response: res, json: { metrics: legacy({ metrics: (await res.json()).metrics }).metrics } });
+    });
+
+    await loginWithSeed(page, seeded);
+    await page.getByRole('button', { name: '个人中心', exact: true }).click();
+    await page.getByRole('button', { name: '查看' }).click();
+    await page.getByRole('button', { name: '继续确认' }).click();
+    await expect(page.getByRole('heading', { name: '体检报告解读' })).toBeVisible();
+    // 旧响应下患者仍能看见并处理异常候选（默认「待核对」）。
+    await expect(page.getByText(/其中 \d+ 项需要确认/)).toBeVisible();
+  });
+});

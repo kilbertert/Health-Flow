@@ -23,7 +23,7 @@ test('历史列表打开报告详情并读取 hash 路由', async ({ page, seed 
   await expect(meta).toContainText(`#${reportId}`);
   await expect(meta).toContainText('已完成');
   await expect(page.getByText('指标总览', { exact: true })).toBeVisible();
-  await expect(page.locator('.report-abnormal-summary')).toContainText('异常指标 2 项');
+  await expect(page.locator('.report-abnormal-summary')).toContainText('异常指标 3 项');
 });
 
 test('报告详情深链刷新后恢复', async ({ page, seed }) => {
@@ -65,6 +65,8 @@ test('修正后的指标值优先展示', async ({ page, seed }) => {
           unit: 'mmol/L',
           reference_range: '3.9-6.1',
           abnormal_flag: 'H',
+          // 患者把 6.5 修正为 6.4,参考范围 3.9-6.1 —— 6.4 仍高于上限,判定为 H。
+          inferred_abnormal_flag: 'H',
           page_number: 1,
           evidence_text: '空腹血糖 6.4 mmol/L ↑',
           confirmation_status: 'corrected',

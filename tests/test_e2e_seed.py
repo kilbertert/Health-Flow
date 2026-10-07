@@ -98,11 +98,18 @@ def test_seed_creates_completed_and_pending_reports(database_url):
         completed_metrics = session.scalars(
             select(MetricRecord).where(MetricRecord.report_id == completed_row.id)
         ).all()
-        assert len(completed_metrics) == 3
+        # 前三条是原有的血脂场景;后两条是异常判定的分歧样本
+        # (模型误标 H 但数值在范围内、模型漏标但数值超范围)。
+        assert len(completed_metrics) == 5
         assert all(
             metric.confirmation_status == "confirmed" and metric.confirmed_value and metric.confirmed_reference_range
             for metric in completed_metrics
         )
+        by_name = {metric.metric_name: metric for metric in completed_metrics}
+        assert by_name["误标的餐后血糖"].abnormal_flag == "H"
+        assert by_name["误标的餐后血糖"].metric_value == "5.0"
+        assert by_name["漏标的总胆固醇"].abnormal_flag is None
+        assert by_name["漏标的总胆固醇"].metric_value == "6.9"
 
         # 待确认报告:尚未评估,指标等待核对。
         assert pending_row.evidence_result is None
