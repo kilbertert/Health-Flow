@@ -1,6 +1,5 @@
 """Validated published-evidence response contract."""
 
-import math
 from datetime import datetime
 from typing import Literal
 
@@ -34,16 +33,23 @@ class SourceObservation(StrictModel):
 
     @model_validator(mode="after")
     def validate_bbox(self) -> "SourceObservation":
-        if self.bbox is not None:
-            if any(not math.isfinite(coordinate) or coordinate < 0 for coordinate in self.bbox):
-                raise ValueError("bbox coordinates are invalid")
-            if self.bbox[0] > self.bbox[2] or self.bbox[1] > self.bbox[3]:
-                raise ValueError("bbox must be ordered as x1,y1,x2,y2")
-        if self.bbox_normalized is not None:
-            if any(not math.isfinite(coordinate) or not 0 <= coordinate <= 1000 for coordinate in self.bbox_normalized):
-                raise ValueError("bbox_normalized coordinates are invalid")
-            if self.bbox_normalized[0] > self.bbox_normalized[2] or self.bbox_normalized[1] > self.bbox_normalized[3]:
-                raise ValueError("bbox_normalized must be ordered as x1,y1,x2,y2")
+        """坐标规则在 `app/service/origin_location.py`（唯一一处）。
+
+        这里是**创建边界**（`strict=True`）：退化框被拒绝。**读取**历史行时
+        由 `app/api/report.py` 的读路径容忍（`strict=False`）。
+        """
+        # 延迟导入见 app/schema/report.py 的同一处说明。
+        from app.service.origin_location import bbox_issue
+
+        for name, box, upper in (
+            ("bbox", self.bbox, None),
+            ("bbox_normalized", self.bbox_normalized, 1000),
+        ):
+            if box is None:
+                continue  # 定位为空是合法状态
+            issue = bbox_issue(box, upper=upper, strict=True)
+            if issue is not None:
+                raise ValueError(f"{name} coordinates are invalid ({issue})")
         return self
 
 

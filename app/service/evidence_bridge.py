@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import math
 import re
 import unicodedata
@@ -16,6 +15,7 @@ from pydantic import TypeAdapter, ValidationError
 from app.config import Settings, get_settings
 from app.schema.evidence import EvidenceMatchResponse, MetricCatalogItem
 from app.service.metric_effective_value import effective_value
+from app.service.origin_location import clean_bbox, page_url
 
 METRIC_ALIASES = {
     "收缩压": "systolic_blood_pressure",
@@ -234,8 +234,8 @@ def build_observations_with_unmatched(
             )
             continue
         if not code:
-            bbox = _coordinate_list(getattr(metric, "bbox", None))
-            bbox_normalized = _coordinate_list(getattr(metric, "bbox_normalized", None))
+            bbox = _coordinates_for_boundary(getattr(metric, "bbox", None))
+            bbox_normalized = _coordinates_for_boundary(getattr(metric, "bbox_normalized", None))
             source_observation = {
                 "observation_id": f"health-flow-metric-{metric.id}",
                 "metric_code": None,
@@ -248,11 +248,9 @@ def build_observations_with_unmatched(
                 "source_file_index": metric.source_file_index,
                 "source_page": metric.page_number,
                 "source_id": metric.source_id,
-                "source_url": (
-                    f"/api/health/report/{metric.report_id}/files/{metric.source_file_index}/pages/{metric.page_number}"
-                    if metric.report_id is not None
-                    else None
-                ),
+                # 定位 URL 只有一个 builder；守卫统一为「report_id 与 page_number
+                # 都在才拼」（此前这一处只守卫 report_id）。
+                "source_url": page_url(metric.report_id, metric.source_file_index, metric.page_number),
                 "bbox": bbox,
                 "bbox_normalized": bbox_normalized,
             }
@@ -280,13 +278,9 @@ def build_observations_with_unmatched(
                 "source_file_index": metric.source_file_index,
                 "source_page": metric.page_number,
                 "source_id": metric.source_id,
-                "source_url": (
-                    f"/api/health/report/{metric.report_id}/files/{metric.source_file_index}/pages/{metric.page_number}"
-                    if metric.report_id is not None and metric.page_number is not None
-                    else None
-                ),
-                "bbox": _coordinate_list(getattr(metric, "bbox", None)),
-                "bbox_normalized": _coordinate_list(getattr(metric, "bbox_normalized", None)),
+                "source_url": page_url(metric.report_id, metric.source_file_index, metric.page_number),
+                "bbox": _coordinates_for_boundary(getattr(metric, "bbox", None)),
+                "bbox_normalized": _coordinates_for_boundary(getattr(metric, "bbox_normalized", None)),
             }
         )
     return observations, skipped, unmatched
@@ -445,18 +439,11 @@ def _evidence_contains_value(evidence: str, value: float) -> bool:
     return False
 
 
-def _coordinate_list(value: object) -> list[float] | None:
-    """Normalize ORM JSON values before they cross the evidence API boundary."""
+def _coordinates_for_boundary(value: object) -> list[float] | None:
+    """证据边界上读出来的坐标：**读取边界，容忍历史行**。
 
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except (TypeError, ValueError):
-            return None
-    if not isinstance(value, (list, tuple)) or len(value) != 4:
-        return None
-    try:
-        coordinates = [float(item) for item in value]
-    except (TypeError, ValueError):
-        return None
-    return coordinates if all(math.isfinite(item) for item in coordinates) else None
+    判定走 `app/service/origin_location.py` 的同一处（`strict=False`）——
+    此前这里只查长度与有限性，连**逆序**与**负数**都放行，是本票要消灭的
+    「同一概念四种判定」里的第四种。
+    """
+    return clean_bbox(value, strict=False)
