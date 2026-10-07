@@ -146,6 +146,12 @@ def test_report_history_is_scoped_to_the_subject(subject_client):
 
 
 def test_report_history_includes_abnormal_count(subject_client):
+    """摘要只数**异常判定**为 H/L 的指标 —— 不是数模型写下的原始标志。
+
+    这个口径是对 #30 的有意修正（#90/#134）：摘要是「解读会考虑什么」的预告，
+    不是抽取模型原始标记的复述。因此这里刻意同时放两种分歧样本：
+    模型标了异常但数值在范围内（不计数）、模型没标但数值超范围（计数）。
+    """
     client, SessionLocal = subject_client
     owner_id, cookie = _issue_subject_session(SessionLocal, "t1", "u1")
     with SessionLocal() as db:
@@ -155,11 +161,46 @@ def test_report_history_includes_abnormal_count(subject_client):
         db.flush()
         db.add_all(
             [
-                MetricRecord(report_id=owned.id, metric_name="偏高", metric_value="1", abnormal_flag="H"),
-                MetricRecord(report_id=owned.id, metric_name="偏低", metric_value="1", abnormal_flag="L"),
+                # 模型标异常，但数值在参考范围内 —— 判定为 N，不计数。
+                MetricRecord(
+                    report_id=owned.id,
+                    metric_name="误标偏高的血糖",
+                    metric_value="5.2",
+                    reference_range="3.9-6.1",
+                    abnormal_flag="H",
+                ),
+                # 模型什么都没标，但数值超范围 —— 判定为 H，计数。
+                MetricRecord(
+                    report_id=owned.id,
+                    metric_name="漏标的血糖",
+                    metric_value="6.5",
+                    reference_range="3.9-6.1",
+                ),
+                # 模型标了偏低但数值正常 —— 不计数。
+                MetricRecord(
+                    report_id=owned.id,
+                    metric_name="误标偏低",
+                    metric_value="1.50",
+                    reference_range=">1.00",
+                    abnormal_flag="L",
+                ),
+                # 模型未标记但偏低 —— 计数。
+                MetricRecord(
+                    report_id=owned.id,
+                    metric_name="漏标的偏低",
+                    metric_value="0.90",
+                    reference_range=">1.00",
+                ),
+                # 未分类的原始标记（A）不参与判定，也没有参考范围 —— 不计数。
                 MetricRecord(report_id=owned.id, metric_name="异常未分类", metric_value="1", abnormal_flag="A"),
-                MetricRecord(report_id=owned.id, metric_name="正常", metric_value="1", abnormal_flag="N"),
-                MetricRecord(report_id=owned.id, metric_name="未标记", metric_value="1"),
+                # 判定不可定（多数字值）—— 不计数。
+                MetricRecord(
+                    report_id=owned.id,
+                    metric_name="多值指标",
+                    metric_value="6.5/7.2",
+                    reference_range="3.9-6.1",
+                    abnormal_flag="H",
+                ),
                 MetricRecord(report_id=other.id, metric_name="另一主体异常", metric_value="1", abnormal_flag="H"),
             ]
         )
@@ -168,8 +209,10 @@ def test_report_history_includes_abnormal_count(subject_client):
 
     items = client.get("/api/auth/reports").json()
     assert len(items) == 1
-    assert items[0]["metric_count"] == 5
-    assert items[0]["abnormal_count"] == 3
+    assert items[0]["metric_count"] == 6
+    # 「误标偏高的血糖」与「误标偏低」在本报告页显示正常，「漏标的血糖」与
+    # 「漏标的偏低」显示异常；摘要与报告页从此同口径。
+    assert items[0]["abnormal_count"] == 2
 
 
 def test_report_endpoints_require_a_session_when_enabled(subject_client):

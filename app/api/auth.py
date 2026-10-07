@@ -14,20 +14,25 @@ from app.api.deps import db_dependency, session_owner_dependency
 from app.config import get_settings
 from app.data.models import MedicalReport
 from app.schema.auth import ReportHistoryItem, SessionSubjectResponse, TicketExchangeRequest
+from app.service.evidence_bridge import infer_abnormal_flag_for_metric
 from app.service.report_ownership import subject_storage_id
 from app.service.sessions import SESSION_COOKIE, revoke_session
 from app.service.tickets import TicketError, build_verifier
 
 router = APIRouter()
-_ABNORMAL_FLAGS = frozenset({"H", "L", "A", "*", "HIGH", "LOW", "高", "低"})
-
-
-def _is_abnormal_flag(flag: str | None) -> bool:
-    return str(flag or "").strip().upper() in _ABNORMAL_FLAGS
 
 
 def _abnormal_metric_count(report: MedicalReport) -> int:
-    return sum(1 for metric in report.metrics if _is_abnormal_flag(metric.abnormal_flag))
+    """历史摘要的「N 项偏高/偏低」：只数**异常判定**为 H 或 L 的指标。
+
+    不是数模型写下的原始 abnormal_flag。两个口径会在患者眼前分叉——模型标 H
+    但数值在参考范围内时，报告页显示正常而摘要计一条异常。#30 引入摘要时的
+    口径由此修正为「判定口径」，即摘要预测解读会考虑什么。
+
+    判定不可定（缺参考范围、含比较符、多数字值）的指标**不计入**；它们在报告页
+    仍以原始标记展示、由患者在指标确认中处理。
+    """
+    return sum(1 for metric in report.metrics if infer_abnormal_flag_for_metric(metric) in {"H", "L"})
 
 
 def _require_owner(owner_id: str | None) -> str:

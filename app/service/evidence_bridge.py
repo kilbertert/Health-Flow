@@ -196,6 +196,9 @@ def build_observations_with_unmatched(
             )
             continue
         flag = infer_abnormal_flag(str(value), reference)
+        # 判成 N 就是「在参考范围内」；无法判定时 infer_abnormal_flag 返回 None，
+        # 不在这里跳过 —— 上面的检查已按具体原因（invalid_value / missing_reference_range）
+        # 各自给出过理由，走到这里说明判定是可判定的。
         if flag == "N":
             skipped.append(
                 {
@@ -307,6 +310,70 @@ async def fetch_metric_catalog(*, settings: Settings | None = None) -> list[dict
     except (ValueError, ValidationError) as exc:
         raise EvidenceBridgeError("指标目录服务返回格式无效") from exc
     return [item.model_dump() for item in payload]
+
+
+def _inference_inputs(metric: Any) -> tuple[str, str | None]:
+    """异常判定的输入：当前最佳值（确认值优先）与当前参考范围（确认范围优先）。
+
+    证据门禁在同一段逻辑里逐字写着这两条优先级；它是全仓库唯一的第二处，
+    而且只在这一处。改变优先级要同时改这里与 ``build_observations_with_unmatched``
+    —— 或者把那里也改成调用本函数（本票不做，避免扩大改动面）。
+    """
+    value = getattr(metric, "confirmed_value", None) or getattr(metric, "metric_value", None)
+    reference = getattr(metric, "confirmed_reference_range", None) or getattr(metric, "reference_range", None)
+    return str(value or ""), reference
+
+
+def _decidable(metric: Any) -> bool:
+    """这条指标是否进入判定。
+
+    只有一条与「患者做了什么」有关的闸门：``excluded`` 的行被患者明确排除，
+    不进入解读（证据门禁的入口守卫只处理 ``confirmed`` / ``corrected``），所以
+    也不该被服务端标成异常 —— 否则历史摘要会为患者排除掉的指标计一条异常，而
+    解读根本不会看到它。
+
+    ``pending`` 不在此列：模型标了异常、值又可判定的行，患者正是要在确认页上
+    看到它。把 pending 一并排除会让一份待确认的报告显示「未见异常指标」，那比
+    多显示一个异常候选危险得多。
+
+    其余的「能不能判」由值、参考范围决定，与本函数无关（空值走 ``missing_value``）。
+    """
+    return getattr(metric, "confirmation_status", None) != "excluded"
+
+
+def abnormal_flag_reason(metric: Any) -> str | None:
+    """判定不可判定时给出原因，可判定时返回 ``None``。
+
+    原因词汇与证据门禁的 skipped reason 同源（``missing_value`` / ``invalid_value`` /
+    ``missing_reference_range`` 见 ``build_observations_with_unmatched``），所以
+    「响应里判成 N」与「门禁给出的跳过理由」说的是同一件事。
+    """
+    if not _decidable(metric):
+        return "not_decidable"
+    text, reference = _inference_inputs(metric)
+    text = text.strip()
+    if not text:
+        return "missing_value"
+    if any(marker in text for marker in ("<", ">", "≤", "≥")):
+        return "invalid_value"
+    if _single_number(text) is None:
+        return "invalid_value"
+    low, high = parse_reference_range(reference)
+    if low is None and high is None:
+        return "missing_reference_range"
+    return None
+
+
+def infer_abnormal_flag_for_metric(metric: Any) -> str | None:
+    """一条指标行当前生效的异常判定：``"H" | "L" | "N"``，无法判定为 ``None``。
+
+    这是服务端唯一入口，输入优先级与证据门禁一致，因此「患者看到什么」与
+    「门禁拿什么去比对」是同一个答案。
+    """
+    if abnormal_flag_reason(metric) is not None:
+        return None
+    text, reference = _inference_inputs(metric)
+    return infer_abnormal_flag(text, reference)
 
 
 def parse_reference_range(value: str | None) -> tuple[float | None, float | None]:

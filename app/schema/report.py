@@ -18,6 +18,10 @@ class MetricRecord(BaseModel):
     reference_range: str | None = None
     trend: str | None = None
     abnormal_flag: str | None = None
+    # 服务端计算的「当前生效判定」（异常判定）：确认值/确认参考范围优先，否则模型值/
+    # 模型参考范围；无法判定为 None，不猜测。它是患者侧异常标记与历史摘要的唯一口径，
+    # 覆盖抽取模型写下的原始 abnormal_flag。定义见 GLOSSARY.md 的「异常判定」。
+    inferred_abnormal_flag: Literal["H", "L", "N"] | None = None
     bbox: list[float] | None = Field(None, min_length=4, max_length=4)
     bbox_normalized: list[float] | None = Field(None, min_length=4, max_length=4)
     source_file_index: int = Field(default=1, ge=1)

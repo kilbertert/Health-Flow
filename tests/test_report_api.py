@@ -10,7 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.data.models import Base, ReportExtractionJob
+from app.data.models import Base, MedicalReport, ReportExtractionJob
 from app.data.models import MetricRecord as MetricModel
 from app.schema.report import MetricRecord
 from app.service.report_worker import run_next_job
@@ -220,3 +220,113 @@ def test_delete_report_not_found(client):
         response = client.delete("/api/health/report/999")
 
         assert response.status_code == 404
+
+
+def test_metric_responses_carry_the_server_inferred_flag(client, tmp_path):
+    """响应里的 `inferred_abnormal_flag` 与服务端判定是同一个答案。
+
+    这条断言覆盖的是**契约**，不是内部结构：同一个值在响应中出现一次，
+    由服务端算好，前端不再推导。既有 test_abnormal_flag_overrides_model_flag
+    一类的调用方（`build_observations_with_unmatched`）与它共用同一实现。
+    """
+    from types import SimpleNamespace
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    SessionLocal = sessionmaker(bind=engine)
+
+    def override_get_db():
+        with SessionLocal() as session:
+            yield session
+
+    owner_id = "account:api-tenant:flag-subject"
+    token, session_row = issue_session(owner_id)
+    with SessionLocal() as bootstrap:
+        report = MedicalReport(patient_id=owner_id, owner_id=owner_id, status="assessed")
+        bootstrap.add(report)
+        bootstrap.flush()
+        bootstrap.add_all(
+            [
+                # 模型标 H，数值在范围内 —— 响应显示 N。
+                MetricModel(
+                    report_id=report.id,
+                    metric_name="误标偏高",
+                    metric_value="5.2",
+                    unit="mmol/L",
+                    reference_range="3.9-6.1",
+                    abnormal_flag="H",
+                    page_number=1,
+                    evidence_text="误标偏高 5.2 mmol/L",
+                ),
+                # 模型未标，数值超范围 —— 响应显示 H。
+                MetricModel(
+                    report_id=report.id,
+                    metric_name="漏标",
+                    metric_value="6.5",
+                    unit="mmol/L",
+                    reference_range="3.9-6.1",
+                    page_number=1,
+                    evidence_text="漏标 6.5 mmol/L",
+                ),
+                # 患者修正过 —— 按确认值判定为 H（模型值 5.2 本来判 N）。
+                MetricModel(
+                    report_id=report.id,
+                    metric_name="已修正",
+                    metric_value="5.2",
+                    unit="mmol/L",
+                    reference_range="3.9-6.1",
+                    confirmed_value="7.1",
+                    confirmation_status="corrected",
+                    page_number=1,
+                    evidence_text="已修正 5.2 mmol/L",
+                ),
+                # 判定不可定（多数字值）—— 响应为 None，不猜测。
+                MetricModel(
+                    report_id=report.id,
+                    metric_name="多值",
+                    metric_value="6.5/7.2",
+                    unit="mmol/L",
+                    reference_range="3.9-6.1",
+                    abnormal_flag="H",
+                    page_number=1,
+                    evidence_text="多值 6.5/7.2 mmol/L",
+                ),
+            ]
+        )
+        bootstrap.add(session_row)
+        bootstrap.commit()
+        report_id = report.id
+
+    with (
+        patch("app.data.get_db", override_get_db),
+        patch(
+            "app.api.report.resolve_owner",
+            return_value=SimpleNamespace(storage_id=owner_id, subject=f"account:{owner_id}"),
+        ),
+    ):
+        cookies = {SESSION_COOKIE: token}
+        listed = client.get(f"/api/health/report/{report_id}/metrics", cookies=cookies)
+        detail = client.get(f"/api/health/report/{report_id}", cookies=cookies)
+
+    assert listed.status_code == 200, listed.text
+    assert detail.status_code == 200, detail.text
+
+    by_name = {item["metric_name"]: item for item in listed.json()}
+    assert by_name["误标偏高"]["inferred_abnormal_flag"] == "N"
+    assert by_name["漏标"]["inferred_abnormal_flag"] == "H"
+    assert by_name["已修正"]["inferred_abnormal_flag"] == "H"
+    assert by_name["多值"]["inferred_abnormal_flag"] is None
+    # 原始标记原样保留（它是抽取产物，仍然可追溯）——判定回退映射要用它。
+    assert by_name["误标偏高"]["abnormal_flag"] == "H"
+
+    # 同一份报告的两个入口给出同一答案（判定的唯一性在契约上可验证）。
+    assert {m["metric_name"]: m["inferred_abnormal_flag"] for m in detail.json()["metrics"]} == {
+        "误标偏高": "N",
+        "漏标": "H",
+        "已修正": "H",
+        "多值": None,
+    }

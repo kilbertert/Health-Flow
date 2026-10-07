@@ -48,6 +48,7 @@ from app.service.evidence_bridge import (
     EvidenceBridgeError,
     build_observations_with_unmatched,
     fetch_metric_catalog,
+    infer_abnormal_flag_for_metric,
     match_published_evidence,
     metric_code_for_name,
 )
@@ -164,6 +165,7 @@ def _metric_response(metric: MetricModel) -> MetricRecord:
         reference_range=metric.reference_range,
         trend=metric.trend,
         abnormal_flag=metric.abnormal_flag,
+        inferred_abnormal_flag=infer_abnormal_flag_for_metric(metric),
         bbox=load_json(metric.bbox),
         bbox_normalized=load_json(metric.bbox_normalized),
         source_file_index=metric.source_file_index or 1,
