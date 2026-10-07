@@ -128,3 +128,43 @@ test.describe('指标确认表格桌面端', () => {
     await expect(page.locator('.metric-card-list')).toHaveCount(0);
   });
 });
+
+// 标准指标目录不可用时的确认（#148）：患者核对好的决策不该因为目录抖动丢失。
+//
+// 服务端从 #147 起降级保存（编码留空、决策落库，等目录恢复后重新匹配）。前端
+// 的职责只有一件：**把这件事说清楚**，而不是让患者以为白做了一场。
+test.describe('标准指标目录不可用', () => {
+  test.use({ viewport: { width: 375, height: 667 } });
+
+  test('目录 503 时患者仍能确认，提示说明编码稍后重新匹配', async ({ page, seed }) => {
+    const seeded = await seed({ reports: ['pending_confirmation'] });
+    const reportId = seeded.reports[0].id;
+    await page.route('**/api/health/metric-catalog', (route) =>
+      route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: '暂不可用' }) }),
+    );
+
+    let confirmationBody;
+    await page.route(`**/api/health/report/${reportId}/confirm`, async (route) => {
+      confirmationBody = route.request().postDataJSON();
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(assessedResponse(seeded, route.request().url())),
+      });
+    });
+
+    await openPendingReport(page, seeded);
+
+    // 降级提示如实说明「仍可确认」与「稍后重新匹配」。
+    const alert = page.locator('.ant-alert').filter({ hasText: '标准指标目录暂不可用' });
+    await expect(alert).toBeVisible();
+    await expect(alert).toContainText('你仍然可以确认指标');
+    await expect(alert).toContainText('重新匹配');
+
+    // 患者照样能提交。
+    await page.getByRole('button', { name: '确认并生成健康提示' }).click();
+    await expect(page.getByText('E2E 移动端确认完成。')).toBeVisible();
+    expect(confirmationBody).toBeTruthy();
+    expect(confirmationBody.observations.length).toBeGreaterThan(0);
+  });
+});

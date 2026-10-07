@@ -1244,7 +1244,10 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
             type="warning"
             showIcon
             title="标准指标目录暂不可用"
-            description="请稍后重试；未加载正式目录前不会使用过期的本地指标列表。"
+            description={
+              '未加载正式目录前不会使用过期的本地指标列表。你仍然可以确认指标：'
+              + '编码会留空保存，等目录恢复后由服务端按正式目录重新匹配。'
+            }
             style={{ marginBottom: 16 }}
           />
         )}
