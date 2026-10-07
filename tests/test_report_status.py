@@ -168,23 +168,64 @@ def test_recover_stale_jobs_leaves_a_finished_report_alone():
         db.add(ReportExtractionJob(report_id=finished.id, status="running", started_at=stale_at, updated_at=stale_at))
         db.commit()
 
-    assert recover_stale_jobs(SessionLocal) == 1
+    # 这个任务不该被回收（回收计数为 0）——报告已经解析完，入队会重解析。
+    assert recover_stale_jobs(SessionLocal) == 0
 
     with SessionLocal() as db:
-        assert db.query(ReportExtractionJob).one().status == "queued"
+        job = db.query(ReportExtractionJob).one()
+        assert job.status == "completed"  # 标记完成，而不是 queued
         report = db.query(MedicalReport).one()
         assert report.status == "pending_confirmation"  # 没有被退回解析中
         events = db.query(ReportAuditEvent).all()
         assert [event.action for event in events] == ["status_recovered"]
-        assert events[0].detail["report_status"] == "pending_confirmation"
+        assert events[0].detail["reason"] == "stale_running_job_after_success"
 
 
-def test_parse_writes_exactly_one_audit_event_per_run():
-    """一次解析只留一条 extraction_* 事件（迁移入口与旧的手写审计不重复）。"""
-    import inspect
+def test_one_parse_run_commits_exactly_one_extraction_event(tmp_path):
+    """一次解析只留一条 extraction_* 事件。
 
-    from app.api import report as report_api
+    用**真实的一次解析**来数事件，而不是断言源码里出现几次字符串 —— 后者数不出
+    另一个 helper 写下的重复事件（评审在 #141 指出过这一点）。
+    """
+    from unittest.mock import patch
 
-    source = inspect.getsource(report_api._parse_report)
-    assert source.count('action="extraction_partial" if warnings else "extraction_completed"') == 1
-    assert "_audit(\n                db,\n                report,\n                \"extraction_partial\"" not in source
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from app.data.models import Base, MedicalReport, ReportAuditEvent, ReportExtractionJob, ReportFile
+    from app.schema.report import MetricRecord
+    from app.service.report_worker import run_next_job
+    from app.service.vision_encoder import ParsedReport
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    SessionLocal = sessionmaker(bind=engine)
+    report_file = tmp_path / "a.pdf"
+    report_file.write_bytes(b"%PDF-1.4 fake")
+    with SessionLocal() as db:
+        report = MedicalReport(patient_id="P", owner_id="account:t:u", status="processing")
+        db.add(report)
+        db.flush()
+        db.add(ReportFile(report_id=report.id, file_index=1, original_filename="a.pdf",
+                          media_type="application/pdf", stored_path=str(report_file), page_count=1))
+        db.add(ReportExtractionJob(report_id=report.id, status="queued"))
+        db.commit()
+
+    class _Vision:
+        def parse(self, content, filename):
+            return ParsedReport(
+                report_type="text_pdf", raw_text="", page_count=1, success=True,
+                metrics=[MetricRecord(metric_name="空腹血糖", metric_value="5.2", unit="mmol/L",
+                                      reference_range="3.9-6.1", page_number=1, evidence_text="空腹血糖 5.2")],
+            )
+
+    with patch("app.api.report.get_vision_encoder_service", return_value=_Vision()), \
+         patch("app.service.report_worker.get_settings") as settings:
+        settings.return_value.REPORT_JOB_MAX_ATTEMPTS = 3
+        run_next_job(SessionLocal)
+
+    with SessionLocal() as db:
+        actions = [event.action for event in db.query(ReportAuditEvent).order_by(ReportAuditEvent.id).all()]
+    extraction = [action for action in actions if action.startswith("extraction_")]
+    assert len(extraction) == 1, f"一次解析应只留一条 extraction_* 事件，实际 {actions}"

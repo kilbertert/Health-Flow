@@ -23,11 +23,19 @@ from app.service.report_status import transition
 
 
 def recover_stale_jobs(factory) -> int:
-    """把卡在 running 的抽取任务翻回 queued。
+    """回收卡在 running 的抽取任务。
 
-    以前这里是一次批量 ``update()``，**不写任何审计事件** —— 任务状态被改而审计
-    无痕，事后无法回答「这份报告为什么又被解析了一遍」。现在逐条迁移：既改任务，
-    也把这次回收记在报告上（action ``status_recovered``）。
+    「卡住」有两种成因，处置完全不同：
+
+    1. **报告还在 processing** —— worker 真的没跑完。把任务放回队列是对的，
+       报告保持解析中等待下一轮。
+    2. **报告已经离开 processing**（pending_confirmation / confirmed / assessed）
+       —— 解析**成功提交了**，只是 worker 在 ack 任务之前重启。这种任务**不能**
+       放回队列：``run_next_job`` 会再解析一遍，把患者核对过的指标行删掉重来；
+       已确认/已评估的报告还会因为非法迁移变成 failed。
+
+    以前这里是一次批量 ``update()``，既不看报告、也不写审计 —— 事后无法回答
+    「这份报告为什么又被解析了一遍」。现在逐条判断并留痕。
     """
     cutoff = _now() - timedelta(seconds=get_settings().REPORT_JOB_STALE_SECONDS)
     with factory() as db:
@@ -40,36 +48,43 @@ def recover_stale_jobs(factory) -> int:
             .all()
         )
         now = _now()
+        recovered = 0
         for job in stale:
+            report = db.get(MedicalReport, job.report_id)
+            if report is not None and report.status != "processing":
+                # 解析已提交，只是任务没 ack —— 标记为完成，不入队。
+                job.status = "completed"
+                job.error_class = None
+                job.completed_at = now
+                job.updated_at = now
+                _audit(
+                    db,
+                    report,
+                    "status_recovered",
+                    {
+                        "job_id": job.id,
+                        "reason": "stale_running_job_after_success",
+                        "report_status": report.status,
+                        "job_outcome": "completed",
+                    },
+                    actor="system:report-worker",
+                )
+                continue
             job.status = "queued"
             job.started_at = None
             job.updated_at = now
-            report = db.get(MedicalReport, job.report_id)
-            # 回收的语义是「任务还卡在 running」,而报告可能早就解析完了
-            # (解析成功但 worker 在 ack 之前重启)。那种报告已经是
-            # pending_confirmation,把它退回 processing 会让患者核对过的行
-            # 被重新解析清空 —— 迁移表会拒绝,而且拒绝得对。所以只在报告
-            # 确实还没离开解析阶段时才动它;无论如何审计都要留痕。
             if report is not None:
-                if report.status == "processing":
-                    transition(
-                        report,
-                        "processing",
-                        db=db,
-                        action="status_recovered",
-                        actor="system:report-worker",
-                        detail={"job_id": job.id, "reason": "stale_running_job"},
-                    )
-                else:
-                    _audit(
-                        db,
-                        report,
-                        "status_recovered",
-                        {"job_id": job.id, "reason": "stale_running_job", "report_status": report.status},
-                        actor="system:report-worker",
-                    )
+                transition(
+                    report,
+                    "processing",
+                    db=db,
+                    action="status_recovered",
+                    actor="system:report-worker",
+                    detail={"job_id": job.id, "reason": "stale_running_job"},
+                )
+            recovered += 1
         db.commit()
-        return len(stale)
+        return recovered
 
 
 def claim_next_job(factory) -> int | None:
