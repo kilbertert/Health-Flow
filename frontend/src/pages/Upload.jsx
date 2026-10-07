@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { reportStatusColor, reportStatusLabel } from '../reportStatus.js';
 import {
   Alert,
   Button,
@@ -471,12 +472,7 @@ export function SourceEvidence({ reportId, reportToken, metric, file }) {
 }
 
 function evidenceStatus(status) {
-  if (status === 'processing') return <Tag color="processing">正在解析</Tag>;
-  if (status === 'failed') return <Tag color="error">解析失败</Tag>;
-  if (status === 'pending_confirmation') return <Tag color="gold">待确认</Tag>;
-  if (status === 'confirmed') return <Tag color="blue">已确认，待生成提示</Tag>;
-  if (status === 'assessed') return <Tag color="green">已生成健康提示</Tag>;
-  return <Tag>{status || '未知状态'}</Tag>;
+  return <Tag color={reportStatusColor(status)}>{reportStatusLabel(status)}</Tag>;
 }
 
 function evidenceAlertType(hasFindings, hasUnmatched) {
@@ -985,14 +981,31 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
       setResult(data);
       onReportSaved?.();
       message.info('文件已上传，正在后台解析');
-      for (let attempt = 0; data.status === 'processing' && attempt < 300; attempt += 1) {
-        await new Promise((resolve) => window.setTimeout(resolve, 2000));
+      // 轮询读服务端已知的抽取任务状态,而不是盲等。
+      //
+      // 此前是 `while status === 'processing'` × 2 秒 × 300 次（最长十分钟），
+      // 超时后只说「报告仍在后台解析」—— 而 API 早就返回了 `extraction_job`，
+      // 里面就有队列生命周期。任务失败时立刻停并说明原因，任务重试时把次数
+      // 告诉患者，别让他们对着一个不动的时间轴干等。
+      const POLL_INTERVAL_MS = 2000;
+      const MAX_ATTEMPTS = 150; // 与后端 REPORT_JOB_STALE_SECONDS 同量级（约 5 分钟）
+      for (let attempt = 0; data.status === 'processing' && attempt < MAX_ATTEMPTS; attempt += 1) {
+        const job = data.extraction_job;
+        if (job?.status === 'failed') {
+          throw new Error(data.processing_error || '报告智能解读失败，请重试');
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, POLL_INTERVAL_MS));
         data = await getReport(data.id, accessToken);
         setResult(data);
       }
       if (data.status === 'failed') throw new Error(data.processing_error || '报告智能解读失败，请重试');
       if (data.status === 'processing') {
-        message.warning('报告仍在后台解析，请保持当前页面并稍后重试');
+        const attempts = data.extraction_job?.attempt_count;
+        message.warning(
+          attempts
+            ? `报告仍在后台解析（第 ${attempts} 次尝试），请保持当前页面并稍后重试`
+            : '报告仍在后台解析，请保持当前页面并稍后重试',
+        );
         return;
       }
       setDrafts(initialDrafts(data.metrics));

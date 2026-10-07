@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { reportStatusColor, reportStatusLabel } from './reportStatus.js';
 import {
   ArrowLeftOutlined,
   ArrowRightOutlined,
@@ -161,10 +162,6 @@ function ReportPage({ account, reportId, onBack, onReportSaved }) {
   return <main className="report-page"><div className="report-heading"><Button type="text" icon={<ArrowLeftOutlined />} onClick={onBack}>返回首页</Button><div><p className="eyebrow">健康管理 · 报告解读</p><h1>体检报告解读</h1><p>只对已确认的异常指标匹配已发布知识卡。</p></div></div><Upload account={account} initialReportId={reportId} onReportSaved={onReportSaved} /></main>;
 }
 
-function statusLabel(status) {
-  return { processing: '解析中', pending_confirmation: '待确认', confirmed: '已确认', assessed: '已完成', failed: '解析失败' }[status] || status;
-}
-
 function abnormalSummary(item) {
   const count = item.abnormal_count ?? 0;
   return count === 0 ? ' · 未见异常' : ` · ${count} 项偏高/偏低`;
@@ -181,7 +178,7 @@ function ProfilePage({ account, onBack, onLogout, onOpenReport }) {
   return <main className="profile-page"><div className="profile-heading"><Button type="text" icon={<ArrowLeftOutlined />} onClick={onBack}>返回</Button><h1>个人中心</h1><span /></div>
     <section className="profile-identity"><span className="profile-avatar"><UserOutlined /></span><div><h2>{account.display_name}</h2><p>来自商城的会话</p></div></section>
     <div className="profile-links"><button className="profile-link" type="button" onClick={() => setSecurityOpen(true)}><LockOutlined /><span>账户与安全</span><small>商城票据 · 会话安全</small><ArrowRightOutlined /></button><button className="profile-link" type="button" onClick={() => document.getElementById('report-history')?.scrollIntoView({ behavior: 'smooth' })}><HistoryOutlined /><span>报告历史</span><small>{history.length} 份报告</small><ArrowRightOutlined /></button><button className="profile-link" type="button" onClick={() => message.info('通知设置将在后续阶段开放')}><BellOutlined /><span>通知设置</span><small>暂未开放</small><ArrowRightOutlined /></button><button className="profile-link" type="button" onClick={() => message.info('帮助与反馈将在后续阶段开放')}><SafetyCertificateOutlined /><span>帮助与反馈</span><small>暂未开放</small><ArrowRightOutlined /></button></div>
-    <section className="history-section" id="report-history"><div className="section-title"><h2>报告历史</h2><Typography.Text type="secondary">仅显示当前账户</Typography.Text></div>{error && <Alert type="error" showIcon title={error} />}{loading ? <div className="history-loading"><Spin /></div> : history.length === 0 ? <Empty description="还没有报告记录" /> : <List dataSource={history} renderItem={(item) => <List.Item actions={[<Button type="link" onClick={() => onOpenReport(item.id)} key="open">查看</Button>]}><List.Item.Meta title={`${item.report_type || '体检报告'} · ${new Date(item.created_at).toLocaleDateString('zh-CN')}`} description={<span>{item.department || '未填写科室'} · {item.metric_count} 项指标{abnormalSummary(item)}</span>} /><Tag color={item.status === 'assessed' ? 'green' : 'gold'}>{statusLabel(item.status)}</Tag></List.Item>} />}</section>
+    <section className="history-section" id="report-history"><div className="section-title"><h2>报告历史</h2><Typography.Text type="secondary">仅显示当前账户</Typography.Text></div>{error && <Alert type="error" showIcon title={error} />}{loading ? <div className="history-loading"><Spin /></div> : history.length === 0 ? <Empty description="还没有报告记录" /> : <List dataSource={history} renderItem={(item) => <List.Item actions={[<Button type="link" onClick={() => onOpenReport(item.id)} key="open">查看</Button>]}><List.Item.Meta title={`${item.report_type || '体检报告'} · ${new Date(item.created_at).toLocaleDateString('zh-CN')}`} description={<span>{item.department || '未填写科室'} · {item.metric_count} 项指标{abnormalSummary(item)}</span>} /><Tag color={reportStatusColor(item.status)}>{reportStatusLabel(item.status)}</Tag></List.Item>} />}</section>
     <Button className="logout-button" danger icon={<LogoutOutlined />} onClick={onLogout}>退出登录</Button>
     <Modal title="账户与安全" open={securityOpen} onCancel={() => setSecurityOpen(false)} footer={<Button type="primary" onClick={() => setSecurityOpen(false)}>知道了</Button>}><p>本应用的会话由商城签发的登录票据建立。</p><p>退出登录后会话立即失效；再次使用请从商城入口重新进入。</p></Modal>
   </main>;
