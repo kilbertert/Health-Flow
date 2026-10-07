@@ -11,30 +11,80 @@ from pathlib import Path
 from sqlalchemy import update
 from sqlalchemy.orm import sessionmaker
 
-from app.api.report import _parse_report
+from app.api.report import _audit, _parse_report
 from app.config import get_settings
 from app.data.models import (
     MedicalReport,
-    ReportAuditEvent,
     ReportExtractionJob,
     ReportFile,
 )
 from app.data.mysql_client import get_mysql_client
+from app.service.report_status import transition
 
 
 def recover_stale_jobs(factory) -> int:
+    """回收卡在 running 的抽取任务。
+
+    「卡住」有两种成因，处置完全不同：
+
+    1. **报告还在 processing** —— worker 真的没跑完。把任务放回队列是对的，
+       报告保持解析中等待下一轮。
+    2. **报告已经离开 processing**（pending_confirmation / confirmed / assessed）
+       —— 解析**成功提交了**，只是 worker 在 ack 任务之前重启。这种任务**不能**
+       放回队列：``run_next_job`` 会再解析一遍，把患者核对过的指标行删掉重来；
+       已确认/已评估的报告还会因为非法迁移变成 failed。
+
+    以前这里是一次批量 ``update()``，既不看报告、也不写审计 —— 事后无法回答
+    「这份报告为什么又被解析了一遍」。现在逐条判断并留痕。
+    """
     cutoff = _now() - timedelta(seconds=get_settings().REPORT_JOB_STALE_SECONDS)
     with factory() as db:
-        result = db.execute(
-            update(ReportExtractionJob)
-            .where(
+        stale = (
+            db.query(ReportExtractionJob)
+            .filter(
                 ReportExtractionJob.status == "running",
                 ReportExtractionJob.updated_at < cutoff,
             )
-            .values(status="queued", started_at=None, updated_at=_now())
+            .all()
         )
+        now = _now()
+        recovered = 0
+        for job in stale:
+            report = db.get(MedicalReport, job.report_id)
+            if report is not None and report.status != "processing":
+                # 解析已提交，只是任务没 ack —— 标记为完成，不入队。
+                job.status = "completed"
+                job.error_class = None
+                job.completed_at = now
+                job.updated_at = now
+                _audit(
+                    db,
+                    report,
+                    "status_recovered",
+                    {
+                        "job_id": job.id,
+                        "reason": "stale_running_job_after_success",
+                        "report_status": report.status,
+                        "job_outcome": "completed",
+                    },
+                    actor="system:report-worker",
+                )
+                continue
+            job.status = "queued"
+            job.started_at = None
+            job.updated_at = now
+            if report is not None:
+                transition(
+                    report,
+                    "processing",
+                    db=db,
+                    action="status_recovered",
+                    actor="system:report-worker",
+                    detail={"job_id": job.id, "reason": "stale_running_job"},
+                )
+            recovered += 1
         db.commit()
-        return int(result.rowcount or 0)
+        return recovered
 
 
 def claim_next_job(factory) -> int | None:
@@ -97,19 +147,18 @@ def run_next_job(factory) -> int | None:
             job = db.get(ReportExtractionJob, job_id)
             report = db.get(MedicalReport, job.report_id) if job else None
             if report is not None:
-                report.status = "failed"
+                transition(
+                    report,
+                    "failed",
+                    db=db,
+                    action="extraction_failed",
+                    actor="system:report-worker",
+                    detail={"error_type": "ReportFileReadError"},
+                )
                 report.parsed_content = {
                     **(report.parsed_content or {}),
                     "error": "报告原文读取失败，请重新上传或稍后重试。",
                 }
-                db.add(
-                    ReportAuditEvent(
-                        report_id=report.id,
-                        action="extraction_failed",
-                        actor="system:report-worker",
-                        detail={"error_type": "ReportFileReadError"},
-                    )
-                )
             db.commit()
     with factory() as db:
         job = db.get(ReportExtractionJob, job_id)
@@ -126,17 +175,16 @@ def run_next_job(factory) -> int | None:
             job.completed_at = None
             job.updated_at = now
             if report is not None:
-                report.status = "processing"
-                db.add(
-                    ReportAuditEvent(
-                        report_id=report.id,
-                        action="extraction_retry_queued",
-                        actor="system:report-worker",
-                        detail={
-                            "attempt_count": job.attempt_count,
-                            "max_attempts": max_attempts,
-                        },
-                    )
+                transition(
+                    report,
+                    "processing",
+                    db=db,
+                    action="extraction_retry_queued",
+                    actor="system:report-worker",
+                    detail={
+                        "attempt_count": job.attempt_count,
+                        "max_attempts": max_attempts,
+                    },
                 )
         else:
             job.status = "completed" if succeeded else "failed"
@@ -144,7 +192,14 @@ def run_next_job(factory) -> int | None:
             job.completed_at = now
             job.updated_at = now
             if not succeeded and report is not None:
-                report.status = "failed"
+                transition(
+                    report,
+                    "failed",
+                    db=db,
+                    action="extraction_failed",
+                    actor="system:report-worker",
+                    detail={"attempt_count": job.attempt_count},
+                )
                 error = (report.parsed_content or {}).get("error")
                 report.parsed_content = {
                     **(report.parsed_content or {}),

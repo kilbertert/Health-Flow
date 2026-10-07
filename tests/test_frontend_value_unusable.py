@@ -82,6 +82,10 @@ CASES = [
 
 
 @pytest.mark.skipif(NODE is None, reason="需要 node 才能驱动前端模块")
+@pytest.mark.skipif(
+    not (REPO_ROOT / "frontend" / "node_modules" / "esbuild").is_dir(),
+    reason="需要 frontend/node_modules（esbuild）才能转译 JSX；先在前端目录 npm install",
+)
 def test_value_unusable_follows_the_server_decision():
     import os
     import shutil as _shutil

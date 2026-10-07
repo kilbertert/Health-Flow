@@ -54,6 +54,7 @@ from app.service.evidence_bridge import (
 )
 from app.service.mall_goods import fetch_goods, label_pairs_for, serialized
 from app.service.report_ownership import UNOWNED_SENTINEL, resolve_owner
+from app.service.report_status import transition
 from app.service.vision_encoder import ParsedReport, get_vision_encoder_service
 
 #: 只有这些状态的报告才谈得上加购：未完成确认/评估的报告没有可据以取货的风险。
@@ -213,6 +214,13 @@ def _ordered_metrics(db: Session, report_id: int):
 
 
 def _processing_warnings(report: ReportModel) -> list[str]:
+    """这次解析有哪些文件没能解析完（患者可见的解析细节）。
+
+    **它不是闸门的来源**：确认/评估能不能做由状态决定 —— 仍有文件未解析完的
+    报告，其状态是 ``processing`` 而不是 ``pending_confirmation``（见
+    ``app/service/report_status.py`` 的迁移表）。这个函数只用来把原因写进
+    给患者的提示里。
+    """
     return list((report.parsed_content or {}).get("warnings") or [])
 
 
@@ -277,11 +285,13 @@ async def upload_report(
         report_type=report_type or "体检",
         department=department,
         parsed_content={"file_count": len(accepted_files)},
-        status="processing",
         subject_consistency="same" if len(accepted_files) == 1 else "uncertain",
         owner_id=resolve_owner(request).storage_id,
         exam_date=datetime.now(),
     )
+    # 状态由唯一迁移入口设置。此刻对象还没 flush，列默认值尚未落到属性上，
+    # 所以这是「从无到有」的第一次迁移；审计事件要等 id 存在后再写。
+    transition(report, "processing")
     db.add(report)
     db.flush()
     if report.id is None:
@@ -419,7 +429,23 @@ def _parse_report(
             ]
             report.provider_run_id = provider_runs[0] if provider_runs else None
             report.provider_run_ids = json.dumps(provider_runs, ensure_ascii=False)
-            report.status = "processing" if warnings else "pending_confirmation"
+            transition(
+                report,
+                "processing" if warnings else "pending_confirmation",
+                db=db,
+                action="extraction_partial" if warnings else "extraction_completed",
+                actor="ai:report-extractor",
+                detail={
+                    "metric_count": len(parsed_metrics),
+                    "provider": report.extraction_provider,
+                    "model": report.extraction_model,
+                    "prompt_version": report.extraction_prompt_version,
+                    "prompt_hash": report.extraction_prompt_hash,
+                    "run_id": report.extraction_run_id,
+                    "provider_run_ids": provider_runs,
+                    "warnings": warnings,
+                },
+            )
             for item in parsed_metrics:
                 db.add(
                     MetricModel(
@@ -440,22 +466,6 @@ def _parse_report(
                         confirmation_status="pending",
                     )
                 )
-            _audit(
-                db,
-                report,
-                "extraction_partial" if warnings else "extraction_completed",
-                {
-                    "metric_count": len(parsed_metrics),
-                    "provider": report.extraction_provider,
-                    "model": report.extraction_model,
-                    "prompt_version": report.extraction_prompt_version,
-                    "prompt_hash": report.extraction_prompt_hash,
-                    "run_id": report.extraction_run_id,
-                    "provider_run_ids": provider_runs,
-                    "warnings": warnings,
-                },
-                actor="ai:report-extractor",
-            )
             db.commit()
         return not warnings
     except Exception as exc:
@@ -464,20 +474,20 @@ def _parse_report(
             report = db.get(ReportModel, report_id)
             if report is None:
                 return False
-            report.status = "failed"
+            transition(
+                report,
+                "failed",
+                db=db,
+                action="extraction_failed",
+                actor="ai:report-extractor",
+                detail={"error_type": type(exc).__name__},
+            )
             report.parsed_content = {
                 **(report.parsed_content or {}),
                 "error": "报告智能解读失败，请重新上传或稍后重试。",
                 "error_class": type(exc).__name__,
                 "retryable": _retryable_error(str(exc)),
             }
-            _audit(
-                db,
-                report,
-                "extraction_failed",
-                {"error_type": type(exc).__name__},
-                actor="ai:report-extractor",
-            )
             db.commit()
         return False
 
@@ -597,12 +607,14 @@ async def confirm_report(
         report_id,
         owner_id=resolve_owner(request).storage_id,
     )
+    # 闸门只看状态:仍有文件未解析完的报告状态是 processing,走不进这一步。
+    # 提醒里带上具体原因(患者可见),但判定不依赖它。
     if report.status not in {"pending_confirmation", "confirmed"}:
-        raise HTTPException(status_code=409, detail="报告当前状态不允许确认")
-    if _processing_warnings(report):
         raise HTTPException(
             status_code=409,
-            detail="报告仍有文件未完成解析，请重新上传或先修复失败文件",
+            detail="报告仍有文件未完成解析，请重新上传或先修复失败文件"
+            if _processing_warnings(report)
+            else "报告当前状态不允许确认",
         )
     if report.subject_consistency != "same" and confirmation.subject_consistency != "same":
         raise HTTPException(status_code=422, detail="请先确认所有文件属于同一主体")
@@ -670,7 +682,7 @@ async def confirm_report(
         metric.confirmed_evidence_text = item.evidence_text or metric.evidence_text
         metric.confirmed_at = now
         (corrected_ids if item.decision == "corrected" else confirmed_ids).append(metric.id)
-    report.status = "confirmed"
+    transition(report, "confirmed", db=db, action="confirmed", actor=resolve_owner(request).subject)
     report.subject_consistency = confirmation.subject_consistency or report.subject_consistency or "same"
     report.evidence_result = None
     _audit(
@@ -720,8 +732,10 @@ async def assess_report(
 async def _assess_report(
     report: ReportModel, db: Session, *, owned_by_account: bool = False
 ) -> MedicalReportResponse:
-    if _processing_warnings(report):
-        raise EvidenceBridgeError("报告仍有文件未完成解析")
+    # 准入由调用方按状态判定(仍有文件未解析完 → 状态是 processing)。
+    # 这里不再从 parsed_content 重新推导闸门 —— 那是旧的双通道。
+    if report.status not in {"confirmed", "assessed"}:
+        raise EvidenceBridgeError("报告当前状态不允许生成健康提示")
     metrics = _ordered_metrics(db, report.id).all()
     observations, local_skipped, local_unmatched = build_observations_with_unmatched(metrics)
     typed_result = EvidenceMatchResponse.model_validate(await match_published_evidence(observations))
@@ -793,7 +807,7 @@ async def _assess_report(
         },
         actor="system:evidence-service",
     )
-    report.status = "assessed"
+    transition(report, "assessed", db=db, action="assessed", actor="system:report-assessor")
     db.commit()
     db.refresh(report)
     metrics = _ordered_metrics(db, report.id).all()

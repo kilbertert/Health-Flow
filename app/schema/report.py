@@ -141,7 +141,12 @@ class MedicalReportResponse(BaseModel):
     metrics: list[MetricRecord]
     files: list[ReportFileRecord] = Field(default_factory=list)
     created_at: datetime
-    status: str = "pending_confirmation"
+    # 患者可见的报告状态（GLOSSARY.md 的「报告状态」）。唯一迁移入口见
+    # app/service/report_status.py；数据库列仍是 String（兼容既有行），
+    # 但这个契约只允许这五个值。
+    status: Literal["processing", "pending_confirmation", "confirmed", "assessed", "failed"] = (
+        "pending_confirmation"
+    )
     subject_consistency: str | None = None
     evidence_result: EvidenceMatchResponse | None = None
     processing_error: str | None = None
