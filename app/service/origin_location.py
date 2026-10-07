@@ -129,8 +129,15 @@ def denormalize_bbox(bbox: list[float], width: int, height: int) -> list[float]:
     raw = [x1 / 1000 * width, y1 / 1000 * height, x2 / 1000 * width, y2 / 1000 * height]
     rounded = [round(value, 2) for value in raw]
     for low_index, high_index in ((0, 2), (1, 3)):
-        if rounded[low_index] == rounded[high_index] and raw[low_index] != raw[high_index]:
-            rounded[high_index] = raw[high_index]
+        low, high = rounded[low_index], rounded[high_index]
+        if low == high and raw[low_index] != raw[high_index]:
+            # 舍入把两端点并到一起了。恢复原始值时要**保证顺序**：只把高的那个
+            # 换回原始值时，若低端点是向上舍入的，原始高端点可能反而更低
+            # （评审在 #164 指出）。两个都换回原始值，顺序必然保留。
+            rounded[low_index] = min(raw[low_index], raw[high_index])
+            rounded[high_index] = max(raw[low_index], raw[high_index])
+        elif high < low:
+            rounded[low_index], rounded[high_index] = high, low
     return rounded
 
 

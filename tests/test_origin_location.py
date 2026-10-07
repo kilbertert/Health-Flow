@@ -241,10 +241,12 @@ def test_denormalize_keeps_a_narrow_box_alive():
     """
     from app.service.origin_location import denormalize_bbox
 
-    # 归一化差 0.01（在 100px 宽的图上不到 0.01px）—— 舍入后两端点相等。
-    narrow = [500.0, 100.0, 500.01, 200.0]
-    box = denormalize_bbox(narrow, 100, 100)
-    assert box[0] != box[2], f"端点被舍入并到一起: {box}"
+    # 两端点舍入到同一值时**顺序仍须保留**。这组数会让低端点**向上**舍入
+    # （50.006 → 50.01）：只恢复高端点会让它落到低端点之下（评审在 #164 指出）。
+    for narrow in ([500.06, 100.0, 500.09, 200.0], [500.0, 100.0, 500.01, 200.0]):
+        box = denormalize_bbox(narrow, 100, 100)
+        assert box[0] < box[2], f"端点顺序被舍入破坏: {narrow} -> {box}"
+        assert box[1] < box[3], f"端点顺序被舍入破坏: {narrow} -> {box}"
 
 
 def test_boundary_validator_rejects_reversed_and_negative():
