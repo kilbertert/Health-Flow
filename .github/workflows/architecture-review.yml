@@ -81,13 +81,22 @@ jobs:
         run: npm ci
 
       - name: Run architecture-review.ts
+        id: run
         env:
           AFK_PROFILE: ${{ vars.AFK_PROFILE || 'claude-deepseek' }}
           OUTPUT_DIR: ${{ runner.temp }}
-        run: npm exec tsx .sandcastle/architecture-review/architecture-review.ts
+        # 失败也继续：摘要在下一步（`if: always()`）里解释为什么失败 ——
+        # 那条链路哑掉时，Action 页面上一行红叉说明不了任何事。
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          npm exec tsx .sandcastle/architecture-review/architecture-review.ts 2>&1 | tee "${{ runner.temp }}/architecture_review_run.log"
 
       - name: Publish PRD issue
         id: publish
+        # agent 崩了就不发布：`continue-on-error` 只是让摘要步骤有机会跑，
+        # 它不是「失败了也照常发布」的许可（评审在 #166 指出）。
+        if: steps.run.outcome == 'success'
         env:
           OUTPUT_FILE: ${{ runner.temp }}/architecture_review_output.json
           TITLE_FILE: ${{ runner.temp }}/prd_title.txt
@@ -101,11 +110,20 @@ jobs:
             exit 0
           fi
           title=$(cat "$TITLE_FILE")
-          # Ensure the provenance label exists (idempotent — succeeds if already present).
+          # 标签必须**确实存在**再创建 issue：`gh label create` 之前被写成幂等
+          # （`|| true`），而 `gh issue create --label` 在标签不存在时会失败 ——
+          # 于是 PRD 可能落库但**没有来源标签**，而重复检查靠标签工作。
           gh label create "$LABEL" \
             --color "5319E7" \
             --description "PRDs proposed by the automated architecture-review workflow" \
             >/dev/null 2>&1 || true
+          # `gh label list` 默认只返回 30 条；用 --limit 足量拉取，否则一个存在
+          # 但排在后面的标签会被判成「不存在」，于是每次运行都拒绝发布（评审在
+          # #166 指出）。
+          if ! gh label list --limit 200 --json name --jq '.[].name' | grep -qx "$LABEL"; then
+            echo "::error::provenance label '$LABEL' is missing; refusing to publish an unlabelled PRD"
+            exit 1
+          fi
           # gh issue create prints the URL on the last line.
           issue_url=$(gh issue create \
             --title "$title" \
@@ -120,16 +138,35 @@ jobs:
         if: always()
         env:
           OUTPUT_FILE: ${{ runner.temp }}/architecture_review_output.json
+          RUN_LOG: ${{ runner.temp }}/architecture_review_run.log
+          RUN_OUTCOME: ${{ steps.run.outcome }}
         run: |
-          if [ ! -f "$OUTPUT_FILE" ]; then
-            echo "No output file produced — agent likely crashed before emitting a result."
+          # 失败的归类比「红叉」有意义得多：这条链路 2026-09-25 之后的 12 次
+          # failure 里有 11 次是上游额度耗尽（与代码无关），没人分得清。
+          if [ "$RUN_OUTCOME" != "success" ] || [ ! -f "$OUTPUT_FILE" ]; then
+            {
+              echo "## Architecture review — failed"
+              echo ""
+              # **不搬运 agent 的原始输出**：它可能含凭据或内部路径，而
+              # `$GITHUB_STEP_SUMMARY` 是持久且可被更多读者看到的（评审在 #166
+              # 指出）。这里只报**类别**，详细日志留在 run 页面自己的 log 里。
+              if grep -qE "429|quota|credit" "$RUN_LOG" 2>/dev/null; then
+                echo "**类别：上游额度耗尽**（供应商侧，不是代码缺陷）。"
+                echo ""
+                echo "匹配行数：$(grep -cE "429|quota|credit" "$RUN_LOG") —— 详细日志见本次 run 的 log。"
+              else
+                echo "**类别：其他**（需要看日志）。"
+                echo ""
+                echo "日志行数：$(wc -l < "$RUN_LOG" 2>/dev/null || echo 0) —— 详细日志见本次 run 的 log。"
+              fi
+            } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           status=$(jq -r '.status' "$OUTPUT_FILE")
           {
             echo "## Architecture review"
             echo ""
-            if [ "$status" = "proposed" ]; then
+            if [ "$status" = "proposed" ] && [ -n "${{ steps.publish.outputs.issue_url }}" ]; then
               issue_url="${{ steps.publish.outputs.issue_url }}"
               title=$(jq -r '.title' "$OUTPUT_FILE")
               summary=$(jq -r '.oneLineSummary' "$OUTPUT_FILE")
@@ -144,5 +181,10 @@ jobs:
               echo "**Skipped — no fresh candidates today.**"
               echo ""
               echo "$reason"
+            else
+              # 提案已产出但**没有发布出去**（标签前置拒绝等）。
+              echo "**提案已产出，但发布未完成** —— 看 'Publish PRD issue' 步骤的日志。"
+              echo ""
+              jq -r '.title' "$OUTPUT_FILE"
             fi
           } >> "$GITHUB_STEP_SUMMARY"

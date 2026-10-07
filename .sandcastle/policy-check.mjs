@@ -15,6 +15,7 @@ if (!["version", "exceptions", "workflows", "commit", "delivery", "all"].include
 if (command === "version" || command === "delivery" || command === "all") checkVersions();
 if (command === "exceptions" || command === "delivery" || command === "all") checkExceptions();
 if (command === "workflows" || command === "delivery" || command === "all") checkWorkflows();
+if (command === "workflows" || command === "delivery" || command === "all") checkArchitectureReview();
 if (command === "commit" || command === "delivery" || command === "all") checkBranch();
 if (command === "commit" || command === "delivery" || command === "all") checkDiff();
 
@@ -121,6 +122,56 @@ function checkWorkflows() {
     rejectUnsafeWorkflowText(name, source);
   }
 }
+
+// architecture-review 是一条「失败时也必须说清楚」的链路：它哑掉过一次，
+// 12 次 failure 里 11 次是上游额度耗尽，而摘要只在 success 分支里写（#133）。
+function checkArchitectureReview() {
+  const name = "architecture-review.yml";
+  const source = stripYamlComments(readText(join(root, ".github/workflows", name), name));
+
+  for (const required of [
+    // 摘要步骤必须在失败时也跑。
+    "if: always()",
+    // 失败时按类别解释，而不是只留一行红叉。
+    "RUN_OUTCOME",
+    "上游额度耗尽",
+    // 发布前必须确认来源标签确实存在 —— 无标签的 PRD 会让「已提过」的判断失效。
+    // `--limit` 是这条断言的一部分：默认 30 条会让靠后的标签被误判为不存在。
+    'gh label list --limit',
+    'grep -qx "$LABEL"',
+    "refusing to publish an unlabelled PRD",
+    // 提案已产出但没发布出去时，摘要要说「未完成」，不能说「Created」。
+    "发布未完成",
+  ]) {
+    if (!source.includes(required)) fail(`${name} is missing architecture-review failure visibility: ${required}`);
+  }
+
+  if (!/continue-on-error:\s*true/.test(source)) {
+    fail(`${name} must let the summary step run after the agent fails`);
+  }
+  // 额度耗尽是已知类别；不认识的一律归入「其他」并带出日志。
+  if (!/429\|quota\|credit/.test(source)) fail(`${name} does not classify upstream quota exhaustion`);
+
+  // 摘要不得把 agent 的原始输出搬进 `$GITHUB_STEP_SUMMARY`（持久、读者更多）。
+  if (/tail -20 "\$RUN_LOG"/.test(source)) fail(`${name} copies raw agent output into the job summary`);
+  if (/grep -E "429\|quota\|credit" "\$RUN_LOG" \| tail/.test(source)) {
+    fail(`${name} copies matching agent output into the job summary`);
+  }
+  // 发布必须以 agent 成功为前提：`continue-on-error` 是给摘要用的，不是发布许可。
+  if (!source.includes("if: steps.run.outcome == 'success'")) {
+    fail(`${name} publishes a PRD even when the agent failed`);
+  }
+
+  // The duplicate reporter must be wired into the policy job, and must print
+  // "skipped" rather than passing silently when it cannot reach GitHub.
+  const policy = stripYamlComments(readText(join(root, ".github/workflows", "afk-policy.yml"), "afk-policy.yml"));
+  if (!policy.includes("prd-duplicates.check.ts")) fail("afk-policy.yml does not run the duplicate-PRD classifier check");
+  if (!policy.includes("prd-duplicates.report.mjs")) fail("afk-policy.yml does not report duplicate PRDs");
+  const reporter = readText(join(root, ".sandcastle/prd-duplicates.report.mjs"), "prd-duplicates.report.mjs");
+  if (!reporter.includes("skipped (no GH_TOKEN")) fail("duplicate reporter must skip explicitly without a token, never pass silently");
+  if (!reporter.includes('"--paginate",')) fail("duplicate reporter must page through every open issue, not a truncated list");
+}
+
 
 function rejectUnsafeWorkflowText(name, source) {
   if (source.includes("skills@latest")) fail(`${name} installs a provider-specific skill at runtime`);
