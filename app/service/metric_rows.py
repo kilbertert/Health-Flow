@@ -20,21 +20,30 @@ from __future__ import annotations
 from typing import Any
 
 
+def _normalise(value: object) -> str:
+    return " ".join(str(value or "").split()).casefold()
+
+
 def row_identity(metric: Any) -> str:
     """一行的「同一性字符串」：原文证据优先，缺失时回落指标名。
 
-    这条优先级此前埋在 `app/api/report.py` 的一行表达式里，从未被命名。它是
-    同一观测判定的核心 —— 把优先级写下来，规则才有可能被讨论和测试。
+    这条优先级此前埋在 `app/api/report.py` 的一行表达式里，从未被命名。
     """
-    source = getattr(metric, "evidence_text", None) or getattr(metric, "metric_name", None) or ""
-    return " ".join(str(source).split()).casefold()
+    return _normalise(getattr(metric, "evidence_text", None) or getattr(metric, "metric_name", None))
 
 
 def row_key(metric: Any) -> tuple[object, ...]:
-    """一行的同一性键。**全仓库唯一** —— 两个执行点都消费它。"""
+    """一行的同一性键。**全仓库唯一** —— 两个执行点都消费它。
+
+    指标名与同一性字符串**都在键里**：词条要求的是「同名、同值、同单位、同参考
+    范围，且由同一段原文证据支持」。只看 `evidence_text or name` 会把**两个不同
+    指标**（如「空腹血糖」与「糖化血红蛋白」共用一段原文片段）合成一行，丢掉其中
+    一个 —— 那与「同名」这一条冲突（评审在 #157 指出）。
+    """
     return (
         getattr(metric, "source_file_index", 1),
         getattr(metric, "page_number", None),
+        _normalise(getattr(metric, "metric_name", None)),
         row_identity(metric),
         getattr(metric, "metric_value", None),
         getattr(metric, "unit", None),

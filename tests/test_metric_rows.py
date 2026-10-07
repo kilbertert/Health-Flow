@@ -51,6 +51,19 @@ def test_different_value_unit_or_range_is_a_different_observation():
     assert not same_metric_row(_row(), _row(reference_range="3.9-6.0"))
 
 
+def test_different_names_are_different_observations_even_with_one_evidence_snippet():
+    """**两个不同指标**共用一段原文片段时，仍是两个观测。
+
+    词条要求「**同名**、同值、同单位、同参考范围，且由同一段原文证据支持」。
+    只看 `evidence_text or name` 会把它们合成一行、丢掉其中一个 —— 评审在 #157
+    指出。指标名与同一性字符串都在键里，这一条才成立。
+    """
+    a = _row(metric_name="空腹血糖", evidence_text="血糖相关指标 6.5 mmol/L")
+    b = _row(metric_name="糖化血红蛋白", evidence_text="血糖相关指标 6.5 mmol/L")
+    assert not same_metric_row(a, b)
+    assert len(deduplicate([a, b])) == 2
+
+
 def test_evidence_text_wins_over_the_metric_name():
     """原文证据优先：证据不同就是两个观测，哪怕指标名相同。
 
@@ -96,7 +109,7 @@ def test_text_pdf_and_scanned_pdf_agree_on_the_row_count():
 
 
 def test_deduplicate_keeps_the_first_of_each_group():
-    first = _row(evidence_text="空腹血糖 6.5 mmol/L", metric_name="第一条")
-    second = _row(evidence_text="空腹血糖 6.5 mmol/L", metric_name="第二条")
+    first = _row(evidence_text="空腹血糖 6.5 mmol/L")
+    second = _row(evidence_text="空腹血糖 6.5 mmol/L")  # 与第一条完全同一
     unique = deduplicate([first, second])
     assert unique == [first]
