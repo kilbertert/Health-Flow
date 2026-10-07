@@ -464,3 +464,28 @@ test.describe('原文定位', () => {
     await expect(page.getByText(/第 1 页/)).toHaveCount(0);
   });
 });
+
+test.describe('原文定位（坐标缺失但页码在）', () => {
+  test.use({ viewport: { width: 375, height: 667 } });
+
+  test('没有坐标时定位到本页并说明「没有高亮区域」', async ({ page, seed }) => {
+    const seeded = await seed({ reports: ['assessed'] });
+    const reportId = seeded.reports[0].id;
+    await page.route(`**/api/health/report/${reportId}`, async (route) => {
+      const res = await route.fetch();
+      const json = await res.json();
+      json.metrics = json.metrics.map((metric) => ({ ...metric, bbox_normalized: null, bbox: null }));
+      await route.fulfill({ response: res, json });
+    });
+
+    await loginWithSeed(page, seeded);
+    await page.goto(`/#/report/${reportId}`);
+    await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible();
+    await page.getByRole('button', { name: /^查看.+原文$/ }).first().click();
+
+    // 定位到本页（页码在），但**说清**没有高亮区域 —— 不能让患者以为整页都是位置。
+    await expect(page.getByText(/第 1 页/)).toBeVisible();
+    await expect(page.getByText(/没有位置坐标/)).toBeVisible();
+    await expect(page.getByLabel('指标原文位置')).toHaveCount(0);
+  });
+});

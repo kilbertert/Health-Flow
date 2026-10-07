@@ -332,16 +332,16 @@ function MetricCard({ metric, draft, metricCatalog, disabled, onUpdateDraft, onO
             <Tag color="orange">数值无法识别为单个数字</Tag>
           )}
         </button>
-        {metric.page_number ? (
-          <Tooltip title="查看原文定位">
-            <Button
-              type="text"
-              icon={<EyeOutlined />}
-              aria-label={`查看${metric.metric_name}原文`}
-              onClick={() => onOpenSource(metric)}
-            />
-          </Tooltip>
-        ) : null}
+        {/* 确认页与报告单一致：定位缺失时不再是沉默的「没有按钮」——
+            按钮照常在，弹窗如实说明「无原文定位」（#163 复审）。 */}
+        <Tooltip title="查看原文定位">
+          <Button
+            type="text"
+            icon={<EyeOutlined />}
+            aria-label={`查看${metric.metric_name}原文`}
+            onClick={() => onOpenSource(metric)}
+          />
+        </Tooltip>
       </div>
       {expanded ? (
         <div className="metric-card-details">
@@ -464,7 +464,8 @@ export function SourceEvidence({ reportId, reportToken, metric, file }) {
     );
   }
   const box = metric.bbox_normalized;
-  const highlight = Array.isArray(box) && box.length === 4 ? {
+  const hasBox = Array.isArray(box) && box.length === 4;
+  const highlight = hasBox ? {
     left: `${box[0] / 10}%`,
     top: `${box[1] / 10}%`,
     width: `${Math.max(0, box[2] - box[0]) / 10}%`,
@@ -486,6 +487,11 @@ export function SourceEvidence({ reportId, reportToken, metric, file }) {
           />
         )}
       </div>
+      {!hasBox && (
+        <Typography.Paragraph type="secondary">
+          这条指标没有位置坐标，只能定位到本页，页面上没有需要高亮的区域。
+        </Typography.Paragraph>
+      )}
       <Typography.Paragraph copyable style={{ marginTop: 12 }}>
         {metric.evidence_text || '未提取到原文片段'}
       </Typography.Paragraph>
