@@ -198,6 +198,8 @@ export function abnormalTag(flag) {
   if (f === 'A' || f === '*') return <Tag color="red">异常</Tag>;
   if (f === 'N' || f === 'NORMAL' || f === '正常') return <Tag color="green">N 正常</Tag>;
   if (flag === '待核对') return <Tag color="gold">待核对</Tag>;
+  // 患者排除的指标：不是异常，也不是正常，如实说「已排除」。
+  if (flag === 'excluded') return <Tag>已排除</Tag>;
   return <Tag>{String(flag)}</Tag>;
 }
 
@@ -234,12 +236,37 @@ function deterministicFlag(metric) {
 }
 
 function needsReview(metric) {
-  const flag = deterministicFlag(metric);
-  return flag === 'H' || flag === 'L' || (flag === null && isAbnormal(metric?.abnormal_flag));
+  // 「这条指标值不值得患者看一眼」= 它显示的标记是偏高/偏低/待核对。
+  // 直接复用 displayFlag，避免「显示的标记」与「计入异常候选」再次分叉。
+  const flag = displayFlag(metric);
+  return flag === 'H' || flag === 'L' || flag === '待核对';
 }
 
+// 一条指标在界面上应显示的异常标记。
+//
+// 服务端算好的 `inferred_abnormal_flag` 优先 —— 它是「异常判定」的唯一口径，
+// 历史摘要的「N 项偏高/偏低」也用它，所以两处永远同口径。
+//
+// `not_decidable`（患者排除、或值还没解析出来）**刻意不回落**到原始标记：
+//   - 患者排除的指标，患者已经表态不要它参与解读，服务端也不会为它计数；
+//     这里再按原始标记显示一个红色「H」就自相矛盾了。
+//   - 值还没判定的指标，患者要在确认页上看到「待核对」，而不是一个凭解析
+//     不到的值推出来的假异常。
+// 只有在服务端**根本没有给这个字段**（字段缺失或旧响应，`undefined`）时，
+// 才退回原始标记做纯展示映射。
 export function displayFlag(metric) {
-  return deterministicFlag(metric) || (isAbnormal(metric?.abnormal_flag) ? '待核对' : metric?.abnormal_flag);
+  const inferred = metric?.inferred_abnormal_flag;
+  if (inferred !== undefined && inferred !== null) return inferred;
+  const raw = metric?.abnormal_flag;
+  if (inferred === null) {
+    if (metric?.confirmation_status === 'excluded') return 'excluded';
+    // 判不出来，但模型宣称异常 —— 交患者核对（这正是 #129 要保住的场景）。
+    if (isAbnormal(raw)) return '待核对';
+    // 其余判不出来的行（如模型标 N、或没有参考范围）如实显示原始标记：
+    // 把它们一律标成「待核对」会让每一份含无范围指标的报告满屏待核对。
+    return raw;
+  }
+  return isAbnormal(raw) ? '待核对' : raw;
 }
 
 // 值与参考范围能否解析出**一个**数。规则必须与后端 evidence_bridge._single_number 一致：
