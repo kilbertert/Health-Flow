@@ -94,6 +94,9 @@ jobs:
 
       - name: Publish PRD issue
         id: publish
+        # agent 崩了就不发布：`continue-on-error` 只是让摘要步骤有机会跑，
+        # 它不是「失败了也照常发布」的许可（评审在 #166 指出）。
+        if: steps.run.outcome == 'success'
         env:
           OUTPUT_FILE: ${{ runner.temp }}/architecture_review_output.json
           TITLE_FILE: ${{ runner.temp }}/prd_title.txt
@@ -114,7 +117,10 @@ jobs:
             --color "5319E7" \
             --description "PRDs proposed by the automated architecture-review workflow" \
             >/dev/null 2>&1 || true
-          if ! gh label list --json name --jq '.[].name' | grep -qx "$LABEL"; then
+          # `gh label list` 默认只返回 30 条；用 --limit 足量拉取，否则一个存在
+          # 但排在后面的标签会被判成「不存在」，于是每次运行都拒绝发布（评审在
+          # #166 指出）。
+          if ! gh label list --limit 200 --json name --jq '.[].name' | grep -qx "$LABEL"; then
             echo "::error::provenance label '$LABEL' is missing; refusing to publish an unlabelled PRD"
             exit 1
           fi
@@ -141,18 +147,17 @@ jobs:
             {
               echo "## Architecture review — failed"
               echo ""
+              # **不搬运 agent 的原始输出**：它可能含凭据或内部路径，而
+              # `$GITHUB_STEP_SUMMARY` 是持久且可被更多读者看到的（评审在 #166
+              # 指出）。这里只报**类别**，详细日志留在 run 页面自己的 log 里。
               if grep -qE "429|quota|credit" "$RUN_LOG" 2>/dev/null; then
                 echo "**类别：上游额度耗尽**（供应商侧，不是代码缺陷）。"
                 echo ""
-                echo "\`\`\`"
-                grep -E "429|quota|credit" "$RUN_LOG" | tail -5
-                echo "\`\`\`"
+                echo "匹配行数：$(grep -cE "429|quota|credit" "$RUN_LOG") —— 详细日志见本次 run 的 log。"
               else
-                echo "**类别：其他**（需要看日志）。末尾 20 行："
+                echo "**类别：其他**（需要看日志）。"
                 echo ""
-                echo "\`\`\`"
-                tail -20 "$RUN_LOG" 2>/dev/null || echo "(无日志)"
-                echo "\`\`\`"
+                echo "日志行数：$(wc -l < "$RUN_LOG" 2>/dev/null || echo 0) —— 详细日志见本次 run 的 log。"
               fi
             } >> "$GITHUB_STEP_SUMMARY"
             exit 0
@@ -161,7 +166,7 @@ jobs:
           {
             echo "## Architecture review"
             echo ""
-            if [ "$status" = "proposed" ]; then
+            if [ "$status" = "proposed" ] && [ -n "${{ steps.publish.outputs.issue_url }}" ]; then
               issue_url="${{ steps.publish.outputs.issue_url }}"
               title=$(jq -r '.title' "$OUTPUT_FILE")
               summary=$(jq -r '.oneLineSummary' "$OUTPUT_FILE")
@@ -176,5 +181,10 @@ jobs:
               echo "**Skipped — no fresh candidates today.**"
               echo ""
               echo "$reason"
+            else
+              # 提案已产出但**没有发布出去**（标签前置拒绝等）。
+              echo "**提案已产出，但发布未完成** —— 看 'Publish PRD issue' 步骤的日志。"
+              echo ""
+              jq -r '.title' "$OUTPUT_FILE"
             fi
           } >> "$GITHUB_STEP_SUMMARY"

@@ -15,16 +15,32 @@ if (!token || !repo) {
   process.exit(0);
 }
 
-const raw = execFileSync(
-  "gh",
-  ["issue", "list", "--state", "open", "--limit", "200", "--json", "number,body,labels"],
-  { encoding: "utf8", env: { ...process.env } },
-);
-const issues = JSON.parse(raw).map((issue) => ({
-  number: issue.number,
-  body: issue.body,
-  labels: (issue.labels ?? []).map((label) => label.name),
-}));
+// 用 `gh api --paginate` 拉**全部** open issue：`gh issue list --limit` 会截断，
+// 落在截断之外的重复会看不见，于是报「没有重复」—— 一个假绿（评审在 #166 指出）。
+function listOpenIssues() {
+  const raw = execFileSync(
+    "gh",
+    [
+      "api",
+      "--paginate",
+      "--slurp",
+      `repos/${repo}/issues?state=open&per_page=100`,
+    ],
+    { encoding: "utf8", env: { ...process.env }, maxBuffer: 64 * 1024 * 1024 },
+  );
+  // --slurp 把每一页包成一个数组，所以结果是「页的数组」。
+  return JSON.parse(raw)
+    .flat()
+    .filter((issue) => !issue.pull_request) // 议题空间与 PR 共用编号，去掉 PR。
+    .map((issue) => ({
+      number: issue.number,
+      body: issue.body,
+      labels: (issue.labels ?? []).map((label) => label.name),
+    }));
+}
+
+const issues = listOpenIssues();
+console.log(`prd-duplicates report: scanned ${issues.length} open issue(s)`);
 
 const duplicates = findDuplicatePrds(issues);
 if (duplicates.length === 0) {
