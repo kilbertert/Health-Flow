@@ -159,6 +159,8 @@ test.describe('标准指标目录不可用', () => {
     const alert = page.locator('.ant-alert').filter({ hasText: '标准指标目录暂不可用' });
     await expect(alert).toBeVisible();
     await expect(alert).toContainText('你仍然可以确认指标');
+    // 措辞不替服务端下结论：浏览器拉不到目录 ≠ 服务端仲裁时目录不可用。
+    await expect(alert).toContainText('编码以服务端为准');
     await expect(alert).toContainText('重新匹配');
 
     // 患者照样能提交。

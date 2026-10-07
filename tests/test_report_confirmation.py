@@ -799,3 +799,35 @@ def test_stale_selected_code_falls_back_to_the_metric_name():
     session.refresh(report)
     # 下架的编码挡不住名称解析：落定的是目录验证过的 ldl_c。
     assert report.metrics[0].metric_code == "ldl_c"
+
+
+def test_assessment_re_adjudicates_codes_once_the_catalog_is_back():
+    """目录恢复后，评估路径把当初留空的编码**重新裁决**掉。
+
+    评审在 #150 指出：目录在确认与评估时都不可用的话，那些指标会带着空编码完成
+    评估（报为 unmatched），此后没有自动重评 —— 患者的健康提示就一直不完整。
+    服务端能做的（也是本仓的既定做法）是：**再评估一次就重新裁决**，因为评估
+    路径每次都读权威目录（`_assess_report` → `build_observations_with_unmatched`）。
+    前端已有的「重试生成健康提示」正是这条路径的入口。
+    """
+    from app.api.report import _assess_report
+
+    session, report = _assessment_fixture(
+        metric_name="Non-HDL",
+        metric_code=None,  # 目录不可用那刻留空
+        confirmation_status="confirmed",
+        abnormal_flag="H",
+        metric_value="4.00",
+        reference_range="<3.40",
+        evidence_text="Non-HDL 4.00 mmol/L (<3.40)",
+    )
+
+    with (
+        patch("app.api.report.fetch_metric_catalog", return_value=[{"code": "non_hdl_c", "label": "非高密度脂蛋白胆固醇"}]),
+        patch("app.api.report.match_published_evidence", return_value=_evidence_result()) as match,
+    ):
+        asyncio.run(_assess_report(report, session))
+
+    # 重新裁决成功：这个指标带着目录验证过的编码跨过边界（而不是继续 unmatched）。
+    assert match.call_args.args[0], "目录恢复后应当重新裁决并跨过边界"
+    assert match.call_args.args[0][0]["metric_code"] == "non_hdl_c"
