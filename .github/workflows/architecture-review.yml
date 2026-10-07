@@ -81,10 +81,16 @@ jobs:
         run: npm ci
 
       - name: Run architecture-review.ts
+        id: run
         env:
           AFK_PROFILE: ${{ vars.AFK_PROFILE || 'claude-deepseek' }}
           OUTPUT_DIR: ${{ runner.temp }}
-        run: npm exec tsx .sandcastle/architecture-review/architecture-review.ts
+        # 失败也继续：摘要在下一步（`if: always()`）里解释为什么失败 ——
+        # 那条链路哑掉时，Action 页面上一行红叉说明不了任何事。
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          npm exec tsx .sandcastle/architecture-review/architecture-review.ts 2>&1 | tee "${{ runner.temp }}/architecture_review_run.log"
 
       - name: Publish PRD issue
         id: publish
@@ -101,11 +107,17 @@ jobs:
             exit 0
           fi
           title=$(cat "$TITLE_FILE")
-          # Ensure the provenance label exists (idempotent — succeeds if already present).
+          # 标签必须**确实存在**再创建 issue：`gh label create` 之前被写成幂等
+          # （`|| true`），而 `gh issue create --label` 在标签不存在时会失败 ——
+          # 于是 PRD 可能落库但**没有来源标签**，而重复检查靠标签工作。
           gh label create "$LABEL" \
             --color "5319E7" \
             --description "PRDs proposed by the automated architecture-review workflow" \
             >/dev/null 2>&1 || true
+          if ! gh label list --json name --jq '.[].name' | grep -qx "$LABEL"; then
+            echo "::error::provenance label '$LABEL' is missing; refusing to publish an unlabelled PRD"
+            exit 1
+          fi
           # gh issue create prints the URL on the last line.
           issue_url=$(gh issue create \
             --title "$title" \
@@ -120,9 +132,29 @@ jobs:
         if: always()
         env:
           OUTPUT_FILE: ${{ runner.temp }}/architecture_review_output.json
+          RUN_LOG: ${{ runner.temp }}/architecture_review_run.log
+          RUN_OUTCOME: ${{ steps.run.outcome }}
         run: |
-          if [ ! -f "$OUTPUT_FILE" ]; then
-            echo "No output file produced — agent likely crashed before emitting a result."
+          # 失败的归类比「红叉」有意义得多：这条链路 2026-09-25 之后的 12 次
+          # failure 里有 11 次是上游额度耗尽（与代码无关），没人分得清。
+          if [ "$RUN_OUTCOME" != "success" ] || [ ! -f "$OUTPUT_FILE" ]; then
+            {
+              echo "## Architecture review — failed"
+              echo ""
+              if grep -qE "429|quota|credit" "$RUN_LOG" 2>/dev/null; then
+                echo "**类别：上游额度耗尽**（供应商侧，不是代码缺陷）。"
+                echo ""
+                echo "\`\`\`"
+                grep -E "429|quota|credit" "$RUN_LOG" | tail -5
+                echo "\`\`\`"
+              else
+                echo "**类别：其他**（需要看日志）。末尾 20 行："
+                echo ""
+                echo "\`\`\`"
+                tail -20 "$RUN_LOG" 2>/dev/null || echo "(无日志)"
+                echo "\`\`\`"
+              fi
+            } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           status=$(jq -r '.status' "$OUTPUT_FILE")

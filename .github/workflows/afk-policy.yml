@@ -31,3 +31,16 @@ jobs:
       # profile — and nothing fails. It was a runnable check with no runner.
       - name: Verify sandbox network isolation
         run: npx --yes tsx .sandcastle/profile-network.check.ts
+      # The duplicate-PRD classifier reports, it does not repair: deleting an
+      # issue is irreversible, so the check surfaces the list and a human
+      # decides which copy survives.
+      - name: Verify duplicate-PRD classifier
+        run: npx --yes tsx .sandcastle/prd-duplicates.check.ts
+      # Needs GitHub to read open issues. Without a token it prints "skipped"
+      # explicitly rather than passing silently — a check that cannot run is
+      # blocked, never green.
+      - name: Report duplicate architecture-review PRDs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: node .sandcastle/prd-duplicates.report.mjs
