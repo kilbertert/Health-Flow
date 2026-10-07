@@ -53,6 +53,7 @@ from app.service.evidence_bridge import (
     metric_code_for_name,
 )
 from app.service.mall_goods import fetch_goods, label_pairs_for, serialized
+from app.service.metric_effective_value import effective_value
 from app.service.report_ownership import UNOWNED_SENTINEL, resolve_owner
 from app.service.report_status import transition
 from app.service.vision_encoder import ParsedReport, get_vision_encoder_service
@@ -157,6 +158,7 @@ def _metric_response(metric: MetricModel) -> MetricRecord:
         except (TypeError, json.JSONDecodeError):
             return None
 
+    effective = effective_value(metric)
     return MetricRecord(
         id=metric.id,
         report_id=metric.report_id,
@@ -179,6 +181,10 @@ def _metric_response(metric: MetricModel) -> MetricRecord:
         confirmed_unit=metric.confirmed_unit,
         confirmed_reference_range=metric.confirmed_reference_range,
         confirmed_evidence_text=metric.confirmed_evidence_text,
+        effective_value=effective.value,
+        effective_unit=effective.unit,
+        effective_reference_range=effective.reference_range,
+        effective_evidence_text=effective.evidence_text,
     )
 
 
