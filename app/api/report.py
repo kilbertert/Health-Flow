@@ -56,6 +56,7 @@ from app.service.evidence_bridge import (
 from app.service.mall_goods import fetch_goods, label_pairs_for, serialized
 from app.service.metric_effective_value import effective_value
 from app.service.metric_rows import deduplicate
+from app.service.origin_location import page_url, source_id_for
 from app.service.report_ownership import UNOWNED_SENTINEL, resolve_owner
 from app.service.report_status import transition
 from app.service.report_subject import (
@@ -368,9 +369,11 @@ def _parse_report(
                     "source_file_index": file_index,
                     # 解析时写入：目录此刻还不可用（尚未到确认），只做名称归一化并标记待裁决。
                     "metric_code": resolve_metric_code(item.metric_name, None),
-                    "source_id": (
-                        f"file-{file_index}/"
-                        f"{item.source_id or ('p' + str(item.page_number or 1) + '-m' + str(metric_index))}"
+                    # source_id 的最终形态只有一处定义（origin_location）。
+                    "source_id": source_id_for(
+                        file_index,
+                        item.page_number,
+                        _source_position(item.source_id, metric_index),
                     ),
                 }
             )
@@ -512,6 +515,19 @@ def _confirmed_condition_codes(report: ReportModel) -> list[str]:
     return codes
 
 
+def _source_position(existing: str | None, fallback: int) -> int:
+    """从既有 `source_id` 里取页内序号（`...-m{position}`），取不到用 fallback。
+
+    抽取器已经给出过 `p{page}-m{index}`；重算时不能改变它，否则同一行的
+    `source_id` 会在两次行走之间漂移。
+    """
+    if existing and "-m" in existing:
+        tail = existing.rsplit("-m", 1)[1]
+        if tail.isdigit():
+            return int(tail)
+    return fallback
+
+
 def _patient_notices_from_stored(stored: object) -> dict | None:
     """把库里存的 `evidence_result` 归一成当前的患者投影形状。
 
@@ -562,7 +578,8 @@ def _report_response(
                 "original_filename": item.original_filename,
                 "media_type": item.media_type,
                 "page_count": item.page_count,
-                "source_url": (f"/api/health/report/{report.id}/files/{item.file_index}/pages/1"),
+                # files 列表语义化为「该文件首页」。
+                "source_url": page_url(report.id, item.file_index, 1),
             }
             for item in sorted(report.files, key=lambda value: value.file_index)
         ],

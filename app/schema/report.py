@@ -1,6 +1,5 @@
 """Schemas for report parsing and coordinate-aware metric extraction."""
 
-import math
 from datetime import datetime
 from typing import Any, Literal
 
@@ -44,20 +43,25 @@ class MetricRecord(BaseModel):
 
     @model_validator(mode="after")
     def validate_bboxes(self) -> "MetricRecord":
+        """坐标规则在 `app/service/origin_location.py`（唯一一处）。
+
+        这里是**创建边界**：使用 `strict=True`，退化框（零面积）被拒绝 ——
+        它指不到任何东西。此前这一层只查 `>`，于是退化的 `[100,100,100,100]`
+        在抽取层被拒绝、在这里被**接受**（#101 的四种实现、三种裁决）。
+        """
+        # 延迟导入：`app.service.__init__` 会拉起 vision_encoder，而它反过来
+        # import 本模块 —— 在模块级导入会成环。校验器里导入没有这个问题。
+        from app.service.origin_location import bbox_issue
+
         for name, box in (
             ("bbox", self.bbox),
             ("bbox_normalized", self.bbox_normalized),
         ):
             if box is None:
-                continue
-            upper = 1000 if name == "bbox_normalized" else None
-            if any(
-                not math.isfinite(coordinate) or coordinate < 0 or (upper is not None and coordinate > upper)
-                for coordinate in box
-            ):
-                raise ValueError(f"{name} coordinates are invalid")
-            if box[0] > box[2] or box[1] > box[3]:
-                raise ValueError(f"{name} must be ordered as x1,y1,x2,y2")
+                continue  # 定位为空是合法状态（任一组件缺失即为空，不猜测）
+            issue = bbox_issue(box, upper=1000 if name == "bbox_normalized" else None, strict=True)
+            if issue is not None:
+                raise ValueError(f"{name} coordinates are invalid ({issue})")
         return self
 
 

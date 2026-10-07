@@ -35,6 +35,7 @@ from sqlalchemy.orm import Session
 
 from app.data.models import Base, MedicalReport, MetricRecord, ReportFile, TicketSubject, UserSession
 from app.schema.evidence import EvidenceMatchResponse
+from app.service.origin_location import source_id_for
 from app.service.report_ownership import subject_storage_id
 from app.service.sessions import issue_session
 
@@ -209,7 +210,8 @@ def _seed_metric(
         bbox_normalized=spec["bbox_normalized"],
         page_number=spec["page_number"],
         evidence_text=spec["evidence_text"],
-        source_id=f"file-1/p{spec['page_number']}-m{index}",
+        # source_id 的格式只有一处定义（origin_location）——seed 不再手抄。
+        source_id=source_id_for(1, spec["page_number"], index),
     )
     if not confirmed:
         return record

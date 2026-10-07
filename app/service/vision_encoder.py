@@ -6,7 +6,6 @@ import base64
 import hashlib
 import io
 import json
-import math
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
@@ -16,6 +15,12 @@ from app.config import get_settings
 from app.model.llm import get_llm_client, get_vlm_client
 from app.schema.report import MetricRecord
 from app.service.evidence_bridge import infer_abnormal_flag
+from app.service.origin_location import (
+    clean_bbox,
+    denormalize_bbox,
+    normalize_bbox,
+    page_local_source_id,
+)
 
 
 @dataclass
@@ -321,45 +326,22 @@ class VisionEncoderService:
             bbox_normalized=normalized,
             page_number=page_number,
             evidence_text=evidence_text,
-            source_id=str(data.get("source_id") or f"p{page_number}-m{index}"),
+            source_id=str(data.get("source_id") or page_local_source_id(page_number, index)),
         )
 
     @staticmethod
     def _clean_bbox(value: Any, *, upper: float | None = None) -> list[float] | None:
-        if not isinstance(value, (list, tuple)) or len(value) != 4:
-            return None
-        try:
-            values = [float(item) for item in value]
-        except (TypeError, ValueError):
-            return None
-        x1, y1, x2, y2 = values
-        if any(not math.isfinite(item) or item < 0 or (upper is not None and item > upper) for item in values):
-            return None
-        if x2 <= x1 or y2 <= y1:
-            return None
-        return values
+        """抽取入口的坐标清洗。规则在 `app/service/origin_location.py`（唯一一处）——
+        **创建边界从严**：退化框指不到任何东西，拒绝。"""
+        return clean_bbox(value, upper=upper, strict=True)
 
     @staticmethod
     def normalize_bbox(bbox: list[float], width: int, height: int) -> list[float]:
-        if width <= 0 or height <= 0:
-            return [0.0, 0.0, 0.0, 0.0]
-        x1, y1, x2, y2 = bbox
-        return [
-            round(max(0.0, min(1000.0, x1 / width * 1000)), 2),
-            round(max(0.0, min(1000.0, y1 / height * 1000)), 2),
-            round(max(0.0, min(1000.0, x2 / width * 1000)), 2),
-            round(max(0.0, min(1000.0, y2 / height * 1000)), 2),
-        ]
+        return normalize_bbox(bbox, width, height)
 
     @staticmethod
     def denormalize_bbox(bbox: list[float], width: int, height: int) -> list[float]:
-        x1, y1, x2, y2 = bbox
-        return [
-            x1 / 1000 * width,
-            y1 / 1000 * height,
-            x2 / 1000 * width,
-            y2 / 1000 * height,
-        ]
+        return denormalize_bbox(bbox, width, height)
 
     @staticmethod
     def _parse_json_response(response: Any) -> dict[str, Any]:
