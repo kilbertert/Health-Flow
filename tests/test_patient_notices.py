@@ -270,6 +270,22 @@ def test_summary_counts_only_the_patient_visible_findings():
     assert "2 个" not in notices.summary
 
 
+def test_hidden_internal_findings_do_not_produce_a_normal_conclusion():
+    """内部层有健康问题、患者投影里没有时，**不能**宣告「均在参考区间内」。
+
+    投影可以是内部层的真子集（`validate_condition_identity` 只要求投影 ⊆ 内部层）。
+    此时若只看投影与 skipped，会落到「一切正常」那一支 —— 而证据服务明明找出了
+    问题（评审在 #161 指出）。
+    """
+    payload = _response(findings=[_finding()])
+    payload["patient_reply"]["findings"] = []
+    payload["skipped"] = [{"observation_id": "obs-9", "reason": "within_reference_range"}]
+    from app.schema.evidence import EvidenceMatchResponse
+
+    notices = build_patient_notices(EvidenceMatchResponse.model_validate(payload))
+    assert "均在参考区间内" not in notices.summary
+
+
 def test_skipped_metrics_do_not_produce_a_normal_conclusion():
     """`skipped` 非空时**不能**宣告「指标均在参考区间内」。
 
