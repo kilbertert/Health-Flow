@@ -513,7 +513,13 @@ function EvidenceSummaryCard({ result, onOpenSource }) {
           dataSource={findings}
           renderItem={(finding) => {
             // 服务端已给出证据项；不再现场合成，也不再自己数异常指标个数。
+            //
+            // 例外：证据服务返回的**旧版单卡**（v2）没有来源观测，投影里保留的是
+            // v2 字段（`card_id` / `patient_visible_body` / `sources`）—— 那是
+            // 患者原本就能看到的已审核内容，不能因为形状收敛就消失。这里按 v2
+            // 卡片渲染，不做任何"合成 v3 形状"的推导。
             const evidenceItems = Array.isArray(finding.evidence_items) ? finding.evidence_items : [];
+            const legacySources = Array.isArray(finding.sources) ? finding.sources : [];
             const observationCount = new Set(evidenceItems.flatMap((item) => item.source_observation_ids || [])).size;
             return (
               <List.Item>
@@ -533,6 +539,21 @@ function EvidenceSummaryCard({ result, onOpenSource }) {
                     <Typography.Paragraph type="secondary" style={{ margin: '8px 0' }}>
                       建议复查{finding.recheck_direction ? `：${finding.recheck_direction}` : ''}
                     </Typography.Paragraph>
+                  )}
+                  {evidenceItems.length === 0 && legacySources.length > 0 && (
+                    <List
+                      size="small"
+                      header={<Typography.Text strong>审核证据（旧版知识卡）</Typography.Text>}
+                      dataSource={legacySources}
+                      renderItem={(source) => (
+                        <List.Item>
+                          <Typography.Text>
+                            {source.paper_title}
+                            {source.doi ? ` · DOI ${source.doi}` : ''}
+                          </Typography.Text>
+                        </List.Item>
+                      )}
+                    />
                   )}
                   {evidenceItems.length > 0 && (
                     <List

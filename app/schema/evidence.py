@@ -236,8 +236,18 @@ def build_patient_notices(
     """
     final_unmatched = unmatched if unmatched is not None else result.unmatched
     final_skipped = skipped if skipped is not None else result.skipped
-    finding_count = len(result.findings)
+    # 摘要里的问题数按**患者可见集合**算，不是内部层全集：投影可以比内部层少，
+    # 拿内部层计数会把患者看不到的问题算进摘要（评审在 #161 指出）。
+    patient_findings = result.patient_reply.findings
+    finding_count = len(patient_findings)
+
+    # `skipped` 只说明「这次没能判定」。但它有两种成因，说法要分开：
+    #   - `within_reference_range`：**判定过**，在参考区间内 —— 那正是「正常」，
+    #     把它说成「未能完成解读」是误报（评审在 #161 指出）；
+    #   - 其余（证据不足 / 值不可解析 / 缺参考范围）：确实没能判定。
+    inconclusive = [item for item in final_skipped if item.reason != "within_reference_range"]
     unmatched_count = len(final_unmatched)
+
     if finding_count and unmatched_count:
         summary = (
             f"发现 {finding_count} 个可能相关健康问题；"
@@ -247,11 +257,8 @@ def build_patient_notices(
         summary = f"发现 {finding_count} 个可能相关健康问题。"
     elif unmatched_count:
         summary = f"发现 {unmatched_count} 个异常指标，但暂无已审核内容。"
-    elif final_skipped:
-        # `skipped` 里的原因（证据不足、值不可解析、缺参考范围）**不代表指标
-        # 在参考区间内** —— 那只是「这次没能判定」。宣告「均在参考区间内」是
-        # 替患者下一个服务端给不出的结论（评审在 #161 指出）。
-        summary = f"本次报告有 {len(final_skipped)} 项指标未能完成解读，其余指标未见需要关注的问题。"
+    elif inconclusive:
+        summary = f"本次报告有 {len(inconclusive)} 项指标未能完成解读，其余指标未见需要关注的问题。"
     else:
         summary = "本次报告的指标均在参考区间内，未见需要关注的问题。"
 

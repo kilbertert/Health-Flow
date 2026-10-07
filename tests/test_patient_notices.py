@@ -246,6 +246,30 @@ def test_summary_overrides_the_evidence_service_wording_even_without_unmatched()
     assert "1 个可能相关健康问题" in notices.summary
 
 
+def test_only_normal_skips_still_conclude_normal():
+    """`skipped` 全是 `within_reference_range` 时，说法仍是「正常」。
+
+    那一条 skipped 的意思是「**判定过**，在参考区间内」—— 把它说成「未能完成
+    解读」是误报（评审在 #161 指出）。
+    """
+    skipped = [{"observation_id": "obs-1", "reason": "within_reference_range"}]
+    notices = _notices(_response(findings=[], unmatched=[], skipped=skipped))
+    assert "均在参考区间内" in notices.summary
+    assert "未能完成解读" not in notices.summary
+
+
+def test_summary_counts_only_the_patient_visible_findings():
+    """摘要里的问题数按患者可见集合算，不是内部层全集。"""
+    internal_only = _finding("COND_INTERNAL_ONLY")
+    payload = _response(findings=[_finding(), internal_only])
+    payload["patient_reply"]["findings"] = [payload["patient_reply"]["findings"][0]]
+    from app.schema.evidence import EvidenceMatchResponse
+
+    notices = build_patient_notices(EvidenceMatchResponse.model_validate(payload))
+    assert "1 个可能相关健康问题" in notices.summary
+    assert "2 个" not in notices.summary
+
+
 def test_skipped_metrics_do_not_produce_a_normal_conclusion():
     """`skipped` 非空时**不能**宣告「指标均在参考区间内」。
 
