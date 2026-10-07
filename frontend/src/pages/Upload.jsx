@@ -481,65 +481,39 @@ function evidenceAlertType(hasFindings, hasUnmatched) {
   return 'info';
 }
 
-function evidenceItemsFor(finding, detail) {
-  const items = Array.isArray(finding.evidence_items) && finding.evidence_items.length
-    ? finding.evidence_items
-    : detail.evidence_items;
-  if (Array.isArray(items) && items.length) return items;
-  const card = detail.card || (finding.card_id ? {
-    id: finding.card_id,
-    version: finding.card_version,
-    evidence_profile_id: finding.evidence_profile_id,
-    patient_visible_body: finding.patient_visible_body,
-    sources: finding.sources || [],
-    grade: finding.evidence_strength,
-  } : null);
-  if (!card) return [];
-  const sourceObservations = finding.source_observations || detail.source_observations || [];
-  return [{
-    metric_code: sourceObservations[0]?.metric_code || '',
-    metric_label: sourceObservations[0]?.metric_label || sourceObservations[0]?.metric_code || '异常指标',
-    card,
-    evidence_strength: finding.evidence_strength || card.grade,
-    source_observation_ids: finding.source_observation_ids || detail.source_observation_ids || [],
-    source_observations: sourceObservations,
-  }];
-}
 
 function EvidenceSummaryCard({ result, onOpenSource }) {
   if (!result) return null;
+  // 服务端从 #159 起只给**一个**投影（PatientNotices）：`findings` 就是患者可见
+  // 集合，`summary` / `title` / `unmatched_count` 都在顶层。前端不再 join 两个
+  // 数组、不再走回退链、不再用已废弃的 v2 字段现场合成证据项。
   const findings = Array.isArray(result.findings) ? result.findings : [];
-  const patientReply = result.patient_reply && typeof result.patient_reply === 'object'
-    ? result.patient_reply
-    : null;
-  const replyFindings = Array.isArray(patientReply?.findings) ? patientReply.findings : findings;
   const unmatched = Array.isArray(result.unmatched) ? result.unmatched : [];
   const skipped = Array.isArray(result.skipped) ? result.skipped : [];
-  const findingDetails = new Map(findings.map((finding) => [finding.condition_code, finding]));
   const urgencyLabels = { routine: '常规', soon: '近期', urgent: '紧急', emergency: '危急' };
   const urgencyColors = { routine: 'blue', soon: 'orange', urgent: 'red', emergency: 'magenta' };
   const strengthLabels = { high: '高', moderate: '中等', low: '低', very_low: '极低', mixed: '各指标分别评级' };
-  const summary = patientReply?.summary || result.message;
+  const summary = result.summary;
   return (
     <Card
       className="evidence-result-card"
-      title={patientReply?.title || '正式知识卡匹配结果'}
+      title={result.title}
       style={{ marginTop: 16 }}
     >
       {summary && (
         <Alert
-          type={evidenceAlertType(replyFindings.length > 0, unmatched.length > 0)}
+          type={evidenceAlertType(findings.length > 0, unmatched.length > 0)}
           showIcon
           title={summary}
           style={{ marginBottom: 16 }}
         />
       )}
-      {replyFindings.length > 0 && (
+      {findings.length > 0 && (
         <List
-          dataSource={replyFindings}
+          dataSource={findings}
           renderItem={(finding) => {
-            const detail = findingDetails.get(finding.condition_code) || finding;
-            const evidenceItems = evidenceItemsFor(finding, detail);
+            // 服务端已给出证据项；不再现场合成，也不再自己数异常指标个数。
+            const evidenceItems = Array.isArray(finding.evidence_items) ? finding.evidence_items : [];
             const observationCount = new Set(evidenceItems.flatMap((item) => item.source_observation_ids || [])).size;
             return (
               <List.Item>
@@ -685,9 +659,9 @@ function EvidenceSummaryCard({ result, onOpenSource }) {
           />
         </div>
       )}
-      {patientReply?.disclaimer && (
+      {result.disclaimer && (
         <Typography.Paragraph type="secondary" style={{ margin: '12px 0 0' }}>
-          {patientReply.disclaimer}
+          {result.disclaimer}
         </Typography.Paragraph>
       )}
       {skipped.length > 0 && (

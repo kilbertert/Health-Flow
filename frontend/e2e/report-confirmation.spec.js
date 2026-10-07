@@ -16,6 +16,9 @@ async function openPendingReport(page, seeded) {
 
 function assessedResponse(seeded, reportUrl) {
   const id = Number(reportUrl.split('/report/')[1].split('/')[0]);
+  // 服务端从 #159 起只给**一个**患者投影（PatientNotices）：`findings` 就是
+  // 患者可见集合，`summary` / `title` / `disclaimer` 在顶层 —— 不再有
+  // `patient_reply` 包裹，也不再重复一份内部层 `findings`。
   return {
     id,
     patient_id: seeded.subject.owner_id,
@@ -27,26 +30,26 @@ function assessedResponse(seeded, reportUrl) {
     metrics: [],
     files: [],
     evidence_result: {
-      schema_version: '2',
-      sorting_version: 'published-card-reference-range-v1',
       correlation_id: 'e2e-mobile-confirmation',
+      title: '体检报告解读与健康风险提示',
+      summary: 'E2E 移动端确认完成。',
       findings: [{
         condition_code: 'COND_DYSLIPIDEMIA',
         condition_name: '血脂异常',
+        urgency: 'routine',
+        abnormality_severity: 1,
+        evidence_strength: 'moderate',
+        needs_recheck: false,
+        department: '心血管内科',
+        recheck_direction: '',
+        source_observation_ids: ['health-flow-metric-1'],
+        source_observations: [],
+        evidence_items: [],
       }],
       unmatched: [],
       skipped: [],
-      message: 'E2E 移动端确认完成。',
-      patient_reply: {
-        title: '体检报告解读与健康风险提示',
-        summary: 'E2E 移动端确认完成。',
-        findings: [{
-          condition_code: 'COND_DYSLIPIDEMIA',
-          condition_name: '血脂异常',
-        }],
-        unmatched_count: 0,
-        disclaimer: '本解读仅提供健康辅助建议。',
-      },
+      unmatched_count: 0,
+      disclaimer: '本解读仅提供健康辅助建议。',
     },
     processing_warnings: [],
   };

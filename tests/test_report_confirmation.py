@@ -88,20 +88,11 @@ def _evidence_items_from_v2(finding):
         return []
     observations = finding.get("source_observations") or []
     if not observations:
-        # EvidenceItem 要求至少一条来源观测（v3 契约）。v2 夹具没有，用一条
-        # 最小占位把它补成合法形状 —— 这不是伪造数据，是夹具本身的补全。
-        observations = [
-            {
-                "observation_id": (finding.get("source_observation_ids") or ["unknown"])[0],
-                "metric_code": (card.get("scope_key") or "metric:").split(":", 1)[1],
-                "metric_label": card.get("label") or "",
-                "value": 0.0,
-                "unit": "",
-                "evidence_text": "",
-                "source_file_index": 1,
-                "source_page": 1,
-            }
-        ]
+        # v2 夹具没有来源观测 —— **不伪造一条**。v3 的 evidence_items 要求至少
+        # 一条来源观测，所以这种形态保留 v2（card_id 等），由 PatientFinding
+        # 自己的 v2 分支接住。伪造一条 value=0.0 的观测会让测试去测一个
+        # 从未发生过的形态（评审在 #161 指出）。
+        return []
     return [
         {
             "metric_code": (card.get("scope_key") or "metric:").split(":", 1)[1],
@@ -146,6 +137,18 @@ def _evidence_result(*, findings=None, unmatched=None, skipped=None):
                     "source_observation_ids": finding.get("source_observation_ids") or [],
                     "source_observations": finding.get("source_observations") or [],
                     "evidence_items": finding.get("evidence_items") or _evidence_items_from_v2(finding),
+            # v2 且无来源观测时，投影保留 v2 形态。
+            **(
+                {
+                    "card_id": finding["card"]["id"],
+                    "card_version": finding["card"]["version"],
+                    "evidence_profile_id": finding["card"]["evidence_profile_id"],
+                    "patient_visible_body": finding["card"]["patient_visible_body"],
+                    "sources": finding["card"]["sources"],
+                }
+                if not (finding.get("evidence_items") or _evidence_items_from_v2(finding))
+                else {}
+            ),
                 }
                 for finding in (findings or [])
             ],

@@ -59,21 +59,16 @@ function assessedResponse(seeded, reportUrl) {
       },
     ],
     files: [],
+    // 单一患者投影（#159）：不再有 patient_reply 包裹与内部层 findings。
     evidence_result: {
-      schema_version: '2',
-      sorting_version: 'published-card-reference-range-v1',
       correlation_id: 'e2e-abnormality-evidence',
+      title: '体检报告解读与健康风险提示',
+      summary: 'E2E 异常判定口径。',
       findings: [],
       unmatched: [],
       skipped: [],
-      message: 'E2E 异常判定口径。',
-      patient_reply: {
-        title: '体检报告解读与健康风险提示',
-        summary: 'E2E 异常判定口径。',
-        findings: [],
-        unmatched_count: 0,
-        disclaimer: '本解读仅提供健康辅助建议。',
-      },
+      unmatched_count: 0,
+      disclaimer: '本解读仅提供健康辅助建议。',
     },
     processing_warnings: [],
   };

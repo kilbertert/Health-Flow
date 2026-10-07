@@ -246,8 +246,65 @@ def test_summary_overrides_the_evidence_service_wording_even_without_unmatched()
     assert "1 个可能相关健康问题" in notices.summary
 
 
+def test_skipped_metrics_do_not_produce_a_normal_conclusion():
+    """`skipped` 非空时**不能**宣告「指标均在参考区间内」。
+
+    `skipped` 里的原因（证据不足、值不可解析、缺参考范围）只说明「这次没能
+    判定」，不代表正常 —— 宣告正常是替患者下一个服务端给不出的结论
+    （评审在 #161 指出）。
+    """
+    skipped = [{"observation_id": "obs-1", "reason": "missing_source_evidence"}]
+    notices = _notices(_response(findings=[], unmatched=[], skipped=skipped))
+    assert "均在参考区间内" not in notices.summary
+    assert "1 项指标未能完成解读" in notices.summary
+
+
+def test_only_the_patient_selected_findings_are_projected():
+    """患者可见集合以 `patient_reply.findings` 为准，不是内部层全集。
+
+    `validate_condition_identity` 只要求投影 ⊆ 内部层 —— 内部层可以比投影多。
+    拿内部层构造会把**未被选入患者投影**的问题也展示给患者。
+    """
+    internal_only = _finding("COND_INTERNAL_ONLY")
+    payload = _response(findings=[_finding(), internal_only])
+    payload["patient_reply"]["findings"] = [payload["patient_reply"]["findings"][0]]
+    from app.schema.evidence import EvidenceMatchResponse
+
+    notices = build_patient_notices(EvidenceMatchResponse.model_validate(payload))
+    assert [finding.condition_code for finding in notices.findings] == ["COND_PREDIABETES"]
+
+
 def test_summary_reflects_both_findings_and_unmatched():
     unmatched = [_unmatched("obs-9")]
     notices = _notices(_response(findings=[_finding()], unmatched=unmatched))
     assert "1 个可能相关健康问题" in notices.summary
     assert "1 条指标" in notices.summary
+
+
+# ---------------------------------------------------------------------------
+# 历史行（#161 复审）
+# ---------------------------------------------------------------------------
+
+def test_historical_rows_are_readable():
+    """库里存的旧形状（`EvidenceMatchResponse` 的 dump）必须能读出来。
+
+    旧行含 `schema_version` / `patient_reply` / 内部层 `findings`；收敛后出域的
+    形状变了，但**已经写进数据库的数据不会自己改变** —— 读路径必须能读，
+    否则患者的每一份历史报告都打不开。
+    """
+    from app.api.report import _patient_notices_from_stored
+
+    stored = _response()  # 旧形状：EvidenceMatchResponse 的 dump
+    notices = _patient_notices_from_stored(stored)
+
+    assert "schema_version" not in notices
+    assert notices["title"] == "体检报告解读与健康风险提示"
+    assert notices["summary"] == "证据服务写下的摘要"  # 旧行按当时投影出的值呈现
+    assert notices["findings"][0]["condition_code"] == "COND_PREDIABETES"
+
+
+def test_new_shape_passes_through_unchanged():
+    from app.api.report import _patient_notices_from_stored
+
+    notices = _notices(_response()).model_dump(mode="json")
+    assert _patient_notices_from_stored(notices) is notices

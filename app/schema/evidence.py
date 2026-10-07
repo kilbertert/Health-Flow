@@ -247,10 +247,22 @@ def build_patient_notices(
         summary = f"发现 {finding_count} 个可能相关健康问题。"
     elif unmatched_count:
         summary = f"发现 {unmatched_count} 个异常指标，但暂无已审核内容。"
+    elif final_skipped:
+        # `skipped` 里的原因（证据不足、值不可解析、缺参考范围）**不代表指标
+        # 在参考区间内** —— 那只是「这次没能判定」。宣告「均在参考区间内」是
+        # 替患者下一个服务端给不出的结论（评审在 #161 指出）。
+        summary = f"本次报告有 {len(final_skipped)} 项指标未能完成解读，其余指标未见需要关注的问题。"
     else:
         summary = "本次报告的指标均在参考区间内，未见需要关注的问题。"
 
-    findings = [_patient_finding(finding) for finding in result.findings]
+    # 以 `patient_reply.findings` 为准：那才是证据服务选定的**患者可见集合**。
+    # 内部事实层可以比它多（`validate_condition_identity` 只要求投影 ⊆ 内部层），
+    # 拿内部层构造会把未被选入投影的问题也展示给患者（评审在 #161 指出）。
+    internal_by_code = {finding.condition_code: finding for finding in result.findings}
+    findings = [
+        _patient_finding(internal_by_code.get(projected.condition_code), projected)
+        for projected in result.patient_reply.findings
+    ]
     return PatientNotices(
         correlation_id=result.correlation_id,
         title=result.patient_reply.title,
@@ -263,7 +275,7 @@ def build_patient_notices(
     )
 
 
-def _patient_finding(finding: "Finding") -> PatientFinding:
+def _patient_finding(internal: "Finding | None", projected: "PatientFinding") -> PatientFinding:
     """内部事实层 → 患者可见层。**v2→v3 的归一只在这里做一次。**
 
     此前这一步在浏览器的渲染函数里（`Upload.jsx` 的 `evidenceItemsFor`）：两个
@@ -274,23 +286,24 @@ def _patient_finding(finding: "Finding") -> PatientFinding:
     转成 v3 形状。v2 且没有来源观测时保留 v2 形态（`card_id` 等），
     让 `PatientFinding` 自己的 v2 分支接住 —— 不伪造一条不存在的观测。
     """
+    # 投影已有的字段优先（证据服务选定的说法），缺的内部层补。
     common = {
-        "condition_code": finding.condition_code,
-        "condition_name": finding.condition_name,
-        "urgency": finding.urgency,
-        "abnormality_severity": finding.abnormality_severity,
-        "evidence_strength": finding.evidence_strength,
-        "needs_recheck": finding.needs_recheck,
-        "department": finding.department,
-        "recheck_direction": finding.recheck_direction,
-        "source_observation_ids": finding.source_observation_ids,
-        "source_observations": finding.source_observations,
+        "condition_code": projected.condition_code,
+        "condition_name": projected.condition_name,
+        "urgency": projected.urgency,
+        "abnormality_severity": projected.abnormality_severity,
+        "evidence_strength": projected.evidence_strength,
+        "needs_recheck": projected.needs_recheck,
+        "department": projected.department,
+        "recheck_direction": projected.recheck_direction,
+        "source_observation_ids": projected.source_observation_ids,
+        "source_observations": projected.source_observations,
     }
-    if finding.evidence_items:
-        return PatientFinding(**common, evidence_items=finding.evidence_items)
-    if finding.card is None:
-        # 既无 evidence_items 也无 card：`Finding` 的校验保证不会走到这里。
+    if projected.evidence_items:
+        return PatientFinding(**common, evidence_items=projected.evidence_items)
+    if internal is None or internal.card is None:
         return PatientFinding(**common, evidence_items=[])
+    finding = internal
     if not finding.source_observations:
         # v2 且没有来源观测：保留 v2 形态，不伪造观测。
         return PatientFinding(
