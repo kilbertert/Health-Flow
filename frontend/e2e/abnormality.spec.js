@@ -12,6 +12,11 @@
 // 排除那一条通过拦截确认请求、返回一份真实的已评估响应来驱动：确认接口本身
 // 需要商城票据验签器（本仓 e2e 环境没有），所以「患者点排除」发生在 UI 上、
 // 「服务端怎么记」由响应决定。测的是**前端如何呈现排除后的报告**，不是后端。
+//
+// 证据截图不在这里写：`var/verify-evidence/` 是构建期目录，干净 checkout 里不存在，
+// 而 Playwright 只在失败时留档。断言本身就是回归保护；需要人看的截图由
+// `verify-healthflow` 的驱动会话负责采集（见该 skill 的 Evidence 一节）。
+// 用 `HEALTHFLOW_E2E_KEEP_SANDBOX` 或失败时的 `test-results/` 取本次运行的现场。
 import { test, expect, loginWithSeed } from './fixtures.js';
 
 const TAG_H = 'H 偏高';
