@@ -15,7 +15,7 @@ from pydantic import TypeAdapter, ValidationError
 from app.config import Settings, get_settings
 from app.schema.evidence import EvidenceMatchResponse, MetricCatalogItem
 from app.service.metric_effective_value import effective_value
-from app.service.origin_location import decode_coordinates, page_url
+from app.service.origin_location import clean_bbox, page_url
 
 METRIC_ALIASES = {
     "收缩压": "systolic_blood_pressure",
@@ -442,14 +442,8 @@ def _evidence_contains_value(evidence: str, value: float) -> bool:
 def _coordinates_for_boundary(value: object) -> list[float] | None:
     """证据边界上读出来的坐标：**读取边界，容忍历史行**。
 
-    只要求长度与有限性（历史行里可能存着退化框），解码与合法性判定都在
-    `app/service/origin_location.py` 一处。
+    判定走 `app/service/origin_location.py` 的同一处（`strict=False`）——
+    此前这里只查长度与有限性，连**逆序**与**负数**都放行，是本票要消灭的
+    「同一概念四种判定」里的第四种。
     """
-    decoded = decode_coordinates(value)
-    if decoded is None or len(decoded) != 4:
-        return None
-    try:
-        coordinates = [float(item) for item in decoded]
-    except (TypeError, ValueError):
-        return None
-    return coordinates if all(math.isfinite(item) for item in coordinates) else None
+    return clean_bbox(value, strict=False)

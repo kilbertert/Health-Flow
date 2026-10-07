@@ -189,3 +189,71 @@ def test_the_page_url_template_is_defined_in_exactly_one_place():
                 if "/pages/" in line and "f\"" in line:
                     offenders.append(f"{path.relative_to(repo)}:{line_number}")
     assert offenders == [], f"定位 URL 在 origin_location 之外还有构造: {offenders}"
+
+
+# ---------------------------------------------------------------------------
+# 复审发现的三条（#164）
+# ---------------------------------------------------------------------------
+
+def test_stored_degenerate_box_does_not_break_the_report_response():
+    """历史行里的退化框读出来是**定位为空**，不是让整份报告打不开。
+
+    收敛后契约的创建边界拒绝退化框 —— 但库里已经存着的那一行不会自己改变。
+    走**整条响应构造**（`_metric_response`）才证明得了这一点：单测那个小工具
+    证明不了它被接上了（第一版就是这么写的，负控没变红）。
+    """
+    from app.api.report import _metric_response
+    from app.data.models import MetricRecord as MetricModel
+
+    stored = MetricModel(
+        id=1, report_id=1, metric_name="空腹血糖", metric_value="5.2", unit="mmol/L",
+        reference_range="3.9-6.1", page_number=1,
+        bbox="[100, 100, 100, 100]",  # 库里就是这么存的
+        bbox_normalized="[100, 100, 100, 100]",
+    )
+    response = _metric_response(stored)
+    assert response.bbox is None, "退化框读出来应当是「定位为空」"
+    assert response.bbox_normalized is None
+
+    good = MetricModel(
+        id=2, report_id=1, metric_name="血糖", metric_value="5.2", unit="mmol/L",
+        reference_range="3.9-6.1", page_number=1, bbox="[120, 340, 280, 360]",
+    )
+    assert _metric_response(good).bbox == [120.0, 340.0, 280.0, 360.0]
+
+
+def test_provider_source_id_is_preserved():
+    """抽取器给了自定义 `source_id` 就保留它，只补文件前缀。"""
+    from app.api.report import _final_source_id
+
+    assert _final_source_id("p3-m1", 2, 3, 1) == "file-2/p3-m1"
+    assert _final_source_id("provider-abc", 2, 3, 1) == "file-2/provider-abc"
+    assert _final_source_id("file-2/p3-m1", 2, 3, 1) == "file-2/p3-m1"
+    # 没有自定义标识时才生成。
+    assert _final_source_id(None, 2, 3, 1) == "file-2/p3-m1"
+
+
+def test_denormalize_keeps_a_narrow_box_alive():
+    """极窄的框在反归一化后**不能**塌成零面积。
+
+    宽度 1px 的竖线在 `round(..., 2)` 之后两个端点可能并到一起 —— 那会产出退化
+    框、被创建边界拒绝，整张图抽不出指标（评审在 #164 指出）。
+    """
+    from app.service.origin_location import denormalize_bbox
+
+    # 归一化差 0.01（在 100px 宽的图上不到 0.01px）—— 舍入后两端点相等。
+    narrow = [500.0, 100.0, 500.01, 200.0]
+    box = denormalize_bbox(narrow, 100, 100)
+    assert box[0] != box[2], f"端点被舍入并到一起: {box}"
+
+
+def test_boundary_validator_rejects_reversed_and_negative():
+    """证据边界不再放行逆序与负数坐标。
+
+    此前那一层只查长度与有限性 —— 是「同一概念四种判定」里的第四种。
+    """
+    from app.service.evidence_bridge import _coordinates_for_boundary
+
+    assert _coordinates_for_boundary([300.0, 2.0, 100.0, 4.0]) is None  # 逆序
+    assert _coordinates_for_boundary([-1.0, 2.0, 3.0, 4.0]) is None  # 负数
+    assert _coordinates_for_boundary([100.0, 100.0, 100.0, 100.0]) == [100.0, 100.0, 100.0, 100.0]  # 读取容忍

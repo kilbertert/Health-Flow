@@ -159,6 +159,17 @@ def _persist_report_files(
         )
 
 
+def _stored_bbox(value: object, *, upper: float | None = None) -> list[float] | None:
+    """读一条已存下来的坐标：**读取边界**，容忍历史形状但产出可用的指针。
+
+    存下来的零面积框指不到任何东西 —— 读出来是 ``None``（定位为空），不是把它
+    原样透出给契约（那会让整份报告打不开），也不是猜一个坐标。
+    """
+    from app.service.origin_location import clean_bbox
+
+    return clean_bbox(value, upper=upper, strict=True)
+
+
 def _metric_response(metric: MetricModel) -> MetricRecord:
     def load_json(value):
         if value is None or isinstance(value, (list, dict)):
@@ -179,8 +190,11 @@ def _metric_response(metric: MetricModel) -> MetricRecord:
         trend=metric.trend,
         abnormal_flag=metric.abnormal_flag,
         inferred_abnormal_flag=infer_abnormal_flag_for_metric(metric),
-        bbox=load_json(metric.bbox),
-        bbox_normalized=load_json(metric.bbox_normalized),
+        # 历史行里可能存着退化框（零面积）。它不是可用的指针 —— 按词条
+        # 「任一组件缺失时定位为空，不猜测」，读出来就是 None，而不是让
+        # 整份报告打不开。
+        bbox=_stored_bbox(metric.bbox),
+        bbox_normalized=_stored_bbox(metric.bbox_normalized, upper=1000),
         source_file_index=metric.source_file_index or 1,
         page_number=metric.page_number,
         evidence_text=metric.evidence_text,
@@ -370,11 +384,9 @@ def _parse_report(
                     # 解析时写入：目录此刻还不可用（尚未到确认），只做名称归一化并标记待裁决。
                     "metric_code": resolve_metric_code(item.metric_name, None),
                     # source_id 的最终形态只有一处定义（origin_location）。
-                    "source_id": source_id_for(
-                        file_index,
-                        item.page_number,
-                        _source_position(item.source_id, metric_index),
-                    ),
+                    # 抽取器给了自定义标识就**保留它**（只补文件前缀）——
+                    # 那是它的定位依据，用生成的序号替换会丢掉 provider 的标识。
+                    "source_id": _final_source_id(item.source_id, file_index, item.page_number, metric_index),
                 }
             )
             for file_index, _, parsed, error in successful_reports
@@ -513,6 +525,13 @@ def _confirmed_condition_codes(report: ReportModel) -> list[str]:
         if code and code not in codes:
             codes.append(code)
     return codes
+
+
+def _final_source_id(existing: str | None, file_index: int, page_number: int | None, fallback: int) -> str:
+    """最终 `source_id`：抽取器的标识优先，只补文件前缀。"""
+    if existing:
+        return existing if existing.startswith(f"file-{file_index}/") else f"file-{file_index}/{existing}"
+    return source_id_for(file_index, page_number, fallback)
 
 
 def _source_position(existing: str | None, fallback: int) -> int:

@@ -117,16 +117,21 @@ def normalize_bbox(bbox: list[float], width: int, height: int) -> list[float]:
 
 
 def denormalize_bbox(bbox: list[float], width: int, height: int) -> list[float]:
-    """归一化坐标 → 像素坐标。"""
+    """归一化坐标 → 像素坐标。
+
+    极窄的框（如宽度 1px 的竖线）在 `round(..., 2)` 之后两个端点可能并到一起 ——
+    那会产出一个**退化框**，随后被创建边界拒绝，整张图抽不出指标。所以这里在
+    舍入前先保证端点顺序，舍入后若仍相等就退到原始（未舍入）值。
+    """
     if width <= 0 or height <= 0:
         return [0.0, 0.0, 0.0, 0.0]
     x1, y1, x2, y2 = bbox
-    return [
-        round(x1 / 1000 * width, 2),
-        round(y1 / 1000 * height, 2),
-        round(x2 / 1000 * width, 2),
-        round(y2 / 1000 * height, 2),
-    ]
+    raw = [x1 / 1000 * width, y1 / 1000 * height, x2 / 1000 * width, y2 / 1000 * height]
+    rounded = [round(value, 2) for value in raw]
+    for low_index, high_index in ((0, 2), (1, 3)):
+        if rounded[low_index] == rounded[high_index] and raw[low_index] != raw[high_index]:
+            rounded[high_index] = raw[high_index]
+    return rounded
 
 
 def metric_page(metric: Any) -> int | None:
