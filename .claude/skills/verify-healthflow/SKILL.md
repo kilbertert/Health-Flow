@@ -252,3 +252,8 @@ Environment switches: `HEALTHFLOW_E2E_PORT` (default `8137`),
 - The harness port `8137` is a transient per-run default, not an entry in
   `~/Projects/DEVELOPMENT-PORT-REGISTRY.md`. It binds loopback only.
 - Feature coverage lives in `features/` — see `features/README.md`.
+- **This map rots.** When a change makes a feature file wrong — a moved route, a
+  renamed control, a step that no longer works — update that file in the same
+  change. For a periodic pass over the whole map, run the
+  `maintain-verification-skill` skill. Do not let a stale entry stand: an
+  out-of-date map reports a pass it did not earn.
