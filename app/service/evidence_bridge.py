@@ -324,6 +324,23 @@ def _inference_inputs(metric: Any) -> tuple[str, str | None]:
     return str(value or ""), reference
 
 
+def _decidable(metric: Any) -> bool:
+    """这条指标是否进入判定。
+
+    只有一条与「患者做了什么」有关的闸门：``excluded`` 的行被患者明确排除，
+    不进入解读（证据门禁的入口守卫只处理 ``confirmed`` / ``corrected``），所以
+    也不该被服务端标成异常 —— 否则历史摘要会为患者排除掉的指标计一条异常，而
+    解读根本不会看到它。
+
+    ``pending`` 不在此列：模型标了异常、值又可判定的行，患者正是要在确认页上
+    看到它。把 pending 一并排除会让一份待确认的报告显示「未见异常指标」，那比
+    多显示一个异常候选危险得多。
+
+    其余的「能不能判」由值、参考范围决定，与本函数无关（空值走 ``missing_value``）。
+    """
+    return getattr(metric, "confirmation_status", None) != "excluded"
+
+
 def abnormal_flag_reason(metric: Any) -> str | None:
     """判定不可判定时给出原因，可判定时返回 ``None``。
 
@@ -331,6 +348,8 @@ def abnormal_flag_reason(metric: Any) -> str | None:
     ``missing_reference_range`` 见 ``build_observations_with_unmatched``），所以
     「响应里判成 N」与「门禁给出的跳过理由」说的是同一件事。
     """
+    if not _decidable(metric):
+        return "not_decidable"
     text, reference = _inference_inputs(metric)
     text = text.strip()
     if not text:

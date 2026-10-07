@@ -24,12 +24,13 @@ from app.service.evidence_bridge import (
 
 
 def _metric(**overrides):
-    """一条指标行（ORM 行的最小替身：判定只读这四个属性）。"""
+    """一条指标行（ORM 行的最小替身：判定只读这几个属性）。"""
     fields = {
         "metric_value": None,
         "reference_range": None,
         "confirmed_value": None,
         "confirmed_reference_range": None,
+        "confirmation_status": "confirmed",
     }
     fields.update(overrides)
     return SimpleNamespace(**fields)
@@ -176,3 +177,55 @@ def test_response_flag_and_evidence_gate_agree_on_the_same_row():
         _, skipped, _ = build_observations_with_unmatched([metric])
         reasons = {item["reason"] for item in skipped}
         assert (flag == "N") == ("within_reference_range" in reasons), (value, reference, flag, reasons)
+
+
+# ---------------------------------------------------------------------------
+# 只对「已核对过」的行判定：pending / excluded 不进入异常口径
+# ---------------------------------------------------------------------------
+
+def test_excluded_rows_are_not_decided_and_pending_rows_still_are():
+    """患者排除的指标不进入异常口径；还没确认的指标仍然进入。
+
+    排除：门禁的入口守卫不处理 excluded 的行，解读看不到它，摘要也就不该为它计数。
+    保留 pending：一份待确认的报告，患者在确认页上必须看到模型标出的异常候选 ——
+    把 pending 一起排除，报告在确认前就会显示「未见异常指标」。
+    """
+    excluded = _metric(metric_value="6.5", reference_range="3.9-6.1", confirmation_status="excluded")
+    assert infer_abnormal_flag_for_metric(excluded) is None
+    assert abnormal_flag_reason(excluded) == "not_decidable"
+
+    for status in ("pending", "confirmed", "corrected"):
+        metric = _metric(metric_value="6.5", reference_range="3.9-6.1", confirmation_status=status)
+        assert infer_abnormal_flag_for_metric(metric) == "H", status
+
+    # 值还没解析出来（空值）的行没有判定可言，与确认状态无关。
+    empty = _metric(metric_value="", reference_range="3.9-6.1", confirmation_status="pending")
+    assert infer_abnormal_flag_for_metric(empty) is None
+    assert abnormal_flag_reason(empty) == "missing_value"
+
+
+# ---------------------------------------------------------------------------
+# 历史摘要口径：排除的不计数，模型误标的不计数，模型漏标的计数
+# ---------------------------------------------------------------------------
+
+def test_history_count_uses_the_decision_not_the_model_flag():
+    """摘要数的是「判定为 H/L」，且不数患者排除掉的行。"""
+    from app.api.auth import _abnormal_metric_count
+
+    class _Report:
+        def __init__(self, metrics):
+            self.metrics = metrics
+
+    report = _Report(
+        [
+            # 模型误标偏高、值在范围内 —— 不计数
+            _metric(metric_value="5.2", reference_range="3.9-6.1"),
+            # 模型漏标、值超范围 —— 计数
+            _metric(metric_value="6.5", reference_range="3.9-6.1"),
+            # 异常但被患者排除 —— 不计数
+            _metric(metric_value="7.5", reference_range="3.9-6.1", confirmation_status="excluded"),
+            # 不可判定（多数字值）—— 不计数
+            _metric(metric_value="6.5/7.2", reference_range="3.9-6.1", confirmation_status="pending"),
+        ]
+    )
+    assert _abnormal_metric_count(report) == 1
