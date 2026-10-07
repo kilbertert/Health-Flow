@@ -235,14 +235,57 @@ test.describe('主体一致性的「停止」', () => {
 
 // 行数一致性（#156）：历史列表与确认页看到的「项数」来自**同一个**行集。
 //
-// 服务端从 #155 起只有一处「同一观测」判定（app/service/metric_rows.py），
-// 前端没有第二份——这条用例钉住患者可见的两处数字一致，防止以后有人在某一侧
-// 「顺手」加一个去重或漏掉一行。
+// 服务端从 #155 起只有一处「同一观测」判定（app/service/metric_rows.py）。这条
+// 用例用一份**真实行集**（含一对可被误合并的近似行）钉住患者可见的数字一致 ——
+// 两侧任何一侧加去重、或漏掉一行都会让它变红。
 test.describe('指标行数一致性', () => {
   test.use({ viewport: { width: 375, height: 667 } });
 
   test('历史列表「N 项指标」与确认页「识别到 N 项指标」是同一个数', async ({ page, seed }) => {
     const seeded = await seed({ reports: ['pending_confirmation'] });
+    const reportId = seeded.reports[0].id;
+    // 种子的待确认指标名/值各不相同，一个「按显示值去重」的 bug 不会暴露。
+    // 这里把响应换成一份**含近似行**的行集：
+    //   - 两行同名同值同单位同范围、只有原文证据不同 —— 按「同一观测」是两个观测，
+    //     必须保留两行（归并它们就少一行，历史与确认页的数字一起掉，本地看不出
+    //     问题，但它正是 #107 要防的那类误合并）；
+    //   - 再加一行真正重复的（与第一行完全同一）—— 服务端会去重，前端不该再去一次。
+    const rows = [
+      { id: 1, metric_name: '空腹血糖', metric_value: '6.5', unit: 'mmol/L', reference_range: '3.9-6.1',
+        abnormal_flag: 'H', inferred_abnormal_flag: 'H', page_number: 1, confirmation_status: 'pending',
+        evidence_text: '空腹血糖 6.5 mmol/L 3.9-6.1' },
+      { id: 2, metric_name: '空腹血糖', metric_value: '6.5', unit: 'mmol/L', reference_range: '3.9-6.1',
+        abnormal_flag: 'H', inferred_abnormal_flag: 'H', page_number: 1, confirmation_status: 'pending',
+        evidence_text: 'GLU 6.5 mmol/L 3.9-6.1' },
+      { id: 3, metric_name: '糖化血红蛋白', metric_value: '6.2', unit: '%', reference_range: '4.0-6.0',
+        abnormal_flag: 'H', inferred_abnormal_flag: 'H', page_number: 1, confirmation_status: 'pending',
+        evidence_text: '糖化血红蛋白 6.2 % 4.0-6.0' },
+    ].map((row) => ({ ...row, report_id: reportId }));
+    // 确认页的行来自报告本体（GET /report/{id}）；/metrics 是另一条读取路径。
+    // 两条都对齐到同一份行集 —— 「两处数字来自同一行集」才是这条用例要钉的契约。
+    await page.route(`**/api/health/report/${reportId}`, async (route) => {
+      const res = await route.fetch();
+      const json = await res.json();
+      await route.fulfill({ response: res, json: { ...json, metrics: rows } });
+    });
+    await page.route(`**/api/health/report/${reportId}/metrics`, (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ metrics: rows }) }),
+    );
+    // 历史接口的「N 项指标」是服务端算的行数 —— 同一份行集，同一个数。
+    await page.route('**/api/auth/reports', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([
+          {
+            id: reportId, report_type: '体检报告', department: '健康管理中心',
+            status: 'pending_confirmation', created_at: new Date().toISOString(),
+            metric_count: rows.length, abnormal_count: 3, finding_count: 0,
+          },
+        ]),
+      }),
+    );
+
     await loginWithSeed(page, seeded);
     await page.getByRole('button', { name: '个人中心', exact: true }).click();
     await expect(page.getByRole('heading', { name: '报告历史' })).toBeVisible();
@@ -250,7 +293,7 @@ test.describe('指标行数一致性', () => {
     const historyItem = page.locator('.history-section .ant-list-item').first();
     const historyText = await historyItem.innerText();
     const historyCount = Number(/(\d+)\s*项指标/.exec(historyText)?.[1]);
-    expect(historyCount).toBeGreaterThan(0);
+    expect(historyCount).toBe(rows.length);
 
     await page.getByRole('button', { name: '查看' }).click();
     await page.getByRole('button', { name: '继续确认' }).click();
@@ -261,5 +304,12 @@ test.describe('指标行数一致性', () => {
     const confirmationText = await page.getByText(/识别到\s*\d+\s*项指标/).first().innerText();
     const confirmationCount = Number(/识别到\s*(\d+)\s*项指标/.exec(confirmationText)?.[1]);
     expect(confirmationCount).toBe(historyCount);
+
+    // 两个同名同值但原文证据不同的指标：**都**要出现在确认表上（是同一个观测
+    // 才该合并）。这一条把「误合并」钉住。
+    const table = page.getByRole('table').filter({ has: page.getByRole('columnheader', { name: '指标' }) });
+    if (await table.count()) {
+      await expect(table.locator('tr', { hasText: '空腹血糖' })).toHaveCount(2);
+    }
   });
 });
