@@ -208,7 +208,6 @@ test.describe('状态呈现的一致性', () => {
     await expect(historyItem).toContainText('解析失败');
     // 历史列表用的是 error 色（红），不再是 gold。
     await expect(historyItem.locator('.ant-tag')).toHaveClass(/ant-tag-error/);
-    await page.screenshot({ path: '../var/verify-evidence/prd92-history-failed.png', fullPage: true });
 
     await page.goto(`/#/report/${reportId}`);
     await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible();
@@ -216,6 +215,5 @@ test.describe('状态呈现的一致性', () => {
     const statusTag = page.locator('.report-heading .ant-tag');
     await expect(statusTag).toContainText('解析失败');
     await expect(statusTag).toHaveClass(/ant-tag-error/);
-    await page.screenshot({ path: '../var/verify-evidence/prd92-detail-failed.png', fullPage: true });
   });
 });

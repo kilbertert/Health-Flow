@@ -987,8 +987,12 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
       // 超时后只说「报告仍在后台解析」—— 而 API 早就返回了 `extraction_job`，
       // 里面就有队列生命周期。任务失败时立刻停并说明原因，任务重试时把次数
       // 告诉患者，别让他们对着一个不动的时间轴干等。
+      //
+      // 上限必须**不短于**服务端的回收阈值：`REPORT_JOB_STALE_SECONDS` 默认
+      // 1200 秒（20 分钟）—— 一份报告可能一直在重试到那时才被回收。客户端先
+      // 放弃，患者就会停在一个再也不动的「解析中」，而服务端随后把它跑完了。
       const POLL_INTERVAL_MS = 2000;
-      const MAX_ATTEMPTS = 150; // 与后端 REPORT_JOB_STALE_SECONDS 同量级（约 5 分钟）
+      const MAX_ATTEMPTS = 660; // 22 分钟 > REPORT_JOB_STALE_SECONDS(1200s)
       for (let attempt = 0; data.status === 'processing' && attempt < MAX_ATTEMPTS; attempt += 1) {
         const job = data.extraction_job;
         if (job?.status === 'failed') {
