@@ -330,3 +330,75 @@ def test_metric_responses_carry_the_server_inferred_flag(client, tmp_path):
         "已修正": "H",
         "多值": None,
     }
+
+
+def test_metric_responses_carry_the_effective_value(client, tmp_path):
+    """响应里的 `effective_*` 与服务端生效值一致（#143 的契约）。
+
+    收敛前前端自己抄 `confirmed_x || x`：报告单抄了、确认页卡片与修正草稿漏抄，
+    于是同一份报告在两个界面显示两个「结果」。现在服务端把它算好透出。
+    """
+    from types import SimpleNamespace
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    SessionLocal = sessionmaker(bind=engine)
+
+    def override_get_db():
+        with SessionLocal() as session:
+            yield session
+
+    owner_id = "account:api-tenant:effective-subject"
+    token, session_row = issue_session(owner_id)
+    with SessionLocal() as bootstrap:
+        report = MedicalReport(patient_id=owner_id, owner_id=owner_id, status="assessed")
+        bootstrap.add(report)
+        bootstrap.flush()
+        bootstrap.add_all(
+            [
+                # 患者修正过：生效值取修正值。
+                MetricModel(
+                    report_id=report.id, metric_name="已修正", metric_value="6.5", unit="mmol/L",
+                    reference_range="3.9-6.1", confirmed_value="6.4", confirmed_unit="mmol/L",
+                    confirmed_reference_range="3.9-6.1", confirmed_evidence_text="已修正 6.4 mmol/L",
+                    evidence_text="已修正 6.5 mmol/L", confirmation_status="corrected", page_number=1,
+                ),
+                # 还没核对：生效值是模型值（临时）。
+                MetricModel(
+                    report_id=report.id, metric_name="待核对", metric_value="5.2", unit="mmol/L",
+                    reference_range="3.9-6.1", evidence_text="待核对 5.2 mmol/L",
+                    confirmation_status="pending", page_number=1,
+                ),
+                # 患者排除：没有生效值。
+                MetricModel(
+                    report_id=report.id, metric_name="已排除", metric_value="7.5", unit="mmol/L",
+                    reference_range="3.9-6.1", evidence_text="已排除 7.5 mmol/L",
+                    confirmation_status="excluded", page_number=1,
+                ),
+            ]
+        )
+        bootstrap.add(session_row)
+        bootstrap.commit()
+        report_id = report.id
+
+    with (
+        patch("app.data.get_db", override_get_db),
+        patch(
+            "app.api.report.resolve_owner",
+            return_value=SimpleNamespace(storage_id=owner_id, subject=f"account:{owner_id}"),
+        ),
+    ):
+        listed = client.get(f"/api/health/report/{report_id}/metrics", cookies={SESSION_COOKIE: token})
+
+    assert listed.status_code == 200, listed.text
+    by_name = {item["metric_name"]: item for item in listed.json()}
+    assert by_name["已修正"]["effective_value"] == "6.4"
+    assert by_name["已修正"]["effective_evidence_text"] == "已修正 6.4 mmol/L"
+    assert by_name["待核对"]["effective_value"] == "5.2"
+    assert by_name["已排除"]["effective_value"] is None
+    assert by_name["已排除"]["effective_unit"] is None
+    assert by_name["已排除"]["effective_reference_range"] is None
+    assert by_name["已排除"]["effective_evidence_text"] is None
+    # 双值列仍在（审计要回答「抽取原文是什么、患者改成什么」）。
+    assert by_name["已修正"]["metric_value"] == "6.5"
+    assert by_name["已修正"]["confirmed_value"] == "6.4"

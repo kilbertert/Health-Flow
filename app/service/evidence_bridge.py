@@ -15,6 +15,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from app.config import Settings, get_settings
 from app.schema.evidence import EvidenceMatchResponse, MetricCatalogItem
+from app.service.metric_effective_value import effective_value
 
 METRIC_ALIASES = {
     "收缩压": "systolic_blood_pressure",
@@ -127,10 +128,11 @@ def build_observations_with_unmatched(
     for metric in metrics:
         if metric.confirmation_status not in {"confirmed", "corrected"}:
             continue
-        value_text = metric.confirmed_value or metric.metric_value
-        unit = metric.confirmed_unit or metric.unit
+        effective = effective_value(metric)
+        value_text = effective.value
+        unit = effective.unit
         code = metric.metric_code or metric_code_for_name(metric.metric_name or "")
-        evidence = getattr(metric, "confirmed_evidence_text", None) or metric.evidence_text
+        evidence = effective.evidence_text
         if not unit or not evidence or metric.page_number is None:
             reason = (
                 "missing_unit" if not unit else "missing_source_evidence" if not evidence else "missing_source_page"
@@ -167,9 +169,7 @@ def build_observations_with_unmatched(
                 }
             )
             continue
-        reference = metric.confirmed_reference_range
-        if reference is None:
-            reference = metric.reference_range
+        reference = effective.reference_range
         reference_low, reference_high = parse_reference_range(reference)
         if reference_low is None and reference_high is None:
             skipped.append(
@@ -319,9 +319,8 @@ def _inference_inputs(metric: Any) -> tuple[str, str | None]:
     而且只在这一处。改变优先级要同时改这里与 ``build_observations_with_unmatched``
     —— 或者把那里也改成调用本函数（本票不做，避免扩大改动面）。
     """
-    value = getattr(metric, "confirmed_value", None) or getattr(metric, "metric_value", None)
-    reference = getattr(metric, "confirmed_reference_range", None) or getattr(metric, "reference_range", None)
-    return str(value or ""), reference
+    effective = effective_value(metric)
+    return str(effective.value or ""), effective.reference_range
 
 
 def _decidable(metric: Any) -> bool:

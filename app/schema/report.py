@@ -34,6 +34,13 @@ class MetricRecord(BaseModel):
     confirmed_unit: str | None = None
     confirmed_reference_range: str | None = None
     confirmed_evidence_text: str | None = None
+    # 当前生效值四元组（GLOSSARY.md 的「指标生效值」）：修正值 > 确认值 > 模型值；
+    # excluded 的指标没有生效值（四项皆 None）。定义见 app/service/metric_effective_value.py，
+    # 与证据边界用的是同一个函数、同一份输入。
+    effective_value: str | None = None
+    effective_unit: str | None = None
+    effective_reference_range: str | None = None
+    effective_evidence_text: str | None = None
 
     @model_validator(mode="after")
     def validate_bboxes(self) -> "MetricRecord":
