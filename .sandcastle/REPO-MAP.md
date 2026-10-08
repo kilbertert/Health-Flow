@@ -9,18 +9,25 @@
 Read this before exploring by hand. It answers where things are; it does not
 answer how they work.
 
+It is generated from the filesystem as it stands in this checkout, not from
+the set of tracked files — so an untracked directory outside the generator's
+skip list changes the map, and `repo-map.check.mjs` will ask for a
+regeneration. That is deliberate: an agent works in a checkout, and a mount
+point or a stray `output/` is part of what it sees.
+
 ## Entry points
 
 - script "afk": tsx .sandcastle/main.ts (package.json)
 - script "ralph": tsx .sandcastle/planner.ts (package.json)
+- script "afk:policy": node .sandcastle/policy-check.mjs all (package.json)
 - console script "health-flow-migrate-evidence": app.migrate_evidence_payloads:main (pyproject.toml)
 - app/main.py
 - frontend/src/main.jsx
 
 ## Tests
 
-- tests/ — 35 test file(s)
-- frontend/e2e/ — 17 test file(s)
+- tests/ — 37 test file(s, recursive)
+- frontend/e2e/ — 12 test file(s, recursive)
 - pytest (pyproject.toml / pytest.ini present)
 
 ## Docs
