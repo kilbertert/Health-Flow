@@ -164,6 +164,31 @@ def mismatch_reason(material: ReportMaterial) -> str:
     return f"文件内容与扩展名不符：扩展名说的是 {declared}，实际是 {actual}"
 
 
+def page_count(filename: str, content: bytes) -> int | None:
+    """这份材料的页数 —— **唯一**计算入口；读不出页数是 ``None``，不是 1。
+
+    「未知」与「共 1 页」是两件事，此前用 1 冒充后者：非 PDF 一律返回 1，
+    `fitz` 打不开的 PDF 也在 `except` 里返回 1 —— 于是一个损坏的 PDF 在报告详情
+    里显示成「共 1 页」，而同一个 1 又被当作 `page_number` 越界的边界。患者看到的
+    不是「读不出页数」，而是一个**看起来很确定**的错值。
+
+    图片（一份材料一页）是**确定**的 1，不是未知；只有 PDF 读不出来才是 ``None``。
+    """
+    material = resolve(filename, content)
+    if material.is_pdf:
+        try:
+            import fitz
+
+            with fitz.open(stream=content, filetype="pdf") as document:
+                return max(1, document.page_count)
+        except Exception:
+            return None
+    if extraction_route(material) == "image":
+        return 1
+    # 判定不出类型：**不猜**页数。走到这里说明上游闸门没拦住，仍然如实返回未知。
+    return None
+
+
 def extraction_route(material: ReportMaterial) -> str:
     """家族级抽取路由。PDF 的 text/scanned 细分是抽取侧的探针，不在这里。
 

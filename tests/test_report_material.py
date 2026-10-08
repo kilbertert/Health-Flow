@@ -25,6 +25,7 @@ from app.service.report_material import (
     extraction_route,
     media_type_for_extension,
     mismatch_reason,
+    page_count,
     resolve,
     sniff_kind,
 )
@@ -169,3 +170,68 @@ def test_material_is_immutable():
         material.kind = "pdf"  # type: ignore[misc]
 
     assert isinstance(material, ReportMaterial)
+
+
+# --- 页数（#170）-----------------------------------------------------------
+#
+# 页数是同一个概念的另一半：类型判定回答「是什么」，页数回答「有几页」。
+# 下面这些把「未知」与「共 1 页」钉成两个不同的答案。
+
+
+def test_readable_pdf_reports_its_real_page_count():
+    assert page_count("a.pdf", _real_pdf(3)) == 3
+    assert page_count("a.pdf", _real_pdf(1)) == 1
+
+
+def test_damaged_pdf_is_unknown_not_one():
+    """损坏的 PDF 此前被说成「共 1 页」。
+
+    阴性对照（写这条时实际跑过）：把 `page_count()` 的 `except` 分支改回
+    `return 1`，本用例与请求级的那条一起变红。
+    """
+    assert page_count("a.pdf", b"%PDF-1.4\n%%EOF\n") is None
+    # 连 PDF 头都没有的「.pdf」：后缀说是 PDF，打不开 —— 同样是未知。
+    assert page_count("报告.pdf", b"not a pdf at all") is None
+
+
+def test_images_are_a_known_single_page():
+    """图片是**确定**的一页，不是未知 —— 把它也变成 None 会让正常的单页报告失去翻页器。"""
+    assert page_count("a.png", TINY_PNG) == 1
+    assert page_count("a.jpg", TINY_JPEG) == 1
+    assert page_count("a.gif", TINY_GIF) == 1
+    assert page_count("a.bmp", TINY_BMP) == 1
+
+
+def test_unrecognised_material_has_no_guessable_page_count():
+    """判定不出类型时不猜页数。"""
+    assert page_count("a.bin", b"\x00\x01\x02") is None
+
+
+def test_the_page_count_decision_lives_in_one_place():
+    """页数不再由 `app/api/report.py` 自己算 —— 那里只剩调用。
+
+    静态守卫：一处内联副本（例如「非 PDF 就 return 1」）与原实现给出**同样的
+    答案**，行为测试分不出它。这里断言那段被判定的代码不在调用点重新出现。
+
+    注意 `fitz.open` 在 `app/api/report.py` 里**是合法**的 —— 那是「渲染某一页原文」
+    的路由，不是页数计算；所以这里盯的是页数计算那段（`max(1, document.page_count)`
+    与两个 `return 1` 兜底），不是整个文件的 `fitz` 用量。
+    """
+    source = (Path(__file__).resolve().parents[1] / "app/api/report.py").read_text()
+
+    assert "document.page_count" not in source
+    assert "max(1, document.page_count)" not in source
+    # 页数现在只有一条路径：在写入点直接调用原始材料模块。
+    assert "page_count=page_count(filename, content)" in source
+
+
+def _real_pdf(pages: int) -> bytes:
+    """一张真的能被 `fitz` 打开的 PDF（测试夹具，不是断言对象）。"""
+    import fitz
+
+    document = fitz.open()
+    for _ in range(pages):
+        document.new_page()
+    data = document.tobytes()
+    document.close()
+    return data

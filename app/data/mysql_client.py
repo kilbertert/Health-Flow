@@ -80,6 +80,7 @@ class MySQLClient:
             if "ix_medical_reports_owner_id" not in indexes:
                 connection.execute(text("CREATE INDEX ix_medical_reports_owner_id ON medical_reports (owner_id)"))
             self._upgrade_session_owner_column(connection)
+            self._upgrade_report_file_page_count(connection)
             # **只在真正无主的旧行上打标记。** 这条原先按 `access_token_hash IS NULL`
             # 判定，而 #172 之后新上传的报告**本来就不再有令牌**——于是每次启动都会把
             # 新报告改写成 `legacy_unclaimed`（`confirmed`/`assessed` 会被抹掉，
@@ -93,6 +94,32 @@ class MySQLClient:
                 ),
                 {"unowned": "anonymous"},
             )
+
+    @staticmethod
+    def _upgrade_report_file_page_count(connection) -> None:
+        """把 `report_files.page_count` 从 `NOT NULL DEFAULT 1` 放开为可空。
+
+        #170 之后 `NULL` 表示「读不出页数」（未知），与「共 1 页」是两件事。
+        既有库的这一列是 `NOT NULL DEFAULT 1`，**而 SQLAlchemy 的显式 `None` 仍会
+        撞上它** —— 于是「未知」在旧库上根本写不进去，会话直接失败。这不是理论的：
+        服务宿主与开发库都是 `create_all` 之前建的老表。
+
+        `create_all` 不改既有表（同 `_upgrade_session_owner_column` 的理由），
+        所以这段必须显式执行。SQLite 不支持改列的 NOT NULL 约束，只能重建；
+        MySQL 用 `MODIFY`。两边的重建都必须**按列名对齐**搬行，否则历史列会被
+        静默丢掉——与 `_sqlite_rebuild_without_account_fk` 同一个教训。
+        """
+        inspector = inspect(connection)
+        if "report_files" not in inspector.get_table_names():
+            return
+        columns = {column["name"]: column for column in inspector.get_columns("report_files")}
+        page_column = columns.get("page_count")
+        if page_column is None or page_column.get("nullable", True):
+            return
+        if connection.dialect.name == "mysql":
+            connection.execute(text("ALTER TABLE report_files MODIFY page_count INTEGER NULL"))
+            return
+        _sqlite_make_page_count_nullable(connection)
 
     @staticmethod
     def _upgrade_session_owner_column(connection) -> None:
@@ -215,6 +242,49 @@ def _sqlite_rebuild_without_account_fk(connection) -> None:
     connection.execute(text(f"INSERT INTO user_sessions_migrating ({quoted}) SELECT {quoted} FROM user_sessions"))
     connection.execute(text("DROP TABLE user_sessions"))
     connection.execute(text("ALTER TABLE user_sessions_migrating RENAME TO user_sessions"))
+    for statement in index_sql:
+        connection.execute(text(statement))
+
+
+def _sqlite_make_page_count_nullable(connection) -> None:
+    """在 SQLite 上把 `report_files` 重建为 `page_count` 可空的形状。
+
+    与 `_sqlite_rebuild_without_account_fk` 同一套做法与同一条教训：**按列名对齐
+    搬行**（旧表与模型的列序不保证一致，按位搬会静默错列），并从 `sqlite_master`
+    重建它自己的索引（索引不随数据走）。事务由调用方的 `engine.begin()` 提供。
+
+    `report_files` 被 `report_id` 外键指向 `medical_reports` —— 外键定义在它**自己**
+    身上，没有表引用它，所以「先删行再删表」不违反任何约束，无需动
+    `PRAGMA foreign_keys`。
+    """
+    columns = [row[1] for row in connection.execute(text("PRAGMA table_info(report_files)"))]
+    index_sql = [
+        row[0]
+        for row in connection.execute(
+            text("SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='report_files' AND sql IS NOT NULL")
+        )
+    ]
+    quoted = ", ".join(f'"{name}"' for name in columns)
+    connection.execute(text("DROP TABLE IF EXISTS report_files_migrating"))
+    connection.execute(
+        text(
+            "CREATE TABLE report_files_migrating ("
+            " id INTEGER NOT NULL,"
+            " report_id INTEGER NOT NULL,"
+            " file_index INTEGER NOT NULL,"
+            " original_filename VARCHAR(255) NOT NULL,"
+            " media_type VARCHAR(128) NOT NULL,"
+            " stored_path VARCHAR(1024) NOT NULL,"
+            " page_count INTEGER,"
+            " created_at DATETIME,"
+            " PRIMARY KEY (id),"
+            " FOREIGN KEY(report_id) REFERENCES medical_reports (id)"
+            ")"
+        )
+    )
+    connection.execute(text(f"INSERT INTO report_files_migrating ({quoted}) SELECT {quoted} FROM report_files"))
+    connection.execute(text("DROP TABLE report_files"))
+    connection.execute(text("ALTER TABLE report_files_migrating RENAME TO report_files"))
     for statement in index_sql:
         connection.execute(text(statement))
 
