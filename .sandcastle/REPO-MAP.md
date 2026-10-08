@@ -26,8 +26,8 @@ point or a stray `output/` is part of what it sees.
 
 ## Tests
 
-- tests/ — 38 test file(s, recursive)
-- frontend/e2e/ — 13 test file(s, recursive)
+- tests/ — 39 test file(s, recursive)
+- frontend/e2e/ — 14 test file(s, recursive)
 - pytest (pyproject.toml / pytest.ini present)
 
 ## Docs
@@ -133,7 +133,7 @@ frontend/
     README.md
     recommendations-from-entry.spec.js
     recommendations.spec.js
-    ... (9 more)
+    ... (10 more)
   public/
     products/
     hst-club-logo.png
