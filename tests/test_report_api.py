@@ -221,6 +221,101 @@ def test_upload_rejects_content_that_contradicts_the_extension(client):
     assert "报告.pdf" in detail or "路径" not in detail
 
 
+def _real_pdf(pages: int) -> bytes:
+    """一张真的能被 `fitz` 打开的 PDF。"""
+    import fitz
+
+    document = fitz.open()
+    for _ in range(pages):
+        document.new_page()
+    data = document.tobytes()
+    document.close()
+    return data
+
+
+def test_upload_reports_an_unknown_page_count_instead_of_one(client, tmp_path):
+    """读不出页数的材料在响应里是「未知」，不是「共 1 页」（#170）。
+
+    同一份响应同时被两个消费者读：报告详情的翻页器，以及 `page_number` 的越界
+    校验。两者此前都拿到那个被冒充的 1。
+    """
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    SessionLocal = sessionmaker(bind=engine)
+
+    def override_get_db():
+        with SessionLocal() as session:
+            yield session
+
+    settings = SimpleNamespace(
+        MAX_UPLOAD_FILES=20,
+        MAX_UPLOAD_BYTES=20 * 1024 * 1024,
+        MAX_UPLOAD_TOTAL_BYTES=50 * 1024 * 1024,
+        REPORT_PARSE_WORKERS=4,
+        REPORT_FILES_DIR=str(tmp_path),
+    )
+    owner_id = "account:api-tenant:page-count"
+    token, session_row = issue_session(owner_id)
+    with SessionLocal() as bootstrap:
+        bootstrap.add(session_row)
+        bootstrap.commit()
+
+    with (
+        patch("app.api.report.get_vision_encoder_service", return_value=MockVisionService()),
+        patch("app.api.report.get_settings", return_value=settings),
+        patch(
+            "app.api.report.resolve_owner",
+            return_value=SimpleNamespace(storage_id=owner_id, subject=f"account:{owner_id}"),
+        ),
+        patch("app.data.get_db", override_get_db),
+        # 渲染路由走的是 `db_dependency`（不是上传那条 get_db 依赖），要一并指到
+        # 这份内存库上，否则它会去开一个真的开发库。
+        patch("app.api.deps.db_dependency", override_get_db),
+    ):
+        cookies = {SESSION_COOKIE: token}
+        response = client.post(
+            "/api/health/report/upload",
+            data={"patient_id": "P001"},
+            # 有 PDF 头、fitz 打不开 —— 损坏的 PDF。
+            files={"file": ("报告.pdf", io.BytesIO(b"%PDF-1.4\n%%EOF\n"), "application/pdf")},
+            cookies=cookies,
+        )
+
+        assert response.status_code == 202, response.text
+        data = response.json()
+        assert data["files"][0]["page_count"] is None
+        # 契约允许「未知」，不允许用它冒充一个数。
+        assert data["files"][0]["page_count"] != 1
+
+        report_id = data["id"]
+        # 页数未知时只承认第 1 页 —— 越界校验不能拿「未知」当「共 1 页」用。
+        # 第 2 页被拒（旧写法 `page_number > source.page_count` 在 None 上直接
+        # 抛 TypeError，是 500 而不是 404）。第 1 页本身渲染不了（内存 PDF 本来
+        # 就打不开），如实报 422，而不是假装成功。
+        beyond = client.get(f"/api/health/report/{report_id}/files/1/pages/2", cookies=cookies)
+        assert beyond.status_code == 404
+        first = client.get(f"/api/health/report/{report_id}/files/1/pages/1", cookies=cookies)
+        assert first.status_code == 422
+
+    # 相反的一半：真的只有一页的 PDF 仍然是 1（未知不能把正常的单页报告也吞掉）。
+    with (
+        patch("app.api.report.get_vision_encoder_service", return_value=MockVisionService()),
+        patch("app.api.report.get_settings", return_value=settings),
+        patch(
+            "app.api.report.resolve_owner",
+            return_value=SimpleNamespace(storage_id=owner_id, subject=f"account:{owner_id}"),
+        ),
+        patch("app.data.get_db", override_get_db),
+    ):
+        one_page = client.post(
+            "/api/health/report/upload",
+            data={"patient_id": "P001"},
+            files={"file": ("单页.pdf", io.BytesIO(_real_pdf(1)), "application/pdf")},
+            cookies={SESSION_COOKIE: token},
+        )
+        assert one_page.json()["files"][0]["page_count"] == 1
+
+
 def test_upload_rejects_total_size_limit(client):
     settings = SimpleNamespace(
         MAX_UPLOAD_FILES=20,

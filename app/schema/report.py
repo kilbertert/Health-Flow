@@ -86,7 +86,10 @@ class ReportFileRecord(BaseModel):
     file_index: int
     original_filename: str
     media_type: str
-    page_count: int
+    # **`None` 表示「读不出页数」（未知），不是「共 0 页」。** 它与「共 1 页」是
+    # 两件事：损坏的 PDF 此前被说成 1（见 app/service/report_material.py 的
+    # `page_count`）。前端据此隐藏翻页器，而不是显示一个假的页数。
+    page_count: int | None = None
     source_url: str
 
 

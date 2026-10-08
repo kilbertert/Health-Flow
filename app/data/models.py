@@ -112,7 +112,14 @@ class ReportFile(Base):
     original_filename = Column(String(255), nullable=False)
     media_type = Column(String(128), nullable=False)
     stored_path = Column(String(1024), nullable=False)
-    page_count = Column(Integer, nullable=False, default=1)
+    # **可空，且没有默认值**：`NULL` 表示「读不出页数」（未知），与「共 1 页」
+    # 是两件事。此前这一列 `NOT NULL DEFAULT 1`，于是「未知」被迫冒充 1，一个
+    # 损坏的 PDF 在详情页显示成「共 1 页」（health-flow #170）。
+    #
+    # 没有 `default` 是**必须的**，不是省略：SQLAlchemy 的列默认值会在显式传
+    # `None` 时也生效，于是「未知」又变回 1。写入方一律显式给值
+    # （`app/service/report_material.py` 的 `page_count()`）。
+    page_count = Column(Integer)
     created_at = Column(DateTime, default=datetime.now)
 
     report = relationship("MedicalReport", back_populates="files")
