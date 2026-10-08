@@ -26,8 +26,8 @@ point or a stray `output/` is part of what it sees.
 
 ## Tests
 
-- tests/ — 37 test file(s, recursive)
-- frontend/e2e/ — 12 test file(s, recursive)
+- tests/ — 38 test file(s, recursive)
+- frontend/e2e/ — 13 test file(s, recursive)
 - pytest (pyproject.toml / pytest.ini present)
 
 ## Docs
@@ -90,7 +90,7 @@ app/
     medical_rag.py
     metric_effective_value.py
     metric_rows.py
-    ... (12 more)
+    ... (13 more)
   __init__.py
   config.py
   main.py
@@ -133,7 +133,7 @@ frontend/
     README.md
     recommendations-from-entry.spec.js
     recommendations.spec.js
-    ... (8 more)
+    ... (9 more)
   public/
     products/
     hst-club-logo.png
