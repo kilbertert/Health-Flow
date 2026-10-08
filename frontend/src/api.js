@@ -40,6 +40,9 @@ export function uploadReport(formData) {
 
 export const getMetricCatalog = () => request('/health/metric-catalog');
 
+// 上传策略（受理扩展名与三个上限）由服务端下发，前端不自己记一份。
+export const getUploadPolicy = () => request('/health/upload-policy');
+
 export const getReport = (id, token = '') => request(`/health/report/${id}`, {
   headers: reportHeaders(token),
 });

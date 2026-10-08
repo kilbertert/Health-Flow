@@ -31,6 +31,20 @@ import {
   getReport,
   uploadReport,
 } from '../api.js';
+import {
+  classifyPaste,
+  dataImageCandidates,
+  extensionFromName,
+  normalizePasteMime,
+  pastedFileName,
+  unsupportedPasteMessage,
+} from '../pasteImage.js';
+import {
+  acceptAttribute,
+  describeBytes,
+  loadUploadPolicy,
+  normalizeUploadPolicy,
+} from '../uploadPolicy.js';
 
 const REPORT_TYPES = ['体检', '门诊', '住院', '其他'];
 const DECISIONS = [
@@ -39,52 +53,11 @@ const DECISIONS = [
   { label: '修正', value: 'corrected' },
   { label: '排除', value: 'excluded' },
 ];
-const PASTE_IMAGE_EXTENSIONS = {
-  'image/png': 'png',
-  'image/jpeg': 'jpg',
-  'image/jpg': 'jpg',
-  'image/gif': 'gif',
-  'image/bmp': 'bmp',
-};
-
-const UNSUPPORTED_PASTE_IMAGE_TYPES = new Set([
-  'image/webp',
-  'image/heic',
-  'image/heif',
-]);
-const DATA_IMAGE_RE = /data:image\/([a-z0-9.+-]+);base64,([a-z0-9+/=]+)/gi;
 const PASTE_LONG_PRESS_MS = 600;
 const PASTE_LONG_PRESS_MOVE_TOLERANCE = 10;
 const PASTE_EDITABLE_PLACEHOLDER = '\u200B';
 
-function normalizePasteMime(value) {
-  return String(value || '').split(';', 1)[0].trim().toLowerCase();
-}
-
-function pasteExtensionForMime(mime) {
-  const normalized = normalizePasteMime(mime);
-  if (Object.prototype.hasOwnProperty.call(PASTE_IMAGE_EXTENSIONS, normalized)) {
-    return PASTE_IMAGE_EXTENSIONS[normalized];
-  }
-  return 'png';
-}
-
-function pasteFileMimeForExtension(extension) {
-  if (extension === 'jpg') return 'image/jpeg';
-  return `image/${extension}`;
-}
-
-function pasteMimeFromFileName(name) {
-  const extension = String(name || '').split('.').pop().toLowerCase();
-  if (['png', 'jpg', 'jpeg', 'gif', 'bmp'].includes(extension)) {
-    const normalized = extension === 'jpeg' ? 'jpg' : extension;
-    return { mime: pasteFileMimeForExtension(normalized), extension: normalized };
-  }
-  if (['webp', 'heic', 'heif'].includes(extension)) {
-    return { mime: `image/${extension}`, extension };
-  }
-  return null;
-}
+export { extensionFromName, normalizePasteMime };
 
 function pasteImageFromBase64(mime, base64) {
   try {
@@ -95,60 +68,31 @@ function pasteImageFromBase64(mime, base64) {
   }
 }
 
-function readPastedImages(event) {
+/** 收集剪贴板里的候选（不判受理）—— 分类只有一个执行点（`classifyPaste`）。 */
+function pasteCandidates(event) {
   const clipboardData = event?.clipboardData || event?.nativeEvent?.clipboardData;
-  const images = [];
-  let sawUnsupportedImage = false;
+  const candidates = [];
   let sawPastePayload = false;
 
   const items = clipboardData?.items ? Array.from(clipboardData.items) : [];
   if (items.length > 0) {
-    sawPastePayload = items.length > 0;
+    sawPastePayload = true;
     for (const item of items) {
       if (item.kind !== 'file') continue;
-      const type = normalizePasteMime(item.type);
-      if (type.startsWith('image/')) {
-        if (UNSUPPORTED_PASTE_IMAGE_TYPES.has(type)) {
-          sawUnsupportedImage = true;
-          continue;
-        }
-        const file = item.getAsFile?.();
-        if (file) {
-          images.push({
-            file,
-            mime: type || file.type || `image/${pasteExtensionForMime(type)}`,
-            extension: pasteExtensionForMime(type),
-          });
-        } else {
-          sawUnsupportedImage = sawUnsupportedImage || UNSUPPORTED_PASTE_IMAGE_TYPES.has(type);
-        }
+      const mime = normalizePasteMime(item.type);
+      const file = item.getAsFile?.();
+      if (file) {
+        candidates.push({ file, mime: mime || file.type || '', name: file.name || '' });
+      } else if (mime.startsWith('image/')) {
+        // 拿不到 File 的剪贴项：仍然登记它，让分类回答「受不受理」。
+        candidates.push({ file: null, mime, name: '' });
       }
     }
   } else {
     const files = clipboardData?.files ? Array.from(clipboardData.files) : [];
     sawPastePayload = files.length > 0;
     for (const file of files) {
-      const type = normalizePasteMime(file.type);
-      if (type.startsWith('image/')) {
-        if (UNSUPPORTED_PASTE_IMAGE_TYPES.has(type)) {
-          sawUnsupportedImage = true;
-          continue;
-        }
-        images.push({
-          file,
-          mime: type || pasteFileMimeForExtension(pasteExtensionForMime(type)),
-          extension: pasteExtensionForMime(type),
-        });
-      } else {
-        const byName = pasteMimeFromFileName(file.name);
-        if (byName) {
-          if (UNSUPPORTED_PASTE_IMAGE_TYPES.has(byName.mime)) {
-            sawUnsupportedImage = true;
-          } else {
-            images.push({ file, mime: byName.mime, extension: byName.extension });
-          }
-        }
-      }
+      candidates.push({ file, mime: file.type || '', name: file.name || '' });
     }
   }
 
@@ -157,19 +101,9 @@ function readPastedImages(event) {
     : '';
   if (html) {
     sawPastePayload = true;
-    for (const match of html.matchAll(DATA_IMAGE_RE)) {
-      const mime = normalizePasteMime(match[1]);
-      if (UNSUPPORTED_PASTE_IMAGE_TYPES.has(mime)) {
-        sawUnsupportedImage = true;
-        continue;
-      }
-      const file = pasteImageFromBase64(mime, match[2]);
-      if (!file) continue;
-      images.push({
-        file,
-        mime: file.type || pasteFileMimeForExtension(pasteExtensionForMime(mime)),
-        extension: pasteExtensionForMime(mime),
-      });
+    for (const embedded of dataImageCandidates(html)) {
+      const file = pasteImageFromBase64(embedded.mime, embedded.base64);
+      if (file) candidates.push({ file, mime: embedded.mime, name: '' });
     }
   }
   const plainText = typeof clipboardData?.getData === 'function' && !html
@@ -179,15 +113,34 @@ function readPastedImages(event) {
     sawPastePayload = true;
   }
 
-  if (images.length > 0) {
-    return { images, status: 'ok' };
+  return { candidates, sawPastePayload };
+}
+
+/**
+ * 分类剪贴内容。受理判据只有一处（`pasteImage.js` 的 `classifyPaste`），
+ * 所以「入口说暂不支持」与「分类认得它」不可能再给出相反结论。
+ */
+function readPastedImages(event, acceptedExtensions) {
+  const { candidates, sawPastePayload } = pasteCandidates(event);
+
+  const images = [];
+  let unsupported = null;
+  for (const candidate of candidates) {
+    if (!candidate.file) {
+      unsupported = unsupported || candidate;
+      continue;
+    }
+    const classified = classifyPaste(candidate, acceptedExtensions);
+    if (classified.supported) {
+      images.push({ file: candidate.file, ...classified });
+    } else {
+      unsupported = unsupported || classified;
+    }
   }
-  if (sawUnsupportedImage) {
-    return { status: 'unsupported' };
-  }
-  if (sawPastePayload) {
-    return { status: 'empty' };
-  }
+
+  if (images.length > 0) return { images, status: 'ok' };
+  if (unsupported) return { status: 'unsupported', unsupported };
+  if (sawPastePayload) return { status: 'empty' };
   return { status: 'unavailable' };
 }
 // 异常标记：H=偏高(红) L=偏低(橙) N=正常(绿)
@@ -834,7 +787,18 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
   const [metricCatalog, setMetricCatalog] = useState([]);
   const [metricCatalogError, setMetricCatalogError] = useState('');
   const [technicalDetailsOpen, setTechnicalDetailsOpen] = useState(false);
+  // 受理规则由服务端下发（`app/service/upload_policy.py`）。起点是内建默认值 ——
+  // 一次请求失败不该挡住上传；拿到之后一律以服务端那份为准。
+  const [uploadPolicy, setUploadPolicy] = useState(() => normalizeUploadPolicy(null));
   const isNarrow = useNarrowViewport();
+
+  useEffect(() => {
+    let active = true;
+    loadUploadPolicy().then((policy) => {
+      if (active) setUploadPolicy(policy);
+    });
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -948,16 +912,18 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
     focusPasteEditable();
   };
 
+  const tooManyFilesMessage = `最多上传 ${uploadPolicy.max_files} 个文件`;
+
   const appendPastedImages = (pastedImages) => {
-    const remaining = Math.max(0, 20 - fileList.length);
+    const remaining = Math.max(0, uploadPolicy.max_files - fileList.length);
     if (remaining === 0) {
-      message.warning('最多上传 20 个文件');
+      message.warning(tooManyFilesMessage);
       return;
     }
-    const nextFiles = pastedImages.slice(0, remaining).map(({ file, mime, extension }) => {
+    const nextFiles = pastedImages.slice(0, remaining).map((image) => {
       pasteSequenceRef.current += 1;
-      const name = `粘贴-${Date.now()}.${extension}`;
-      const renamed = new File([file], name, { type: mime || file.type });
+      const name = pastedFileName(image, { sequence: pasteSequenceRef.current });
+      const renamed = new File([image.file], name, { type: image.mime || image.file.type });
       return {
         uid: `paste-${Date.now()}-${pasteSequenceRef.current}`,
         name,
@@ -968,7 +934,7 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
       };
     });
     if (pastedImages.length > remaining) {
-      message.warning('最多上传 20 个文件');
+      message.warning(tooManyFilesMessage);
     }
     setFileList((current) => [...current, ...nextFiles]);
   };
@@ -989,9 +955,9 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
         pasteEditableRef.current.textContent = PASTE_EDITABLE_PLACEHOLDER;
       }
     }
-    const pasted = readPastedImages(event);
+    const pasted = readPastedImages(event, uploadPolicy.accepted_extensions);
     if (pasted.status === 'unsupported') {
-      message.warning('暂不支持');
+      message.warning(unsupportedPasteMessage(pasted.unsupported, uploadPolicy.accepted_extensions));
       return;
     }
     if (pasted.status === 'unavailable') {
@@ -1325,16 +1291,18 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
         >
           <Upload.Dragger
             style={{ marginTop: 16 }}
-            accept=".pdf,.jpg,.jpeg,.png,.gif,.bmp"
+            accept={acceptAttribute(uploadPolicy)}
             multiple
-            maxCount={20}
+            maxCount={uploadPolicy.max_files}
             fileList={fileList}
             beforeUpload={() => false}
             onChange={({ fileList: next }) => setFileList(next)}
           >
             <p className="ant-upload-drag-icon"><InboxOutlined /></p>
             <p className="ant-upload-text">点击或拖拽多张报告文件到此区域</p>
-            <p className="ant-upload-hint">文件顺序会保留；每个文件不超过 20MB</p>
+            <p className="ant-upload-hint">
+              文件顺序会保留；最多 {uploadPolicy.max_files} 个文件，每个不超过 {describeBytes(uploadPolicy.max_file_bytes)}
+            </p>
           </Upload.Dragger>
           <div className="report-paste-actions">
             <Button icon={<PictureOutlined />} onClick={focusPasteEditable}>
