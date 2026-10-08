@@ -76,18 +76,34 @@ def test_parse_unsupported_file(mock_deps):
     assert "不支持" in result.error
 
 
-def test_get_mime_type():
-    """Test MIME type detection."""
+#: 后缀 → MIME 的断言已随第二张表一起搬到 `tests/test_report_material.py`
+#: （那里是唯一的判定入口）。这里保留的是**抽取器真的消费了它**：
+#: 一张认得出内容的图片，其 MIME 由内容决定，不由文件名决定。
+
+
+def test_parse_routes_a_renamed_image_by_content(mock_deps):
+    """PNG 改名成 .pdf：抽取器按内容走图片分支，不按文件名走 PDF 分支。"""
     from app.service.vision_encoder import VisionEncoderService
 
     service = VisionEncoderService()
+    img_bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
 
-    assert service._get_mime_type("test.jpg") == "image/jpeg"
-    assert service._get_mime_type("test.jpeg") == "image/jpeg"
-    assert service._get_mime_type("test.png") == "image/png"
-    assert service._get_mime_type("test.gif") == "image/gif"
-    assert service._get_mime_type("test.bmp") == "image/bmp"
-    assert service._get_mime_type("test.xyz") == "image/png"  # default
+    result = service.parse(img_bytes, "报告.pdf")
+
+    assert result.report_type == "image"
+
+
+def test_parse_unknown_extension_uses_the_content_mime_type(mock_deps):
+    """后缀不认识但内容是 JPEG：交给 VLM 的是 image/jpeg，不是默认的 image/png。"""
+    from app.service.vision_encoder import VisionEncoderService
+
+    service = VisionEncoderService()
+    service._parse_image_with_vlm = MagicMock(return_value=("", [], None))
+    jpeg_data = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01"
+
+    service.parse(jpeg_data, "报告.data")
+
+    assert service._parse_image_with_vlm.call_args.args[1] == "image/jpeg"
 
 
 def test_parsed_report_dataclass():

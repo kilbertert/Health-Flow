@@ -61,6 +61,13 @@ await expect(page.getByText(/粘贴-\d+\.png/)).toBeVisible();
 桌面用例需 `test.use({ viewport: { width: 1280, height: 800 } })`；移动端走
 「粘贴图片」按钮 + 长按聚焦路径。
 
+## Sibling spec
+
+**类型判定**（这份材料是什么、能不能受理）不是粘贴特有的，它在上传闸门里对
+文件选择与粘贴一视同仁。那条链路的证据在 `frontend/e2e/upload-material.spec.js`：
+把 PNG 改名成 `.pdf` 会被明确拒绝（服务端 `app/service/report_material.py`
+按内容判定），内容与后缀相符的 PDF 照常受理。
+
 ## Gotchas
 
 - **粘贴是剪贴板事件，不是文件选择。** 用 `page.evaluate` 派发带 `DataTransfer` 的
