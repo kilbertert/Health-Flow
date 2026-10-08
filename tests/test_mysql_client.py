@@ -116,6 +116,90 @@ def test_legacy_reports_are_sealed_when_owner_columns_are_added(tmp_path, monkey
     assert "ix_medical_reports_owner_id" in index_names
 
 
+def test_create_tables_makes_a_legacy_page_count_column_nullable(tmp_path, monkeypatch):
+    """旧库的 `report_files.page_count` 是 `NOT NULL DEFAULT 1`，会挡住「未知」。
+
+    #170 之后 `NULL` 表示「读不出页数」。SQLAlchemy 的列默认值会在显式传 `None`
+    时也生效 —— 所以只要这一列还是 `NOT NULL`，「未知」要么写不进去（会话直接
+    `IntegrityError`），要么被悄悄改回 1。两种都不是我们能接受的，而既有部署
+    （服务宿主与开发库）的表正是 `create_all` 之前建的。
+
+    这条在**由旧 schema 建起的库**上测，并且断言三件事：约束真的放开了、历史行
+    的取值原样保留、迁移之后 `None` 真的能落库。
+    """
+    from sqlalchemy import inspect
+
+    from app.data.mysql_client import MySQLClient
+
+    database_path = tmp_path / "legacy-page-count.db"
+    engine = create_engine(f"sqlite:///{database_path}")
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE medical_reports (id INTEGER PRIMARY KEY)"))
+        connection.execute(
+            text(
+                "CREATE TABLE report_files ("
+                " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                " report_id INTEGER NOT NULL,"
+                " file_index INTEGER NOT NULL,"
+                " original_filename VARCHAR(255) NOT NULL,"
+                " media_type VARCHAR(128) NOT NULL,"
+                " stored_path VARCHAR(1024) NOT NULL,"
+                " page_count INTEGER NOT NULL DEFAULT 1,"
+                " created_at DATETIME,"
+                " FOREIGN KEY(report_id) REFERENCES medical_reports (id)"
+                ")"
+            )
+        )
+        connection.execute(text("CREATE INDEX ix_report_files_report_id ON report_files (report_id)"))
+        connection.execute(text("INSERT INTO medical_reports (id) VALUES (7)"))
+        connection.execute(
+            text(
+                "INSERT INTO report_files (report_id, file_index, original_filename, media_type,"
+                " stored_path, page_count) VALUES (7, 1, 'legacy.pdf', 'application/pdf', '/tmp/x', 3)"
+            )
+        )
+    engine.dispose()
+
+    client = MySQLClient.__new__(MySQLClient)
+    client.engine = create_engine(f"sqlite:///{database_path}")
+    client.create_tables()
+
+    with client.engine.begin() as connection:
+        column = next(c for c in inspect(connection).get_columns("report_files") if c["name"] == "page_count")
+        kept = connection.execute(text("SELECT page_count FROM report_files WHERE id = 1")).scalar_one()
+        indexes = {item["name"] for item in inspect(connection).get_indexes("report_files")}
+        # 迁移之后，「未知」真的写得进去。
+        connection.execute(text("UPDATE report_files SET page_count = NULL WHERE id = 1"))
+        written = connection.execute(text("SELECT page_count FROM report_files WHERE id = 1")).scalar_one()
+    client.engine.dispose()
+
+    assert column["nullable"] is True
+    assert kept == 3, "历史行的页数必须原样保留，不能被重建搬丢或改写"
+    # 重建表时不重建索引就会静默丢掉它们 —— 外键列上的索引一丢，报告删除的
+    # 级联清理就退化成全表扫描。
+    assert "ix_report_files_report_id" in indexes
+    assert written is None
+
+
+def test_page_count_upgrade_is_idempotent(tmp_path, monkeypatch):
+    """第二次启动不能重复重建（重建两次是两次搬数据的风险）。"""
+    from sqlalchemy import inspect
+
+    from app.data.mysql_client import MySQLClient
+
+    database_path = tmp_path / "idempotent.db"
+    client = MySQLClient.__new__(MySQLClient)
+    client.engine = create_engine(f"sqlite:///{database_path}")
+    client.create_tables()
+    client.create_tables()
+
+    with client.engine.connect() as connection:
+        column = next(c for c in inspect(connection).get_columns("report_files") if c["name"] == "page_count")
+    client.engine.dispose()
+
+    assert column["nullable"] is True
+
+
 def test_sqlite_foreign_keys_are_enabled_for_report_cleanup(tmp_path, monkeypatch):
     from app.data.mysql_client import MySQLClient
 

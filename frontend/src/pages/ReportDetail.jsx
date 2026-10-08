@@ -130,6 +130,16 @@ function MetricOverview({ result, onOpenSource }) {
   );
 }
 
+/** 这份材料有没有确定的、可翻的页数。`null` / `undefined` 是「读不出页数」。
+
+导出是为了能在测试里直接钉住它：`page_count` 为未知时**不能**退化成 1 页
+（`undefined === 1` 为 false，`undefined > 0` 也为 false —— 这个谓词把两处
+容易写错的地方收成一处）。
+*/
+export function hasKnownPageCount(file) {
+  return typeof file?.page_count === 'number' && file.page_count > 0;
+}
+
 function OriginalReport({ report, reportToken, active }) {
   const files = Array.isArray(report.files) ? report.files : [];
   const [fileIndex, setFileIndex] = useState(files[0]?.file_index || 1);
@@ -187,7 +197,8 @@ function OriginalReport({ report, reportToken, active }) {
       ) : (
         <div className="original-report-loading"><Spin /></div>
       )}
-      {file && file.page_count > 0 && (
+      {/* 页数未知时**隐藏翻页器**：显示「共 1 页」是在说一件我们并不知道的事。 */}
+      {hasKnownPageCount(file) && (
         <div className="original-report-pagination">
           <Pagination
             simple={file.page_count === 1}

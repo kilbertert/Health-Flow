@@ -41,6 +41,12 @@ await expect(page.getByText('指标总览', { exact: true })).toBeVisible();
 await page.getByRole('button', { name: '查看空腹血糖原文' }).click();
 ```
 
+## Sibling spec
+
+**原文页数**（读得出 / 读不出）是这条链路的一部分，证据在
+`frontend/e2e/unknown-page-count.spec.js`：服务端读不出页数时 `page_count` 是
+`null`，页面**隐藏翻页器**而不是显示「共 1 页」；页数确定时翻页器照常。
+
 ## Gotchas
 
 - **`loginWithSeed` 只到首页。** 报告详情在「个人中心」下，不经这一步

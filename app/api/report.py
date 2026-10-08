@@ -62,6 +62,7 @@ from app.service.report_material import (
     KIND_MEDIA_TYPE,
     extension_of,
     mismatch_reason,
+    page_count,
 )
 from app.service.report_material import (
     resolve as resolve_material,
@@ -120,20 +121,6 @@ def _authorized_report(db: Session, report_id: int, *, owner_id: str) -> ReportM
     return report
 
 
-def _page_count(filename: str, content: bytes) -> int:
-    # 「这份材料是不是 PDF」也是类型判定，走同一个入口 —— 此前这里自己拼了一遍
-    # 后缀比较。**本票不改页数语义**（未知仍然是 1），那是同一概念的另一半。
-    if not resolve_material(filename, content).is_pdf:
-        return 1
-    try:
-        import fitz
-
-        with fitz.open(stream=content, filetype="pdf") as document:
-            return max(1, document.page_count)
-    except Exception:
-        return 1
-
-
 def _persist_report_files(
     report_id: int,
     files: list[tuple[int, str, str, bytes]],
@@ -154,7 +141,9 @@ def _persist_report_files(
                 original_filename=filename,
                 media_type=media_type,
                 stored_path=str(target),
-                page_count=_page_count(filename, content),
+                # 页数的唯一计算入口在原始材料模块：读不出页数时是 None（未知），
+                # 不再用 1 冒充已知值。
+                page_count=page_count(filename, content),
             )
         )
 
@@ -999,7 +988,17 @@ async def get_report_page(
         )
         .first()
     )
-    if source is None or page_number < 1 or page_number > source.page_count:
+    if source is None or page_number < 1:
+        raise HTTPException(status_code=404, detail="报告原文页不存在")
+    # **页数未知时只承认第 1 页。** 存下来的 `page_count` 为 NULL 是两种情况之一：
+    # 真正读不出页数（本票新增语义），或落在列默认值之前的历史行（旧模型在这里
+    # 也会写出 NULL，读取时同样是未知）。两者都只能确定「首页在」，所以既不把
+    # 任意页当合法，也不因为未知就整份报告打不开。
+    #
+    # 注意这个 1 是**校验边界**，不是对外发布的页数：响应里的 `page_count` 仍然是
+    # `None`（未知），前端据此隐藏翻页器。把两者混起来，就是本票要修的那个 bug。
+    boundary = source.page_count if source.page_count is not None else 1
+    if page_number > boundary:
         raise HTTPException(status_code=404, detail="报告原文页不存在")
     path = Path(source.stored_path)
     if not path.is_file():
