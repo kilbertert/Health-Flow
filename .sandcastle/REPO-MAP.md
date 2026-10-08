@@ -13,6 +13,7 @@ answer how they work.
 
 - script "afk": tsx .sandcastle/main.ts (package.json)
 - script "ralph": tsx .sandcastle/planner.ts (package.json)
+- console script "health-flow-migrate-evidence": app.migrate_evidence_payloads:main (pyproject.toml)
 - app/main.py
 - frontend/src/main.jsx
 
