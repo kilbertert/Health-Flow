@@ -36,7 +36,10 @@ function uploadResponse(seeded, files) {
   };
 }
 
-async function dispatchPaste(locator, { files = [], items = [], textHtml = '', plainText = '' } = {}) {
+async function dispatchPaste(
+  locator,
+  { files = [], items = [], noFileItems = [], textHtml = '', plainText = '' } = {},
+) {
   await locator.evaluate((element, options) => {
     const data = new DataTransfer();
     // `items` 与 `files` 是**两条真实路径**：items 走 `clipboardData.items`，
@@ -53,15 +56,30 @@ async function dispatchPaste(locator, { files = [], items = [], textHtml = '', p
     if (options.textHtml) data.setData('text/html', options.textHtml);
     if (options.plainText) data.setData('text/plain', options.plainText);
 
+    // `noFileItems` 走一个**手写的 clipboardData**：`DataTransfer.items.add()`
+    // 只收 File，而这几条要覆盖的正是「`getAsFile()` 返回 null」的剪贴项 ——
+    // 真实存在（浏览器在拿不到内容时就是这么给的），也是分类必须照常回答的形状。
+    const clipboardData = options.noFileItems.length
+      ? {
+          items: options.noFileItems.map((item) => ({
+            kind: 'file',
+            type: item.type,
+            getAsFile: () => null,
+          })),
+          files: [],
+          getData: () => '',
+        }
+      : data;
+
     const event = document.createEvent('Event');
     event.initEvent('paste', true, true);
     try {
-      Object.defineProperty(event, 'clipboardData', { get: () => data });
+      Object.defineProperty(event, 'clipboardData', { get: () => clipboardData });
     } catch {
       // Chromium 的合成 Event 可能已有只读 clipboardData;若无此属性则无法覆盖。
     }
     element.dispatchEvent(event);
-  }, { files, items, textHtml, plainText });
+  }, { files, items, noFileItems, textHtml, plainText });
 }
 
 test.describe('报告图片粘贴', () => {
@@ -115,6 +133,23 @@ test.describe('报告图片粘贴', () => {
       files: [{ name: 'copied.png', type: 'image/png', base64: TINY_PNG_BASE64 }],
     });
     await expect(page.getByText('copied.png')).toBeVisible();
+  });
+
+  test('拿不到内容的剪贴项：不受理的说格式，受理的说「没有可粘贴的图片」', async ({ page, seed }) => {
+    const seeded = await seed({ reports: [] });
+    await openUploadPage(page, seeded);
+    const zone = page.locator('.report-paste-zone');
+
+    // `getAsFile()` 返回 null 的剪贴项（浏览器里真实存在）。分类照常回答，
+    // 于是提示仍然是「说清是什么格式」，而不是笼统的「暂不支持」。
+    await dispatchPaste(zone, { noFileItems: [{ type: 'image/webp' }] });
+    await expect(page.getByText(/暂不支持 WEBP 格式/)).toBeVisible();
+    await expect(page.locator('.ant-upload-list-item')).toHaveCount(0);
+
+    // 受理的类型却拿不到内容：不能谎报「格式不支持」。
+    await dispatchPaste(zone, { noFileItems: [{ type: 'image/png' }] });
+    await expect(page.getByText('剪贴板中没有可粘贴的图片')).toBeVisible();
+    await expect(page.getByText(/暂不支持/)).toHaveCount(0);
   });
 
   test('上传区文案与 accept 跟着服务端下发的策略', async ({ page, seed }) => {

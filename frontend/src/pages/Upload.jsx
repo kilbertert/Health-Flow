@@ -125,22 +125,25 @@ function readPastedImages(event, acceptedExtensions) {
 
   const images = [];
   let unsupported = null;
+  let unreadable = false;
   for (const candidate of candidates) {
-    if (!candidate.file) {
-      unsupported = unsupported || candidate;
-      continue;
-    }
+    // **每个候选都过分类**，包括拿不到 `File` 的那些 —— 否则 `unsupported` 会是
+    // 原始候选（没有 `extension`），提示退回笼统的「暂不支持」，这条路径上的
+    // 「说清是什么格式」就丢了（评审在 #174 指出）。
     const classified = classifyPaste(candidate, acceptedExtensions);
-    if (classified.supported) {
+    if (classified.supported && candidate.file) {
       images.push({ file: candidate.file, ...classified });
-    } else {
+    } else if (!classified.supported) {
       unsupported = unsupported || classified;
+    } else {
+      // 类型受理、内容却取不到：不谎报「格式不支持」，按「没拿到内容」处理。
+      unreadable = true;
     }
   }
 
   if (images.length > 0) return { images, status: 'ok' };
   if (unsupported) return { status: 'unsupported', unsupported };
-  if (sawPastePayload) return { status: 'empty' };
+  if (sawPastePayload || unreadable) return { status: 'empty' };
   return { status: 'unavailable' };
 }
 // 异常标记：H=偏高(红) L=偏低(橙) N=正常(绿)
