@@ -57,6 +57,15 @@ from app.service.mall_goods import fetch_goods, label_pairs_for, serialized
 from app.service.metric_effective_value import effective_value
 from app.service.metric_rows import deduplicate
 from app.service.origin_location import page_url, source_id_for
+from app.service.report_material import (
+    ACCEPTED_EXTENSIONS,
+    KIND_MEDIA_TYPE,
+    extension_of,
+    mismatch_reason,
+)
+from app.service.report_material import (
+    resolve as resolve_material,
+)
 from app.service.report_ownership import UNOWNED_SENTINEL, resolve_owner
 from app.service.report_status import transition
 from app.service.report_subject import (
@@ -72,7 +81,6 @@ from app.service.vision_encoder import ParsedReport, get_vision_encoder_service
 COMPLETED_FOR_LINK = frozenset({"confirmed", "assessed"})
 
 router = APIRouter()
-ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".gif", ".bmp"}
 logger = logging.getLogger(__name__)
 _TRANSIENT_ERROR_MARKERS = (
     "timeout",
@@ -111,19 +119,10 @@ def _authorized_report(db: Session, report_id: int, *, owner_id: str) -> ReportM
     return report
 
 
-def _media_type(filename: str) -> str:
-    return {
-        ".pdf": "application/pdf",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".png": "image/png",
-        ".gif": "image/gif",
-        ".bmp": "image/bmp",
-    }.get(Path(filename).suffix.casefold(), "application/octet-stream")
-
-
 def _page_count(filename: str, content: bytes) -> int:
-    if Path(filename).suffix.casefold() != ".pdf":
+    # 「这份材料是不是 PDF」也是类型判定，走同一个入口 —— 此前这里自己拼了一遍
+    # 后缀比较。**本票不改页数语义**（未知仍然是 1），那是同一概念的另一半。
+    if not resolve_material(filename, content).is_pdf:
         return 1
     try:
         import fitz
@@ -289,8 +288,7 @@ async def upload_report(
     accepted_files = []
     for file_index, upload_file in enumerate(upload_files, start=1):
         filename = upload_file.filename or f"report-{file_index}"
-        suffix = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-        if suffix not in ALLOWED_EXTENSIONS:
+        if extension_of(filename) not in ACCEPTED_EXTENSIONS:
             raise HTTPException(status_code=415, detail="仅支持 PDF 或常见图片格式")
         chunks: list[bytes] = []
         file_total = 0
@@ -308,7 +306,13 @@ async def upload_report(
         content = b"".join(chunks)
         if not content:
             raise HTTPException(status_code=400, detail=f"第 {file_index} 个报告文件内容为空")
-        accepted_files.append((file_index, filename, _media_type(filename), content))
+        # 类型判定从**内容**来，不再只看后缀：改名成 .pdf 的 PNG 在这里被拒绝，
+        # 而不是放行之后在查看原文时才失败。后缀在受理集合内、内容也认不出来时
+        # 以后缀为准（截断的 PDF 仍然是 PDF），不因此拒绝。
+        material = resolve_material(filename, content)
+        if material.mismatch:
+            raise HTTPException(status_code=415, detail=mismatch_reason(material))
+        accepted_files.append((file_index, filename, material.media_type, content))
 
     report = ReportModel(
         patient_id=patient_id,
@@ -988,7 +992,7 @@ async def get_report_page(
     path = Path(source.stored_path)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="报告原文文件不存在")
-    if source.media_type != "application/pdf":
+    if source.media_type != KIND_MEDIA_TYPE["pdf"]:
         if page_number != 1:
             raise HTTPException(status_code=404, detail="报告原文页不存在")
         return FileResponse(path, media_type=source.media_type)

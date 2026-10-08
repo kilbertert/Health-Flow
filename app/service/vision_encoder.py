@@ -21,6 +21,14 @@ from app.service.origin_location import (
     normalize_bbox,
     page_local_source_id,
 )
+from app.service.report_material import (
+    RENDERED_PAGE_KIND,
+    RENDERED_PAGE_MEDIA_TYPE,
+    extraction_route,
+)
+from app.service.report_material import (
+    resolve as resolve_material,
+)
 
 
 @dataclass
@@ -172,7 +180,7 @@ class VisionEncoderService:
         errors: list[str] = []
         provider_run_ids: list[str] = []
         for page_number, image_bytes in enumerate(images, start=1):
-            parsed = self._parse_image_with_vlm(image_bytes, "image/png", page_number)
+            parsed = self._parse_image_with_vlm(image_bytes, RENDERED_PAGE_MEDIA_TYPE, page_number)
             texts.append(parsed[0])
             metrics.extend(parsed[1])
             run_id = str(getattr(self.vlm_client, "last_run_id", "") or "")
@@ -236,12 +244,18 @@ class VisionEncoderService:
         )
 
     def parse(self, content: bytes, filename: str) -> ParsedReport:
-        lower = filename.lower()
-        if lower.endswith(".pdf"):
+        """按**原始材料模块给出的判定**路由，不再按文件名自己猜。
+
+        类型判定（后缀 / MIME / 内容嗅探）唯一权威在 `app/service/report_material.py`；
+        这里只消费它，不再保有自己的后缀清单或 MIME 表。
+        """
+        material = resolve_material(filename, content)
+        route = extraction_route(material)
+        if route == "pdf":
             pdf_type, _ = self.detect_pdf_type(content)
             return self.parse_text_pdf(content) if pdf_type == "text_pdf" else self.parse_scanned_pdf(content)
-        if lower.endswith((".jpg", ".jpeg", ".png", ".gif", ".bmp")):
-            return self.parse_image_report(content, self._get_mime_type(lower))
+        if route == "image":
+            return self.parse_image_report(content, material.media_type)
         return ParsedReport("unknown", "", [], 0, False, f"不支持的文件类型：{filename}")
 
     def _parse_image_with_vlm(
@@ -372,27 +386,11 @@ class VisionEncoderService:
 
             document = fitz.open(stream=pdf_bytes, filetype="pdf")
             matrix = fitz.Matrix(dpi / 72, dpi / 72)
-            images = [page.get_pixmap(matrix=matrix).tobytes("png") for page in document]
+            images = [page.get_pixmap(matrix=matrix).tobytes(RENDERED_PAGE_KIND) for page in document]
             document.close()
             return images
         except Exception:
             return []
-
-    @staticmethod
-    def _get_mime_type(filename: str) -> str:
-        return {
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".png": "image/png",
-            ".gif": "image/gif",
-            ".bmp": "image/bmp",
-        }.get(
-            next(
-                (ext for ext in (".jpg", ".jpeg", ".png", ".gif", ".bmp") if filename.endswith(ext)),
-                ".png",
-            ),
-            "image/png",
-        )
 
     def _extract_metrics_from_text(self, text: str, page_number: int = 1) -> list[MetricRecord]:
         metrics, _ = self._extract_text_page((page_number, text))

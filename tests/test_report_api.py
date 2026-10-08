@@ -187,7 +187,41 @@ def test_get_report_endpoint_not_found(client):
         assert response.status_code == 404
 
 
-def test_upload_report_rejects_total_size_limit(client):
+def test_upload_rejects_an_extension_outside_the_accepted_set(client):
+    """闸门的第一道：不受理的后缀返回 415。
+
+    这条以前**完全没有请求级测试** —— `ALLOWED_EXTENSIONS` 是模块级常量，
+    没有人从请求侧钉过它。
+    """
+    response = client.post(
+        "/api/health/report/upload",
+        data={"patient_id": "P001"},
+        files={"file": ("报告.txt", io.BytesIO(b"hello"), "text/plain")},
+    )
+
+    assert response.status_code == 415
+    assert response.json()["detail"] == "仅支持 PDF 或常见图片格式"
+
+
+def test_upload_rejects_content_that_contradicts_the_extension(client):
+    """把 PNG 改名成 .pdf：按内容判定，闸门明确拒绝，而不是放行后查看原文才失败。"""
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 24
+
+    response = client.post(
+        "/api/health/report/upload",
+        data={"patient_id": "P001"},
+        files={"file": ("报告.pdf", io.BytesIO(png), "application/pdf")},
+    )
+
+    assert response.status_code == 415
+    detail = response.json()["detail"]
+    assert "扩展名说的是 PDF" in detail
+    assert "实际是 PNG 图片" in detail
+    # 错误信息以患者提交的文件名为准，且不泄露服务端路径。
+    assert "报告.pdf" in detail or "路径" not in detail
+
+
+def test_upload_rejects_total_size_limit(client):
     settings = SimpleNamespace(
         MAX_UPLOAD_FILES=20,
         MAX_UPLOAD_BYTES=10,
