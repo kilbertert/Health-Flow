@@ -36,44 +36,141 @@ function uploadResponse(seeded, files) {
   };
 }
 
-async function dispatchPaste(locator, { files = [], textHtml = '', plainText = '' } = {}) {
+async function dispatchPaste(
+  locator,
+  { files = [], items = [], noFileItems = [], textHtml = '', plainText = '' } = {},
+) {
   await locator.evaluate((element, options) => {
     const data = new DataTransfer();
+    // `items` 与 `files` 是**两条真实路径**：items 走 `clipboardData.items`，
+    // 而浏览器在 items 路径上给的是没有文件名的 blob（`File.name` 为空串）。
+    // 桌面拖拽/复制图片通常走 files，粘贴截图通常走 items。
     for (const file of options.files) {
       const bytes = Uint8Array.from(atob(file.base64), (char) => char.charCodeAt(0));
       data.items.add(new File([bytes], file.name, { type: file.type }));
     }
+    for (const item of options.items) {
+      const bytes = Uint8Array.from(atob(item.base64), (char) => char.charCodeAt(0));
+      data.items.add(new File([bytes], item.name, { type: item.type }));
+    }
     if (options.textHtml) data.setData('text/html', options.textHtml);
     if (options.plainText) data.setData('text/plain', options.plainText);
+
+    // `noFileItems` 走一个**手写的 clipboardData**：`DataTransfer.items.add()`
+    // 只收 File，而这几条要覆盖的正是「`getAsFile()` 返回 null」的剪贴项 ——
+    // 真实存在（浏览器在拿不到内容时就是这么给的），也是分类必须照常回答的形状。
+    const clipboardData = options.noFileItems.length
+      ? {
+          items: options.noFileItems.map((item) => ({
+            kind: 'file',
+            type: item.type,
+            getAsFile: () => null,
+          })),
+          files: [],
+          getData: () => '',
+        }
+      : data;
 
     const event = document.createEvent('Event');
     event.initEvent('paste', true, true);
     try {
-      Object.defineProperty(event, 'clipboardData', { get: () => data });
+      Object.defineProperty(event, 'clipboardData', { get: () => clipboardData });
     } catch {
       // Chromium 的合成 Event 可能已有只读 clipboardData;若无此属性则无法覆盖。
     }
     element.dispatchEvent(event);
-  }, { files, textHtml, plainText });
+  }, { files, items, noFileItems, textHtml, plainText });
 }
 
 test.describe('报告图片粘贴', () => {
   test.use({ viewport: { width: 1280, height: 800 } });
 
-  test('桌面粘贴生成 MIME 对应扩展名的文件项', async ({ page, seed }) => {
+  test('桌面粘贴保留源文件名，剪贴板 blob 生成可回溯的名字', async ({ page, seed }) => {
     const seeded = await seed({ reports: [] });
     await openUploadPage(page, seeded);
     const zone = page.locator('.report-paste-zone');
 
+    // 有源文件名就**保留它** —— 词条「报告原始材料」承诺保留文件名，走粘贴与走
+    // 选择文件拿到的 `original_filename` 不能是两种语义。
     await dispatchPaste(zone, {
       files: [{ name: 'copied.png', type: 'image/png', base64: TINY_PNG_BASE64 }],
     });
-    await expect(page.getByText(/粘贴-\d+\.png/)).toBeVisible();
+    await expect(page.getByText('copied.png')).toBeVisible();
+    await expect(page.locator('.ant-upload-list-item').filter({ hasText: /copied\.png/ })).toHaveCount(1);
+
+    // 没有源文件名的（items 路径拿不到名字）才生成一个：序号 + 扩展名，可回溯。
+    await dispatchPaste(zone, {
+      items: [{ name: '', type: 'image/jpeg', base64: TINY_PNG_BASE64 }],
+    });
+    await expect(page.getByText(/粘贴-\d+-\d+\.jpg/)).toBeVisible();
+  });
+
+  test('粘贴项的扩展名跟着服务端下发的受理集合', async ({ page, seed }) => {
+    const seeded = await seed({ reports: [] });
+    // 服务端把受理集合收成只有 PNG：前端下一份 JPG 立刻不受理（判据只有一处）。
+    await page.route('**/api/health/upload-policy', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          accepted_extensions: ['.png'],
+          max_files: 20,
+          max_file_bytes: 20971520,
+          max_total_bytes: 52428800,
+        }),
+      }),
+    );
+    await openUploadPage(page, seeded);
+    const zone = page.locator('.report-paste-zone');
 
     await dispatchPaste(zone, {
       files: [{ name: 'copied.jpg', type: 'image/jpeg', base64: TINY_PNG_BASE64 }],
     });
-    await expect(page.getByText(/粘贴-\d+\.jpg/)).toBeVisible();
+    await expect(page.getByText(/暂不支持 JPG 格式/)).toBeVisible();
+    await expect(page.locator('.ant-upload-list-item')).toHaveCount(0);
+
+    await dispatchPaste(zone, {
+      files: [{ name: 'copied.png', type: 'image/png', base64: TINY_PNG_BASE64 }],
+    });
+    await expect(page.getByText('copied.png')).toBeVisible();
+  });
+
+  test('拿不到内容的剪贴项：不受理的说格式，受理的说「没有可粘贴的图片」', async ({ page, seed }) => {
+    const seeded = await seed({ reports: [] });
+    await openUploadPage(page, seeded);
+    const zone = page.locator('.report-paste-zone');
+
+    // `getAsFile()` 返回 null 的剪贴项（浏览器里真实存在）。分类照常回答，
+    // 于是提示仍然是「说清是什么格式」，而不是笼统的「暂不支持」。
+    await dispatchPaste(zone, { noFileItems: [{ type: 'image/webp' }] });
+    await expect(page.getByText(/暂不支持 WEBP 格式/)).toBeVisible();
+    await expect(page.locator('.ant-upload-list-item')).toHaveCount(0);
+
+    // 受理的类型却拿不到内容：不能谎报「格式不支持」。
+    await dispatchPaste(zone, { noFileItems: [{ type: 'image/png' }] });
+    await expect(page.getByText('剪贴板中没有可粘贴的图片')).toBeVisible();
+    await expect(page.getByText(/暂不支持/)).toHaveCount(0);
+  });
+
+  test('上传区文案与 accept 跟着服务端下发的策略', async ({ page, seed }) => {
+    const seeded = await seed({ reports: [] });
+    await page.route('**/api/health/upload-policy', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          accepted_extensions: ['.pdf', '.png'],
+          max_files: 3,
+          max_file_bytes: 1048576,
+          max_total_bytes: 52428800,
+        }),
+      }),
+    );
+    await openUploadPage(page, seeded);
+
+    // 运维者调大/调小之后不需要再发一次前端版本。
+    await expect(page.locator('.report-paste-zone input[type="file"]')).toHaveAttribute('accept', '.pdf,.png');
+    await expect(page.getByText(/最多 3 个文件，每个不超过 1MB/)).toBeVisible();
   });
 
   test('非图片剪贴物被忽略并轻提示', async ({ page, seed }) => {
@@ -94,7 +191,8 @@ test.describe('报告图片粘贴', () => {
     await dispatchPaste(zone, {
       textHtml: `<div><img src="data:image/png;base64,${TINY_PNG_BASE64}"></div>`,
     });
-    await expect(page.getByText(/粘贴-\d+\.png/)).toBeVisible();
+    // data:image **拿不到源文件名**（剪贴板里只有 base64），所以这里是生成名。
+    await expect(page.getByText(/粘贴-\d+-\d+\.png/)).toBeVisible();
   });
 
   test('webp/heic 剪贴物提示暂不支持', async ({ page, seed }) => {
@@ -107,7 +205,7 @@ test.describe('报告图片粘贴', () => {
       await dispatchPaste(zone, {
         files: [{ name: `copied.${extension}`, type, base64: TINY_PNG_BASE64 }],
       });
-      await expect(page.getByText('暂不支持').last()).toBeVisible();
+      await expect(page.getByText(`暂不支持 ${extension.toUpperCase()} 格式`)).toBeVisible();
       await expect(page.locator('.ant-upload-list-item')).toHaveCount(0);
     }
   });
@@ -126,9 +224,9 @@ test.describe('报告图片粘贴', () => {
     await dispatchPaste(page.locator('.report-paste-zone'), {
       files: [{ name: 'copied.png', type: 'image/png', base64: TINY_PNG_BASE64 }],
     });
-    const pastedItem = page.locator('.ant-upload-list-item').filter({ hasText: /粘贴-\d+\.png/ });
+    const pastedItem = page.locator('.ant-upload-list-item').filter({ hasText: /copied\.png/ });
     await expect(pastedItem).toBeVisible();
-    const pastedName = (await pastedItem.innerText()).match(/粘贴-\d+\.png/)?.[0];
+    const pastedName = (await pastedItem.innerText()).match(/copied\.png/)?.[0];
     expect(pastedName).toBeTruthy();
 
     let uploadBody;
@@ -277,6 +375,6 @@ test.describe('移动端粘贴入口', () => {
     await dispatchPaste(page.locator('.report-paste-editable'), {
       files: [{ name: 'copied.png', type: 'image/png', base64: TINY_PNG_BASE64 }],
     });
-    await expect(page.getByText(/粘贴-\d+\.png/)).toBeVisible();
+    await expect(page.getByText('copied.png')).toBeVisible();
   });
 });

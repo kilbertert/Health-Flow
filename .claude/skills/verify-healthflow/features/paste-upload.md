@@ -2,10 +2,11 @@
 
 ## Sub-features
 
-- 桌面粘贴生成 MIME 对应扩展名的文件项
+- 桌面粘贴**保留源文件名**；剪贴板 blob（无源名）生成 `粘贴-<时间戳>-<序号>.<ext>`
 - 非图片剪贴内容被忽略并轻提示
 - 识别 `text/html` 中的 `data:image` base64
-- `webp` / `heic` 剪贴物提示暂不支持
+- 不受理的格式（webp/heic 等）提示「暂不支持 X 格式（支持 …）」
+- 受理集合与上限由服务端 `/api/health/upload-policy` 下发（`accept`、`maxCount`、文案）
 - 移动端粘贴区聚焦后接收图片
 
 ## How to get to it (user POV)
@@ -21,7 +22,9 @@ event**. Asserting the filename without dispatching the event finds nothing.
 const TINY_PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC';
 
-async function dispatchPaste(locator, { files = [], textHtml = '', plainText = '' } = {}) {
+// `files` 走 `clipboardData.items` 且**带**文件名（桌面复制文件）；
+// `items` 同样走 items 但**不带**名字（粘贴截图的真实形状）。
+async function dispatchPaste(locator, { files = [], items = [], textHtml = '', plainText = '' } = {}) {
   await locator.evaluate((element, options) => {
     const data = new DataTransfer();
     for (const file of options.files) {
@@ -54,8 +57,14 @@ await dispatchPaste(zone, {
   files: [{ name: 'copied.png', type: 'image/png', base64: TINY_PNG_BASE64 }],
 });
 
-// 3. 断言的是**生成名**，不是原名 —— 粘贴项按序号重命名为 粘贴-N.<ext>
-await expect(page.getByText(/粘贴-\d+\.png/)).toBeVisible();
+// 3. **有源文件名就保留它** —— 词条「报告原始材料」承诺保留文件名。
+await expect(page.getByText('copied.png')).toBeVisible();
+
+// 没有源名（items 路径 / data:image）才生成：`粘贴-<时间戳>-<序号>.<ext>`
+await dispatchPaste(zone, {
+  items: [{ name: '', type: 'image/jpeg', base64: TINY_PNG_BASE64 }],
+});
+await expect(page.getByText(/粘贴-\d+-\d+\.jpg/)).toBeVisible();
 ```
 
 桌面用例需 `test.use({ viewport: { width: 1280, height: 800 } })`；移动端走
@@ -68,10 +77,17 @@ await expect(page.getByText(/粘贴-\d+\.png/)).toBeVisible();
 把 PNG 改名成 `.pdf` 会被明确拒绝（服务端 `app/service/report_material.py`
 按内容判定），内容与后缀相符的 PDF 照常受理。
 
+**受理集合与上限**来自服务端 `/api/health/upload-policy`（策略的单一权威是
+`app/service/upload_policy.py`）。`page.route` 改这个端点就能驱动「运维者收紧
+受理集合」「调大上限」两条真实场景 —— 本 spec 里各有一条。
+
 ## Gotchas
 
 - **粘贴是剪贴板事件，不是文件选择。** 用 `page.evaluate` 派发带 `DataTransfer` 的
   `paste` 事件，不要用 `setInputFiles`。
 - `text/html` 里嵌 `data:image` base64 是一条独立分支，容易被漏掉。
-- 不支持的格式（webp/heic）期望是**提示**而不是静默接受；断言提示文案存在。
+- 不支持的格式（webp/heic）期望是**提示**而不是静默接受；断言提示文案里带上了
+  被拒的格式名与支持列表（「暂不支持 WEBP 格式（支持 PDF / JPG / …）」）。
+- **`data:image` 那条分支的正则捕获的是子类型**（`png`，不是 `image/png`）。
+  受理判据看的是完整类型串，补前缀这一处漏了就会静默不受理。
 - 非图片剪贴内容必须被忽略，断言"没有产生任何待上传项"，而不是只看有没有报错。

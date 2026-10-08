@@ -76,6 +76,7 @@ from app.service.report_subject import (
     gate,
     initial_consistency,
 )
+from app.service.upload_policy import upload_policy
 from app.service.vision_encoder import ParsedReport, get_vision_encoder_service
 
 #: 只有这些状态的报告才谈得上加购：未完成确认/评估的报告没有可据以取货的风险。
@@ -952,6 +953,17 @@ async def report_metric_catalog():
         return await fetch_metric_catalog()
     except EvidenceBridgeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/upload-policy")
+async def report_upload_policy():
+    """受理规则（扩展名与三个上限）—— 只读，不下发任何服务端路径或解析配置。
+
+    前端据此生成 `accept` 属性、剩余份数与超出提示；调大 `MAX_UPLOAD_FILES` 之后
+    不需要再发一次前端版本。前端拿不到时回落到自己的内建默认值，不因为一次请求
+    失败挡住上传（`frontend/src/uploadPolicy.js`）。
+    """
+    return upload_policy()
 
 
 @router.get("/report/{report_id}/files/{file_index}/pages/{page_number}")
