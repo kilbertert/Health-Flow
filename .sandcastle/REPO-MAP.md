@@ -26,7 +26,7 @@ point or a stray `output/` is part of what it sees.
 
 ## Tests
 
-- tests/ — 38 test file(s, recursive)
+- tests/ — 40 test file(s, recursive)
 - frontend/e2e/ — 13 test file(s, recursive)
 - pytest (pyproject.toml / pytest.ini present)
 
@@ -90,7 +90,7 @@ app/
     medical_rag.py
     metric_effective_value.py
     metric_rows.py
-    ... (13 more)
+    ... (14 more)
   __init__.py
   config.py
   main.py
@@ -143,8 +143,10 @@ frontend/
     api.js
     App.jsx
     main.jsx
+    pasteImage.js
     reportStatus.js
     styles.css
+    uploadPolicy.js
   index.html
   package-lock.json
   package.json
