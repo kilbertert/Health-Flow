@@ -27,7 +27,7 @@ accurate at the moment it is generated and at the moment the commit lands.
 
 ## Tests
 
-- tests/ — 42 test file(s, recursive)
+- tests/ — 44 test file(s, recursive)
 - frontend/e2e/ — 14 test file(s, recursive)
 - pytest (pyproject.toml / pytest.ini present)
 
@@ -101,6 +101,8 @@ artifacts/
     20261006-frontend-deploy.md
 data/
   sft/
+deploy/
+  deploy-36.sh
 docs/
   adr/
     0001-report-interpretation-contract.md
