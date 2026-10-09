@@ -6,6 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
 from app.schema.evidence import PatientNotices
+from app.service.admission_vocabulary import AdmissionReasonLiteral
 
 
 class MetricRecord(BaseModel):
@@ -21,6 +22,18 @@ class MetricRecord(BaseModel):
     # 模型参考范围；无法判定为 None，不猜测。它是患者侧异常标记与历史摘要的唯一口径，
     # 覆盖抽取模型写下的原始 abnormal_flag。定义见 GLOSSARY.md 的「异常判定」。
     inferred_abnormal_flag: Literal["H", "L", "N"] | None = None
+    # 服务端给出的「解读准入」结论（GLOSSARY.md 的「解读准入」）：`None` 表示这一行
+    # **进入了解读**，否则是它没进去的**唯一**原因。值集与词表同源（词表在
+    # `app/service/admission_vocabulary.py`），所以患者侧不需要、也不允许自己推导 ——
+    # 此前「待核对 / 已排除」是前端从原始 `confirmation_status` 猜的，「值用不了」是
+    # 前端拿 `inferred_abnormal_flag === null` 当代理猜的，两种猜法都把不同的事实
+    # 压成同一句话。
+    #
+    # `None` 是**两件事共用的一个值**：还没跑过评估的 `pending_confirmation` 报告
+    # （没有任何结论可言）与评估过后**成功进入解读**的行。所以它只在这份逐行契约里
+    # 表示「服务端没有拦下这一行」；报告级台账由 `MedicalReportResponse.admission`
+    # 给出，两者不是同一个概念，不要互相推导。
+    admission_reason: AdmissionReasonLiteral | None = None
     bbox: list[float] | None = Field(None, min_length=4, max_length=4)
     bbox_normalized: list[float] | None = Field(None, min_length=4, max_length=4)
     source_file_index: int = Field(default=1, ge=1)
@@ -141,6 +154,28 @@ class ReportExtractionJobResponse(BaseModel):
     completed_at: datetime | None = None
 
 
+class AdmissionLedger(BaseModel):
+    """报告级的准入台账：四类相加 == 已解析行数。
+
+    它存在的理由是**逐行那个 `None` 兼了两件事**：既有「成功进入解读」，也有「这份
+    报告还没跑过评估」。前端要区分这两者才能说对的话 —— 而它不该靠「有没有评估时间」
+    之类的旁证去推断，那是同一个概念的第二处判定。
+
+    所以台账是**唯一**报告级答案：`assessed_at` 为空时它没有意义，前端据此显示「还没
+    有准入结论」，而不是硬说「全部进入了」。
+    """
+
+    included: int = 0
+    # 「判定过，在参考区间内」—— **正常**，不是「没能进入解读」。单列是为了让患者侧的
+    # 「有 N 项未进入解读」不把每一条正常指标算进去（那正是本次改动要消灭的矛盾）。
+    normal: int = 0
+    skipped: int = 0
+    unmatched: int = 0
+    not_evaluated: int = 0
+    # 四类之和。服务端算好一起送出去，省得前端再求和一次（求和规则也只有一处）。
+    total: int = 0
+
+
 class MedicalReportResponse(BaseModel):
     id: int
     patient_id: str
@@ -162,6 +197,15 @@ class MedicalReportResponse(BaseModel):
         "pending_confirmation"
     )
     subject_consistency: Literal["same", "different", "uncertain"] | None = None
+    # 报告级的准入台账（GLOSSARY.md 的「解读准入」）：每一行的结论恰好归一类，
+    # 四类相加 == 已解析行数。`included` 是**成功进入解读**的行数 —— 这是逐行的
+    # `admission_reason` 那个 `None` 独自表达不了的那一半（它还要兼表达「本报告
+    # 还没跑过评估」）。
+    #
+    # **为空表示这份报告还没有准入结论**（状态不是 `assessed`）。不用一份全 0 的
+    # 台账表达那件事：全 0 与「没有一行被拦下」在数值上一样，靠旁证去区分等于给
+    # 同一个问题留第二个答案 —— 报告状态才是那个答案的唯一来源。
+    admission: "AdmissionLedger | None" = None
     # 患者可见的健康风险提示（唯一出域的形状）。内部事实层不出域。
     #
     # 历史行存的是旧形状（含 `schema_version` / `patient_reply` / 内部层

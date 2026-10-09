@@ -297,10 +297,15 @@ def test_the_tally_covers_every_row_exactly_once():
     )
 
     assert counts.total == len(rows)
-    # 进入解读 1 / skipped 7（within_range + missing_value + invalid_value + missing_unit
-    # + missing_source_evidence + missing_source_page + missing_reference_range）/
-    # unmatched 1 / 未评估 2。
-    assert (counts.included, counts.skipped, counts.unmatched, counts.not_evaluated) == (1, 7, 1, 2)
+    # 进入解读 1 / normal 1（在参考区间内，单列 —— 它是「正常」，不是「未进入解读」）/
+    # skipped 6 / unmatched 1 / 未评估 2。
+    assert (counts.included, counts.normal, counts.skipped, counts.unmatched, counts.not_evaluated) == (
+        1,
+        1,
+        6,
+        1,
+        2,
+    )
 
 
 def test_the_tally_refuses_a_reason_outside_the_vocabulary():

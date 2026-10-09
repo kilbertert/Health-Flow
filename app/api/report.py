@@ -7,6 +7,7 @@ import hmac
 import json
 import logging
 import math
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -43,6 +44,10 @@ from app.schema.report import (
     MetricRecord,
     RecommendationResponse,
     ReportConfirmationRequest,
+)
+from app.service.admission_projection import (
+    admission_shapes,
+    has_conclusion,
 )
 from app.service.deep_link import DeepLinkError, build_deep_link
 from app.service.evidence_bridge import (
@@ -159,7 +164,15 @@ def _stored_bbox(value: object, *, upper: float | None = None) -> list[float] | 
     return clean_bbox(value, upper=upper, strict=True)
 
 
-def _metric_response(metric: MetricModel) -> MetricRecord:
+def _metric_response(metric: MetricModel, admission: str | None = None) -> MetricRecord:
+    """一个数据库行 → 逐行契约。
+
+    ``admission`` 由调用方**传进来**，不在这里现算：准入结论的来源是
+    `app/service/admission_projection.py`（唯一一处），本函数只负责把它写进契约。
+    默认 `None` 是刻意的 —— 它同时表示「进入了解读」与「这份报告还没评估」，两者的
+    区分由报告级台账承担（见 `MedicalReportResponse.admission`）。
+    """
+
     def load_json(value):
         if value is None or isinstance(value, (list, dict)):
             return value
@@ -179,6 +192,7 @@ def _metric_response(metric: MetricModel) -> MetricRecord:
         trend=metric.trend,
         abnormal_flag=metric.abnormal_flag,
         inferred_abnormal_flag=infer_abnormal_flag_for_metric(metric),
+        admission_reason=admission,
         # 历史行里可能存着退化框（零面积）。它不是可用的指针 —— 按词条
         # 「任一组件缺失时定位为空，不猜测」，读出来就是 None，而不是让
         # 整份报告打不开。
@@ -575,8 +589,11 @@ def _report_response(
     metrics: list[MetricModel],
     *,
     owned_by_account: bool = False,
+    catalog: Iterable[str] | None = None,
 ) -> MedicalReportResponse:
     extraction_job = getattr(report, "extraction_job", None)
+    assessed = has_conclusion(report.status)
+    pairs, ledger = admission_shapes(metrics, assessed=assessed, catalog=catalog)
     return MedicalReportResponse(
         id=report.id,
         patient_id=report.patient_id,
@@ -584,7 +601,8 @@ def _report_response(
         report_type=report.report_type,
         exam_date=report.exam_date,
         department=report.department,
-        metrics=[_metric_response(metric) for metric in metrics],
+        metrics=[_metric_response(metric, reason) for metric, reason in pairs],
+        admission=ledger,
         files=[
             {
                 "file_index": item.file_index,
@@ -889,7 +907,9 @@ async def _assess_report(
     db.commit()
     db.refresh(report)
     metrics = _ordered_metrics(db, report.id).all()
-    return _report_response(report, metrics, owned_by_account=owned_by_account)
+    # 把**这次评估用的**目录传下去：准入台账必须与门禁做过的裁决同一口径，否则
+    # 「确认那刻目录不可用、评估时目录恢复」的行会一边被送进匹配、一边显示「没有编码」。
+    return _report_response(report, metrics, owned_by_account=owned_by_account, catalog=catalog)
 
 
 @router.get("/report/{report_id}/recommendations", response_model=RecommendationResponse)

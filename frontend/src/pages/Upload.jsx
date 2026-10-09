@@ -1,3 +1,11 @@
+import {
+  admissionBeforeAssessment,
+  admissionGroups,
+  admissionText,
+  notableAdmission,
+  valueNotParsed,
+  valueReasonOrNull,
+} from '../admissionText';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { reportStatusColor, reportStatusLabel } from '../reportStatus.js';
 import {
@@ -171,64 +179,32 @@ function needsReview(metric) {
   return flag === 'H' || flag === 'L' || flag === '待核对';
 }
 
-// 「这个值进入解读了吗」——患者可见的一句诚实说明。
-//
-// 判据分两段，各自对应一种真实的、患者必须被告知的情况：
-//
-//   1. **服务端给了判定为空**：值为空（还没解析）、提示比较符、或多值/带符号
-//      解析不出一个数、没有参考范围。值本身就是用不了的。
-//   2. **服务端根本没给这个字段**（`undefined`，字段出现之前的响应）：退回
-//      原始标记的纯展示映射，不自行推导。
-//
-// 被患者**排除**的指标不算「用不了」——服务端对排除项也返回空判定，但那是
-// 患者自己的决定，值本身完全可解析；把它们标成「数值无法识别」是误导。
-//
-// 两个条件都落在服务端已知的事实上：判定为空（或用不了）**且** 模型宣称它异常
-// （说明这条本来会被当成异常项）。合起来正是「模型说它异常、但它没能进入解读」
-// ——#129 的场景：多值/带符号的值会被后端整行丢掉，界面必须在患者确认之前说清，
-// 而不是让它一路走到「已生成健康提示」。
-//
-// 取代了原先的 `valueIsUsable`：那个函数在本文件里又复刻了一遍后端的数值与
-// 范围解析规则（注释里写着「必须与后端 evidence_bridge._single_number 一致」）。
-export function valueUnusable(metric) {
-  // 患者排除的指标：服务端同样返回空判定，但那是患者自己的决定，值本身可解析。
-  if (metric?.confirmation_status === 'excluded') return false;
-  // 模型没宣称异常的行，从来不是这个提示的对象。
-  if (!isAbnormal(metric?.abnormal_flag)) return false;
-  if (metric?.inferred_abnormal_flag === undefined) {
-    // 字段出现之前的响应。这里**不能用 displayFlag**：它对原始异常一律返回
-    // 「待核对」（那是对的，患者需要看到异常候选），于是可解析的异常也会被
-    // 本谓词判成「用不了」——患者被挡在一个完全能确认的指标前面。
-    //
-    // 精确的回答需要后端的 `abnormal_flag_reason`，但它在回复里被 Pydantic 的
-    // 响应模型过滤掉了（响应只声明了 `inferred_abnormal_flag`）。前置审查披露
-    // 后会导致旧客户端不再被挡——本部署里前后端同进同出，不承担这个代价。
-    // 所以旧响应下本谓词只能保守返回 false：宁可少提示，不可误报（患者排除
-    // 掉那条的值往往完全可解析）。代价是 #129 的多值守卫在旧响应下不生效，
-    // 而该场景要成立需要「前端版本早于 #134」，同一部署里这不会发生。
-    return false;
-  }
-  return metric.inferred_abnormal_flag === null;
-}
-
 // 一条指标在界面上应显示的异常标记。
 //
 // 服务端算好的 `inferred_abnormal_flag` 优先 —— 它是「异常判定」的唯一口径，
 // 历史摘要的「N 项偏高/偏低」也用它，所以两处永远同口径。
 //
-// `not_decidable`（患者排除、或值还没解析出来）**刻意不回落**到原始标记：
+// 「待核对 / 已排除」这两个状态**由服务端的准入结论给出**（`admission_reason`），
+// 不再从原始 `confirmation_status` 推导：那是同一个问题在两处的第二个答案，而
+// 服务端已经有一个了。字段出现之前的响应（`undefined`）才退回原始标记做纯展示映射。
+//
+// `not_decidable` 的那两种情形刻意**不**回落：
 //   - 患者排除的指标，患者已经表态不要它参与解读，服务端也不会为它计数；
 //     这里再按原始标记显示一个红色「H」就自相矛盾了。
 //   - 值还没判定的指标，患者要在确认页上看到「待核对」，而不是一个凭解析
 //     不到的值推出来的假异常。
-// 只有在服务端**根本没有给这个字段**（字段缺失或旧响应，`undefined`）时，
-// 才退回原始标记做纯展示映射。
 export function displayFlag(metric) {
+  const admission = metric?.admission_reason;
+  if (admission === 'excluded') return 'excluded';
+  if (admission === 'pending') return '待核对';
   const inferred = metric?.inferred_abnormal_flag;
   if (inferred !== undefined && inferred !== null) return inferred;
   const raw = metric?.abnormal_flag;
   if (inferred === null) {
-    if (metric?.confirmation_status === 'excluded') return 'excluded';
+    // 评估之前：患者已经做过的表态（排除 / 尚未核对）也要如实显示，不该等到评估
+    // 之后才出现。这条**同义**映射由 `admissionText.js` 单点持有 —— 见那里的说明。
+    const preAssessment = admissionBeforeAssessment(metric);
+    if (preAssessment) return preAssessment;
     // 判不出来，但模型宣称异常 —— 交患者核对（这正是 #129 要保住的场景）。
     if (isAbnormal(raw)) return '待核对';
     // 其余判不出来的行（如模型标 N、或没有参考范围）如实显示原始标记：
@@ -240,10 +216,19 @@ export function displayFlag(metric) {
 
 function initialDecision(metric) {
   const flag = displayFlag(metric);
-  // 用不了的值**不能**默认「确认」：后端会把它连行一起丢掉，而界面却让它一路
-  // 走到「已生成健康提示」——用户从没被告知那个值没被采纳（报告 44 的三个异常项
-  // 就是这么消失的）。默认「待核对」，逼一次显式选择。
-  if (valueUnusable(metric)) return 'pending';
+  // 服务端说这一行**没能进入解读**（准入结论非空且不是「在参考区间内」）时，不能默认
+  // 「确认」：后端会把它连行一起丢掉，而界面却让它一路走到「已生成健康提示」——
+  // 用户从没被告知那个值没被采纳（报告 44 的三个异常项就是这么消失的）。默认
+  // 「待核对」，逼一次显式选择。
+  //
+  // 判据是服务端的结论，不是本地对 `inferred_abnormal_flag` 的解读：那两件事在
+  // 「参考范围缺失」上会分叉 —— 值完全正常，只是判不了，而去修正数值救不了它。
+  //
+  // 两条合起来覆盖两个时机：**评估之后**看服务端的准入结论（那时它才有值）；
+  // **评估之前**（确认页面对的就是这个状态）只能看「值解析不出一个数」这一条 ——
+  // 见 `valueNotParsed` 的说明，那是 #129 的守卫，它必须在这里、也必须只用同一个
+  // 问题的服务端名字。
+  if (notableAdmission(metric?.admission_reason) || valueNotParsed(metric)) return 'pending';
   if ((flag === 'H' || flag === 'L') && metric?.evidence_text && metric?.page_number) return 'confirmed';
   if (flag === 'H' || flag === 'L') return 'pending';
   return flag === '待核对' ? 'pending' : 'excluded';
@@ -283,9 +268,10 @@ function MetricCard({ metric, draft, metricCatalog, disabled, onUpdateDraft, onO
             {metric.effective_unit ? ` ${metric.effective_unit}` : ''}
           </span>
           {abnormalTag(displayFlag(metric))}
-          {/* 多值/带符号的行：先告诉用户「这个值用不了」，而不是等它被后端悄悄丢掉 */}
-          {valueUnusable(metric) && (
-            <Tag color="orange">数值无法识别为单个数字</Tag>
+          {/* 服务端说这一行没进解读时，如实说**它的原因**，而不是等它被后端悄悄
+              丢掉、或拿「数值无法识别」一句盖住四种不同的事实。 */}
+          {chipReason(metric) && (
+            <Tag color="orange">{admissionText(chipReason(metric))}</Tag>
           )}
         </button>
         {/* 确认页与报告单一致：定位缺失时不再是沉默的「没有按钮」——
@@ -466,7 +452,47 @@ function evidenceAlertType(hasFindings, hasUnmatched) {
 }
 
 
-function EvidenceSummaryCard({ result, onOpenSource }) {
+/** 指标旁那一枚橙色标签要说的话，或 `null`（这一行没有什么要说的）。
+ *
+ * 两个来源，都是服务端的名字：已有准入结论时用它；还没评估时（确认页）用
+ * `valueReasonOrNull` —— 那时唯一确定的事实就是「值解析不出一个数」，而它同样是
+ * `admission.parse_reference_range` / `value_reason` 那条路上的一个名字。
+ *
+ * 「在参考区间内」不在此列：它是正常。
+ */
+export function chipReason(metric) {
+  const reason = metric?.admission_reason;
+  if (reason && notableAdmission(reason)) return reason;
+  return valueReasonOrNull(metric);
+}
+
+/** 报告级台账 → 患者能读懂的分行说明。
+ *
+ * 台账是服务端算好的四类行数，所以这些话与卡片上方的摘要**同源**：摘要说「均在参考
+ * 区间内」，这里就不会同时说「N 项未进入匹配」（那是两侧口径分叉的旧症状）。
+ * 只列真正需要患者知道的两类（未进入解读、尚未核对/已排除）；`included` 不说。
+ */
+export function admissionLines(ledger) {
+  if (!ledger) return [];
+  const lines = [];
+  // `skipped` 这一桶在服务端**已经排除了**「在参考区间内」（那一桶是 `normal`），
+  // 所以这句话不会把正常指标算进去 —— 它与卡片上方的摘要同源。
+  if (ledger.skipped > 0 || ledger.unmatched > 0) {
+    lines.push({
+      key: 'not-read',
+      text: `有 ${ledger.skipped + ledger.unmatched} 项指标未进入解读，具体原因见各指标旁。`,
+    });
+  }
+  if (ledger.not_evaluated > 0) {
+    lines.push({
+      key: 'not-evaluated',
+      text: `另有 ${ledger.not_evaluated} 项尚未核对或已排除，未参与解读。`,
+    });
+  }
+  return lines;
+}
+
+function EvidenceSummaryCard({ result, admissionLedger = null, onOpenSource }) {
   if (!result) return null;
   // 服务端从 #159 起只给**一个**投影（PatientNotices）：`findings` 就是患者可见
   // 集合，`summary` / `title` / `unmatched_count` 都在顶层。前端不再 join 两个
@@ -670,10 +696,17 @@ function EvidenceSummaryCard({ result, onOpenSource }) {
           {result.disclaimer}
         </Typography.Paragraph>
       )}
-      {skipped.length > 0 && (
-        <Typography.Paragraph type="secondary" style={{ margin: '12px 0 0' }}>
-          {skipped.length} 个指标未进入匹配（正常、缺参考范围、原文证据或数值不足）。
-        </Typography.Paragraph>
+      {/* 逐条按**原因**说，不再把七个原因压成四个词、也不再把它与「正常」混在一起。
+          这里读的是报告级台账（服务端算好的四类行数），不是 `skipped` 数组的长度：
+          「尚未核对」「患者已排除」两类不在 `skipped` 里，而它们同样需要一句说明。 */}
+      {admissionLines(admissionLedger).length > 0 && (
+        <div style={{ margin: '12px 0 0' }}>
+          {admissionLines(admissionLedger).map((line) => (
+            <Typography.Paragraph key={line.key} type="secondary" style={{ margin: 0 }}>
+              {line.text}
+            </Typography.Paragraph>
+          ))}
+        </div>
       )}
     </Card>
   );
@@ -758,11 +791,11 @@ export function TechnicalDetails({ result, subjectConsistency, onSubjectConsiste
 //
 // reportId 与 assessed 由调用方传入：本组件的 result 是 evidence_result 本身，
 // 它既没有 status 也没有 id，不能从里面推断「报告是否已评估」。
-export function EvidenceResult({ result, onOpenSource, reportId = null, assessed = false }) {
+export function EvidenceResult({ result, admissionLedger = null, onOpenSource, reportId = null, assessed = false }) {
   if (!result) return null;
   return (
     <>
-      <EvidenceSummaryCard result={result} onOpenSource={onOpenSource} />
+      <EvidenceSummaryCard result={result} admissionLedger={admissionLedger} onOpenSource={onOpenSource} />
       {assessed && reportId ? <Recommendations reportId={reportId} /> : null}
     </>
   );
@@ -1067,13 +1100,19 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
     // 显式选了「确认」但值仍是多值/带符号的行：接受它就等于接受一次**静默丢弃**。
     // 后端要求恰好一个数，这种值它会连行一起丢掉（reason=invalid_value），
     // 而用户会以为已经确认过了。挡在这里，明确要求修正或排除。
+    // 这一处**不能**只看准入结论：走到这里的是确认动作，而那时报告还没评估
+    // （准入结论全是 `null`）。#129 要保住的正是这个时机 —— 患者把一个多值行显式选了
+    // 「确认」，而后端会连行丢掉。所以这里用同一条不依赖评估的判据。
     const unusable = (result.metrics || []).filter(
-      (metric) => decisionOf(metric) === 'confirmed' && valueUnusable(metric),
+      (metric) => decisionOf(metric) === 'confirmed' && valueNotParsed(metric),
     );
     if (unusable.length > 0) {
-      message.warning(
-        `有 ${unusable.length} 项的数值无法识别为单个数字（如「5.4 5.5」），无法参与匹配；请「修正」为单个数值或「排除」。`,
-      );
+      // 按**原因**分组说，不再把四种事实压成一句「数值无法识别为单个数字」——
+      // 其中「缺少参考范围」的值本身完全正常，让人去修正它是把人引向错误的动作。
+      const detail = admissionGroups(unusable)
+        .map((group) => `${group.count} 项${group.text}`)
+        .join('；');
+      message.warning(`有 ${unusable.length} 项未进入解读（${detail}）；请「修正」或「排除」。`);
       return;
     }
     setConfirming(true);
@@ -1148,8 +1187,8 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
         <Space size={4} wrap>
           {abnormalTag(displayFlag(record))}
           {/* 表形态下同样要标出来——这是桌面端默认视图 */}
-          {valueUnusable(record) && (
-            <Tag color="orange">数值无法识别为单个数字</Tag>
+          {chipReason(record) && (
+            <Tag color="orange">{admissionText(chipReason(record))}</Tag>
           )}
         </Space>
       ),
@@ -1436,6 +1475,7 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
           </Space>
           <EvidenceResult
             result={result.evidence_result}
+            admissionLedger={result.admission}
             onOpenSource={setSourceMetric}
             reportId={result.id}
             assessed={result.status === 'assessed'}

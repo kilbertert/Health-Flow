@@ -73,11 +73,24 @@ UNMATCHED_REASONS: frozenset[str] = frozenset(UNMATCHED_REASONS_ORDERED)
 
 # 三桶都看不到的那两类（`pending` / `excluded`）现在有名字了；它们不出现在
 # `skipped` / `unmatched` 里，而是随指标行逐条出域（见 PRD #176 的第二张票）。
-NOT_EVALUATED_REASONS: frozenset[str] = frozenset({"pending", "excluded"})
+NOT_EVALUATED_ORDERED: tuple[str, ...] = ("pending", "excluded")
+NOT_EVALUATED_REASONS: frozenset[str] = frozenset(NOT_EVALUATED_ORDERED)
 
 
 # 参与解读的确认状态：证据门禁的入口守卫与判定守卫必须同为这两个。
 ADMITTED_STATUSES: frozenset[str] = frozenset({"confirmed", "corrected"})
+
+
+# 出域契约用的 `Literal`。`MedicalReportResponse` 的逐行准入结论与报告级台账都从
+# 它派生 —— 与 `Skipped` / `Unmatched` 同一个做法：值集恒等靠**派生**，不靠两处抄写。
+# `Literal[*X]` 是 Python 3.11+ 的写法；CI 与部署都钉在 3.13。
+AdmissionReasonLiteral = Literal[*SKIPPED_REASONS_ORDERED, *UNMATCHED_REASONS_ORDERED, *NOT_EVALUATED_ORDERED]
+
+# 这些原因是「判定过，在参考区间内」—— **正常**，不是「没能进入解读」。它们必须从
+# 「未进入解读」那类说法里排除，否则每一份报告都会说「有 N 项未进入解读」而 N 里
+# 大半是正常指标，与同一张卡片上方的摘要直接矛盾。
+NORMAL_REASONS_ORDERED: tuple[str, ...] = ("within_reference_range",)
+NORMAL_REASONS: frozenset[str] = frozenset(NORMAL_REASONS_ORDERED)
 
 
 def vocabulary() -> frozenset[str]:
