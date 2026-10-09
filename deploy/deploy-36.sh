@@ -237,10 +237,14 @@ MARKER="$APP_ROOT/deployed-revision"
 # Two structural decisions, both from failures that were actually hit in AI-Ops'
 # sibling script:
 #
-#   * **Every mutating step accumulates a status instead of exiting.** The remote
-#     block runs under `set -e`; if any one step exits early, control never reaches
-#     the self-check or the rollback, and production is left half-updated with the
-#     local side reporting "state unknown".
+#   * **Every mutating step accumulates a status instead of exiting, and the block
+#     therefore runs under `set -u` but NOT `set -e`.** If a mutating step could exit
+#     early, control would never reach the self-check or the rollback, and production
+#     would be left half-updated with the local side reporting "state unknown". `set
+#     -e` is omitted for that reason — which also means **a step's failure has to be
+#     recorded explicitly**, because nothing will stop for it. That is what
+#     `step_failed` is for, and a command added without it is a command whose failure
+#     is silently ignored.
 #   * **`systemctl restart` returning 0 does not mean the service came up** — it
 #     forks and returns. The real judgement is the self-check below.
 # NOTE: this block's comments carry no backticks on purpose. Bash still runs command
@@ -271,9 +275,25 @@ mutate_rc=0
 step_failed() { echo "mutate-failed=\$1"; mutate_rc=1; }
 
 # ---- 回滚点先于写入 ----
+#
+# **Can't build a rollback point ⇒ don't write.** That is the whole rule, and it is why
+# the missing-frontend case is a refusal rather than a proceed. The earlier shape had
+# `if [ -d frontend ]` around the backup and then swapped a directory in regardless —
+# so a host with no frontend deployed, failed its self-check, and entered recovery with
+# no backup, where the only thing it could do was leave an **empty** directory behind.
+# The failure mode was worse than not deploying, and the log said only
+# "no-backup-available", which reads as "roll back by hand" while pointing at nothing.
+#
+# A permission/disk failure on the tar is a different thing: a partial archive is not a
+# rollback point, so it is removed rather than left to be mistaken for one.
 mkdir -p "$BACKUP_DIR" || step_failed "backup-mkdir"
 if [ -d "$APP_ROOT/frontend" ]; then
-  tar czf "\$BACKUP" -C "$APP_ROOT/frontend" . || step_failed "backup-frontend"
+  tar czf "\$BACKUP" -C "$APP_ROOT/frontend" . 2>/dev/null \
+    || { rm -f "\$BACKUP"; step_failed "backup-frontend"; }
+elif [ -e "$APP_ROOT/frontend" ]; then
+  step_failed "frontend-is-not-a-directory"
+else
+  step_failed "no-frontend-to-back-up"
 fi
 echo "backup=\$BACKUP"
 
@@ -312,12 +332,19 @@ fi
 # interpreter used to build it here does not matter for compatibility.
 # '--no-deps' is deliberate: dependencies change only with pyproject/uv.lock, and
 # resolving them silently during a code deploy would turn a small change into an
-# unbounded one. 'pip check' afterwards catches the case where that assumption
-# stopped holding.
+# unbounded one.
+#
+# 'pip check' is what makes that assumption **checkable** rather than merely stated.
+# Without it a commit that adds a runtime dependency installs cleanly, the self-check
+# can still pass (whenever the new code path is not on `/ready`), and the missing
+# package surfaces as a production 500 in the new feature. It is a real gate here and
+# not a formality: it exits nonzero the moment the venv and the wheel disagree.
 if [ "\$mutate_rc" = "0" ]; then
   runuser -u health-flow -- "$APP_ROOT/.venv/bin/pip" install \
       --quiet --no-deps --force-reinstall "$STAGE_DIR/$(basename "$WHEEL")" \
     || step_failed "pip-install"
+  runuser -u health-flow -- "$APP_ROOT/.venv/bin/pip" check \
+    || step_failed "pip-check"
   chown -R health-flow:health-flow "$STAGE_DIR" || step_failed "chown-stage"
 fi
 
@@ -402,16 +429,50 @@ echo "ready-status=\$(ready_field status)"
 echo "report_provider=\$(ready_field report_provider)"
 echo "account_auth=\$(ready_field account_auth)"
 echo "live-asset-sha=\$(live_asset_sha)"
-if [ -f "\$BACKUP" ]; then
-  rm -rf "$APP_ROOT/frontend" && mkdir -p "$APP_ROOT/frontend" \
-    && tar xzf "\$BACKUP" -C "$APP_ROOT/frontend" \
-    && chown -R health-flow:health-flow "$APP_ROOT/frontend" \
-    && echo "restored=frontend-from-\$BACKUP" || echo "restore=failed"
-else
+# Restore to a temp directory and swap it in, rather than `rm -rf` then extract. The
+# `rm -rf first` shape has no recovery if the extract fails: the live frontend is already
+# gone and the replacement is half-written. Building beside the target and moving keeps
+# the running tree in place until there is something to move onto it — the same shape as
+# the forward path's directory swap, for the same reason.
+#
+# `frontend.broken` is deliberately kept: it is what was live when the self-check failed,
+# which is the first thing anyone investigating wants. Each rollback overwrites the
+# previous one, so it cannot accumulate.
+restore_ok=0
+if [ ! -f "\$BACKUP" ]; then
   echo "restore=no-backup-available"
+  echo "note=备份不存在，前端**未被替换**；先把备份修好再谈回滚" >&2
+elif ( tar tzf "\$BACKUP" >/dev/null 2>&1 ); then
+  rm -rf "$APP_ROOT/frontend.restore" \
+    && mkdir -p "$APP_ROOT/frontend.restore" \
+    && tar xzf "\$BACKUP" -C "$APP_ROOT/frontend.restore" \
+    && chown -R health-flow:health-flow "$APP_ROOT/frontend.restore" \
+    && rm -rf "$APP_ROOT/frontend.broken" \
+    && mv "$APP_ROOT/frontend" "$APP_ROOT/frontend.broken" \
+    && mv "$APP_ROOT/frontend.restore" "$APP_ROOT/frontend" \
+    && restore_ok=1
+else
+  echo "restore=backup-unreadable" >&2
 fi
-if [ -n "\$prev" ]; then printf '%s\n' "\$prev" > "$MARKER"; chown health-flow:health-flow "$MARKER"; fi
-if systemctl restart "$SERVICE"; then :; fi
+
+if [ "\$restore_ok" = "1" ]; then
+  # The marker is restored to what was live **before** this deploy — and that includes
+  # the case where nothing was: an absent marker must come back absent. Writing the
+  # target sha there instead would make the next run read `prev == TARGET_SHA`, print
+  # `state=no-change`, and skip the retry entirely — pinning a revision that failed its
+  # self-check as the live one, with CI green on every subsequent merge. That is the
+  # exact failure this idempotence block exists to prevent, inverted.
+  if [ -n "\$prev" ]; then
+    printf '%s\n' "\$prev" > "$MARKER"
+    chown health-flow:health-flow "$MARKER"
+    echo "marker-restored=\$prev"
+  else
+    rm -f "$MARKER"
+    echo "marker-restored=(none)"
+  fi
+  if systemctl restart "$SERVICE"; then :; else echo "rollback-restart-rc=nonzero"; fi
+fi
+echo "restore=\$([ "\$restore_ok" = "1" ] && echo ok || echo failed)"
 exit 1
 EOF
 

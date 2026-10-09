@@ -54,13 +54,23 @@ def test_no_force_push_and_no_commit_selector() -> None:
 
 
 def test_paths_filter_excludes_everything() -> None:
+    raw = WORKFLOW.read_text(encoding="utf-8")
     body = _stripped()
     assert re.search(r"^    paths:", body, re.MULTILINE), "触发集合必须是白名单"
     paths = body.split("    paths:", 1)[1].split("\n    #", 1)[0]
-    assert '"**"' not in paths, "不要用 `**`：纯文档合并不该重启生产"
+    # 「全都是」的两种写法都要挡住。`**` 的裸条目会被 YAML 当作别名，所以真正可能写出来
+    # 的是带引号的 `"**"`；不剥注释地扫原文，顺带把 YAML 里 `- **` 这种写法也覆盖上。
+    assert not re.search(r'^\s+- ("\*\*"|\*\*)$', raw, re.MULTILINE), (
+        "不要用 `**`：纯文档合并不该重启生产"
+    )
     # 部署时真的会执行的文件必须在触发集合里，否则「改了它却不部署」而且没有信号。
     for required in ("deploy/deploy-36.sh", "app/**", "pyproject.toml", "uv.lock"):
         assert f'"{required}"' in paths, f"触发集合漏了 {required}"
+    # 反向：unit 文件不在集合里，因为部署脚本不装 unit（它只报告绑定漂移）。
+    # 列上它会产生一次「重装了同一份代码、unit 却没变」的部署 —— 正是本节的坑。
+    assert "systemd" not in paths, (
+        "unit 文件不该在触发集合里：deploy-36.sh 不安装 unit，列上它只会产出一个假信号"
+    )
 
 
 def test_environment_exists_without_a_self_approval_step() -> None:

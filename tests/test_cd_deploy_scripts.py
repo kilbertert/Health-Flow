@@ -304,6 +304,44 @@ def host(scratch):
         h.stop()
 
 
+# ── 静态守卫：远端块里每一个在生成期展开的变量都得先被赋值 ──────────────────
+
+
+def test_every_generation_time_variable_in_the_remote_block_is_assigned_first() -> None:
+    """远端块里**未转义**的 `$VAR` 在生成期展开 —— 它们必须先有值。
+
+    这正是本文件里连续踩到两次的那一类：先是散文里的反引号被当成命令替换（`bash -n`
+    一个字都不报），后是新写的 `$BACKUP` 没加反斜杠，于是生成期直接
+    `BACKUP: unbound variable`。两次都只在**真的跑一遍**时才现形。
+
+    这条守卫是静态的：不构建、不碰主机，所以它也能在 CI 里跑。转义的 `\\$VAR` 是
+    远端期变量，由块自己定义，不在这里的射程内。
+    """
+    source = SCRIPT.read_text(encoding="utf-8")
+    lines = source.splitlines()
+    start = next(i for i, line in enumerate(lines) if "REMOTE_CMD <<EOF" in line)
+    end = next(i for i in range(start + 1, len(lines)) if lines[i].rstrip() == "EOF")
+
+    # 生成期引用 = 单个 `$VAR` / `${VAR}`（前面不是反斜杠）。
+    pattern = re.compile(r"(?<!\\)\$\{?([A-Z_][A-Z0-9_]*)")
+    referenced = {
+        name
+        for line in lines[start + 1 : end]
+        for name in pattern.findall(line)
+    }
+    assert referenced, "远端块里一个变量都没有，说明这条守卫的解析坏了"
+
+    preamble = "\n".join(lines[:start])
+    assigned = set(re.findall(r"^([A-Z_][A-Z0-9_]*)=", preamble, re.MULTILINE))
+    # 环境变量也是合法的来源（`PATH`、`HOME` 之类由调用者提供）。
+    provided = {"PATH", "HOME", "PWD", "LANG", "LC_ALL", "TMPDIR", "SHELL", "USER"}
+    missing = referenced - assigned - provided
+    assert not missing, (
+        f"远端块在生成期引用了未赋值的变量：{sorted(missing)}。"
+        "它们在 `set -u` 下会让脚本直接以『unbound variable』退出 —— 而 `bash -n` 不会报。"
+    )
+
+
 # ── 用法与参数校验（不碰主机、不需要构建） ──────────────────────────────────
 
 
@@ -358,8 +396,10 @@ def test_environment_fault_is_not_reported_as_a_deployment_failure() -> None:
 def test_no_change_when_the_marker_already_names_the_target(host: _FakeHost) -> None:
     """标记 == 目标 → 成功退出、**不重启**、不动任何东西。
 
-    不重启是重点：一个「看似幂等」的分支如果仍然重启生产，那么每次重跑都会造成一次
-    没有必要的停机，而那是本分支存在的全部理由。
+    三件事一起断言，因为「幂等」不等于「退出码 0」：一个仍然重启、或仍然改写目录的分支
+    会让每次重跑都造成一次没有必要的停机，而那是本分支存在的全部理由。前两条（盘上仍是
+    旧构建、没有 `frontend.old`）已经足以钉住「没有重启」——被重启的那个分支会走完整条
+    部署路径并留下这两样痕迹，所以这里不额外数 systemctl 调用；一条永远为真的断言不是守卫。
     """
     host.seed_deployed(TARGET_SHA, frontend_files={"assets/index-OLD.js": "still here"})
     parsed = host.stage()
@@ -368,9 +408,9 @@ def test_no_change_when_the_marker_already_names_the_target(host: _FakeHost) -> 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "state=no-change" in result.stdout
     assert f"revision={TARGET_SHA}" in result.stdout
-    assert not host.systemctl_log.exists() or "restart" not in host.systemctl_log.read_text()
     assert (host.root / "frontend" / "assets" / "index-OLD.js").read_text() == "still here"
     assert not (host.root / "frontend.old").exists()
+    assert not (host.root / "frontend.new").exists()
 
 
 @needs_topology
@@ -431,10 +471,67 @@ def test_selfcheck_failure_restores_the_previous_frontend(host: _FakeHost) -> No
 
     assert result.returncode == 1
     assert "selfcheck=failed" in result.stdout
-    assert "restored=frontend-from-" in result.stdout
+    assert "restore=ok" in result.stdout, result.stdout
+    assert "no-backup-available" not in result.stdout
     assert (host.root / "frontend" / "assets" / "index-OLD.js").read_text() == "old build"
     # 恢复也应该把修订标记还原成上一个值。
     assert (host.root / "deployed-revision").read_text().strip() == "a" * 40
+    # 失败的那一份被留下而不是删掉 —— 它是排查时第一个要看的东西。
+    assert (host.root / "frontend.broken").is_dir()
+
+
+@needs_topology
+def test_a_host_with_no_frontend_is_refused_not_half_deployed(host: _FakeHost) -> None:
+    """没有前端可备份 → **拒绝部署**，而不是「换上去再失败」。
+
+    这条是一个真实缺陷的回归：早先的写法用 `if [ -d frontend ]` 包住备份，却仍然照做
+    目录替换 —— 于是「主机本来没有 `frontend/`」这条路上，部署会先换上一个新目录、
+    自检失败、进恢复分支时**没有备份**，而恢复分支唯一能做的就是把一个**空目录**留在
+    那里。那比不部署更糟，日志还只说 "no-backup-available"，读起来像「请手工回滚」，
+    却什么都指不出来。
+
+    现在的规则是：**建不出回滚点就不写**。断言三件事 —— 拒绝（退出码 1）、没有写入
+    （主机上仍然没有 `frontend/`）、没有留下标记（下一次运行依然会尝试）。
+    """
+    assert not (host.root / "frontend").exists()
+    parsed = host.stage()
+    host.serve(ready=READY_DEGRADED)
+
+    result = host.run_remote(parsed["block"])
+
+    assert result.returncode == 1
+    assert "mutate-failed=no-frontend-to-back-up" in result.stdout, result.stdout
+    assert not (host.root / "frontend").exists(), "拒绝之后不该有任何写入"
+    assert not (host.root / "deployed-revision").exists(), (
+        "拒绝之后不该留下标记，否则下一次运行会读成 state=no-change 而永不重试"
+    )
+
+
+@needs_topology
+def test_rollback_removes_a_marker_that_did_not_exist_before(host: _FakeHost) -> None:
+    """回滚要把标记还原成**部署之前的样子**，包括「之前没有标记」。
+
+    这是本组里最要紧的一条，因为它防的是一种**看起来全绿**的故障：部署失败后若把
+    目标的 sha 写进标记，下一次运行读到 `prev == TARGET_SHA` 就打印 `state=no-change`
+    并成功退出 —— **一个自检没过、已被回滚的修订被钉成「线上就是它」**，之后每次合并
+    都报绿。这正是幂等分支要防的那件事，反过来发生。
+
+    这里让自检失败的方式是 /ready 报 degraded：前端那条判据由别的用例覆盖，把失败来源
+    分开才能说清是「哪条判据拦住的」。
+    """
+    host.seed_deployed("a" * 40, frontend_files={"assets/index-OLD.js": "old build"})
+    # 有前端、但没有标记 —— 部署会走完流程，然后必须把「没有标记」还回来。
+    (host.root / "deployed-revision").unlink()
+    parsed = host.stage()
+    host.serve(ready=READY_DEGRADED)
+
+    result = host.run_remote(parsed["block"])
+
+    assert result.returncode == 1
+    assert "marker-restored=(none)" in result.stdout, result.stdout
+    assert not (host.root / "deployed-revision").exists(), (
+        "回滚后的标记必须是「没有」，否则下一次运行会把它当成「线上就是它」而跳过重试"
+    )
 
 
 @needs_topology

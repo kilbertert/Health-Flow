@@ -43,7 +43,12 @@ on:
       - "pyproject.toml"
       - "uv.lock"
       - "deploy/deploy-36.sh"
-      - "ops/service-host/systemd/**"
+      # Note what is deliberately absent: `ops/service-host/systemd/**`. A unit change
+      # fires nothing, because `deploy-36.sh` does not install units — it reports the
+      # binding drift and stops there (see the drift note in that script). Listing the
+      # glob would produce a full deploy that reinstalls the same code and applies no
+      # unit change: "changed it but it never deployed", which is the trap this list
+      # exists to avoid. Installing the units is its own change with its own decision.
       - ".github/workflows/cd.yml"
   # Manual dispatch is only for re-running the current `main` (for instance after a
   # failed deployment). There is deliberately **no input for choosing a commit**: an
