@@ -5,6 +5,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+# 词表**派生自**「解读准入」的那一份，不是这里手写的第二份（GLOSSARY.md 的
+# 「解读准入」）。`Literal[*SUBSET]` 让值集与那边恒等：改词表只改一处。
+from app.service.admission_vocabulary import SKIPPED_REASONS_ORDERED, UNMATCHED_REASONS_ORDERED
+
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -138,7 +142,7 @@ class Unmatched(StrictModel):
     metric_label: str
     condition_codes: list[str]
     condition_names: list[str] = Field(default_factory=list)
-    reason: Literal["no_published_knowledge_card", "unknown_metric_code"]
+    reason: Literal[*UNMATCHED_REASONS_ORDERED]
     source_observation: SourceObservation | None = None
 
     @model_validator(mode="after")
@@ -150,15 +154,10 @@ class Unmatched(StrictModel):
 
 class Skipped(StrictModel):
     observation_id: str
-    reason: Literal[
-        "missing_reference_range",
-        "within_reference_range",
-        "missing_source_evidence",
-        "missing_source_page",
-        "missing_unit",
-        "invalid_value",
-        "unknown_metric_code",
-    ]
+    # 同样派生。此前这个 Literal 自己声明了七个名字，其中 `unknown_metric_code`
+    # **从不产生**（它是 `Unmatched` 的名字），而兄弟函数产生的 `missing_value`
+    # 又**不在**这里 —— 两个漂移点都是「词表没有家」的物证，现在由派生的值集消灭。
+    reason: Literal[*SKIPPED_REASONS_ORDERED]
 
 
 class PatientFinding(StrictModel):

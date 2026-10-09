@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import re
 import unicodedata
 import uuid
@@ -14,6 +13,15 @@ from pydantic import TypeAdapter, ValidationError
 
 from app.config import Settings, get_settings
 from app.schema.evidence import EvidenceMatchResponse, MetricCatalogItem
+from app.service.admission import (
+    ADMITTED_STATUSES,
+    SKIPPED_REASONS,
+    admission_reason,
+    infer_abnormal_flag,
+    parse_reference_range,
+    single_number,
+    value_level_reason,
+)
 from app.service.metric_effective_value import effective_value
 from app.service.origin_location import clean_bbox, page_url
 
@@ -64,11 +72,9 @@ METRIC_ALIASES = {
     "谷草转氨酶": "ast",
     "血钙": "calcium",
 }
+# 名称归一化用的括号剥离。**不是**参考范围解析的那一个 —— 参考范围的括号由
+# `admission.parse_reference_range` 的正则自己处理，这里剥的是指标名里的括注。
 _PARENTHETICAL_RE = re.compile(r"[（(][^）)]*[）)]")
-_NUMBER_RE = re.compile(r"(?<![\d.])-?\d+(?:\.\d+)?(?![\d.])")
-_RANGE_RE = re.compile(r"(?P<low>-?\d+(?:\.\d+)?)\s*(?:-|~|至|到)\s*(?P<high>-?\d+(?:\.\d+)?)")
-_UPPER_RE = re.compile(r"(?:<|<=|≤)\s*(?P<high>-?\d+(?:\.\d+)?)")
-_LOWER_RE = re.compile(r"(?:>|>=|≥)\s*(?P<low>-?\d+(?:\.\d+)?)")
 
 
 class EvidenceBridgeError(RuntimeError):
@@ -133,6 +139,64 @@ def metric_code_for_name(name: str) -> str | None:
     return resolve_metric_code(name, None)
 
 
+def _observation_payload(metric: Any, *, code: str, effective: Any) -> dict[str, object]:
+    """跨证据边界的观察载荷。**只有准入结论为「进入解读」时才会被调用** ——
+    所以这里可以放心地假定值、单位、原文证据、页码都已齐备。"""
+    reference_low, reference_high = parse_reference_range(effective.reference_range)
+    return {
+        "observation_id": f"health-flow-metric-{metric.id}",
+        "confirmation_status": "confirmed",
+        "metric_code": code,
+        "value": single_number(effective.value),
+        "unit": effective.unit,
+        "reference_low": reference_low,
+        "reference_high": reference_high,
+        "evidence_text": effective.evidence_text,
+        "source_file_index": metric.source_file_index,
+        "source_page": metric.page_number,
+        "source_id": metric.source_id,
+        "source_url": page_url(metric.report_id, metric.source_file_index, metric.page_number),
+        "bbox": _coordinates_for_boundary(getattr(metric, "bbox", None)),
+        "bbox_normalized": _coordinates_for_boundary(getattr(metric, "bbox_normalized", None)),
+    }
+
+
+def _unmatched_payload(metric: Any, *, effective: Any) -> dict[str, object]:
+    """`unknown_metric_code` 的行：值判得出来、也没有可匹配的编码。
+
+    它的 `source_observation` 是承载「患者要看的是哪一行」与定位的那些字段 —— 所以
+    这里与 `_observation_payload` 用同一份输入（`effective_value`），不是各取一套。
+    """
+    reference_low, reference_high = parse_reference_range(effective.reference_range)
+    value = single_number(effective.value)
+    observation_id = f"health-flow-metric-{metric.id}"
+    source_observation = {
+        "observation_id": observation_id,
+        "metric_code": None,
+        "metric_label": metric.metric_name or "未命名指标",
+        "value": value,
+        "unit": effective.unit,
+        "reference_low": reference_low,
+        "reference_high": reference_high,
+        "evidence_text": effective.evidence_text,
+        "source_file_index": metric.source_file_index,
+        "source_page": metric.page_number,
+        "source_id": metric.source_id,
+        # 定位 URL 只有一个 builder；守卫统一为「report_id 与 page_number 都在才拼」。
+        "source_url": page_url(metric.report_id, metric.source_file_index, metric.page_number),
+        "bbox": _coordinates_for_boundary(getattr(metric, "bbox", None)),
+        "bbox_normalized": _coordinates_for_boundary(getattr(metric, "bbox_normalized", None)),
+    }
+    return {
+        "observation_id": observation_id,
+        "metric_code": None,
+        "metric_label": metric.metric_name or "未命名指标",
+        "condition_codes": [],
+        "reason": "unknown_metric_code",
+        "source_observation": source_observation,
+    }
+
+
 def build_observations_with_unmatched(
     metrics: Iterable[Any],
     catalog: Iterable[str] | None = None,
@@ -141,148 +205,42 @@ def build_observations_with_unmatched(
     list[dict[str, object]],
     list[dict[str, object]],
 ]:
-    """Separate safe evidence observations from abnormal unmapped rows."""
+    """把已核对的行分成「跨证据边界」与「没跨过去，及为什么」。
+
+    准入结论由 `admission.admission_reason` **单点**给出 —— 本函数不再自己拼原因串。
+    此前它在这里用一段三元表达式与八处 `skipped.append` 各自写下名字，于是「空值」
+    在这一侧是 `invalid_value`、在判定守卫那一侧是 `missing_value`：同一个事实两个
+    名字。现在两侧调的是同一个函数，分叉不可能再出现。
+
+    三桶的**划分**没变（那不在本票射程内），变的是每条原因从哪来 —— 以及
+    `Skipped` 的词表不再是这里手写的第二个来源。
+    """
     observations: list[dict[str, object]] = []
     skipped: list[dict[str, object]] = []
     unmatched: list[dict[str, object]] = []
     for metric in metrics:
-        if metric.confirmation_status not in {"confirmed", "corrected"}:
+        status = getattr(metric, "confirmation_status", None) or "pending"
+        if status not in ADMITTED_STATUSES:
+            # 尚未核对、患者已排除：本票给它们准入结论，但它们不进跨证据边界的
+            # 载荷、也不进 skipped / unmatched 两个数组（分桶不动）。结论随指标行
+            # 逐条出域，是下一票的事。
             continue
         effective = effective_value(metric)
-        value_text = effective.value
-        unit = effective.unit
-        # 优先消费确认时落定的编码。落定为空时（确认那刻目录不可用，或该编码
-        # 当时不在目录里）**用权威目录重新裁决一次** —— 但只在目录**可用**时。
-        # 目录不可用时保持 unmatched：没有目录就没有验证，宁可不匹配也不猜。
-        # 这条正是旧代码的反面 —— 旧代码在目录不可用时用本地别名快照复活。
+        # 优先消费确认时落定的编码。落定为空时（确认那刻目录不可用，或该编码当时
+        # 不在目录里）**用权威目录重新裁决一次** —— 但只在目录**可用**时。目录不可
+        # 用时保持 unmatched：没有目录就没有验证，宁可不匹配也不猜。
         code = metric.metric_code
         if not code and catalog is not None:
             code = resolve_metric_code(metric.metric_name or "", catalog)
-        evidence = effective.evidence_text
-        if not unit or not evidence or metric.page_number is None:
-            reason = (
-                "missing_unit" if not unit else "missing_source_evidence" if not evidence else "missing_source_page"
-            )
-            skipped.append(
-                {
-                    "observation_id": f"health-flow-metric-{metric.id}",
-                    "reason": reason,
-                }
-            )
-            continue
-        if any(marker in str(value_text or "") for marker in ("<", ">", "≤", "≥")):
-            skipped.append(
-                {
-                    "observation_id": f"health-flow-metric-{metric.id}",
-                    "reason": "invalid_value",
-                }
-            )
-            continue
-        value = _single_number(value_text)
-        if value is None:
-            skipped.append(
-                {
-                    "observation_id": f"health-flow-metric-{metric.id}",
-                    "reason": "invalid_value",
-                }
-            )
-            continue
-        if not _evidence_contains_value(evidence, value):
-            skipped.append(
-                {
-                    "observation_id": f"health-flow-metric-{metric.id}",
-                    "reason": "missing_source_evidence",
-                }
-            )
-            continue
-        reference = effective.reference_range
-        reference_low, reference_high = parse_reference_range(reference)
-        if reference_low is None and reference_high is None:
-            skipped.append(
-                {
-                    "observation_id": f"health-flow-metric-{metric.id}",
-                    "reason": "missing_reference_range",
-                }
-            )
-            continue
-        if reference_low is not None and not _evidence_contains_value(evidence, reference_low):
-            skipped.append(
-                {
-                    "observation_id": f"health-flow-metric-{metric.id}",
-                    "reason": "missing_source_evidence",
-                }
-            )
-            continue
-        if reference_high is not None and not _evidence_contains_value(evidence, reference_high):
-            skipped.append(
-                {
-                    "observation_id": f"health-flow-metric-{metric.id}",
-                    "reason": "missing_source_evidence",
-                }
-            )
-            continue
-        flag = infer_abnormal_flag(str(value), reference)
-        # 判成 N 就是「在参考范围内」；无法判定时 infer_abnormal_flag 返回 None，
-        # 不在这里跳过 —— 上面的检查已按具体原因（invalid_value / missing_reference_range）
-        # 各自给出过理由，走到这里说明判定是可判定的。
-        if flag == "N":
-            skipped.append(
-                {
-                    "observation_id": f"health-flow-metric-{metric.id}",
-                    "reason": "within_reference_range",
-                }
-            )
-            continue
-        if not code:
-            bbox = _coordinates_for_boundary(getattr(metric, "bbox", None))
-            bbox_normalized = _coordinates_for_boundary(getattr(metric, "bbox_normalized", None))
-            source_observation = {
-                "observation_id": f"health-flow-metric-{metric.id}",
-                "metric_code": None,
-                "metric_label": metric.metric_name or "未命名指标",
-                "value": value,
-                "unit": unit,
-                "reference_low": reference_low,
-                "reference_high": reference_high,
-                "evidence_text": evidence,
-                "source_file_index": metric.source_file_index,
-                "source_page": metric.page_number,
-                "source_id": metric.source_id,
-                # 定位 URL 只有一个 builder；守卫统一为「report_id 与 page_number
-                # 都在才拼」（此前这一处只守卫 report_id）。
-                "source_url": page_url(metric.report_id, metric.source_file_index, metric.page_number),
-                "bbox": bbox,
-                "bbox_normalized": bbox_normalized,
-            }
-            unmatched.append(
-                {
-                    "observation_id": source_observation["observation_id"],
-                    "metric_code": None,
-                    "metric_label": metric.metric_name or "未命名指标",
-                    "condition_codes": [],
-                    "reason": "unknown_metric_code",
-                    "source_observation": source_observation,
-                }
-            )
-            continue
-        observations.append(
-            {
-                "observation_id": f"health-flow-metric-{metric.id}",
-                "confirmation_status": "confirmed",
-                "metric_code": code,
-                "value": value,
-                "unit": unit,
-                "reference_low": reference_low,
-                "reference_high": reference_high,
-                "evidence_text": evidence,
-                "source_file_index": metric.source_file_index,
-                "source_page": metric.page_number,
-                "source_id": metric.source_id,
-                "source_url": page_url(metric.report_id, metric.source_file_index, metric.page_number),
-                "bbox": _coordinates_for_boundary(getattr(metric, "bbox", None)),
-                "bbox_normalized": _coordinates_for_boundary(getattr(metric, "bbox_normalized", None)),
-            }
-        )
+        reason = admission_reason(metric, code=code)
+        if reason is None:
+            observations.append(_observation_payload(metric, code=code, effective=effective))
+        elif reason == "unknown_metric_code":
+            unmatched.append(_unmatched_payload(metric, effective=effective))
+        elif reason in SKIPPED_REASONS:
+            skipped.append({"observation_id": f"health-flow-metric-{metric.id}", "reason": reason})
+        else:  # pragma: no cover - 词表漂移由 test_admission 的守卫逮住
+            raise ValueError(f"准入结论没有对应的桶：{reason!r}")
     return observations, skipped, unmatched
 
 
@@ -363,24 +321,17 @@ def _decidable(metric: Any) -> bool:
 def abnormal_flag_reason(metric: Any) -> str | None:
     """判定不可判定时给出原因，可判定时返回 ``None``。
 
-    原因词汇与证据门禁的 skipped reason 同源（``missing_value`` / ``invalid_value`` /
-    ``missing_reference_range`` 见 ``build_observations_with_unmatched``），所以
-    「响应里判成 N」与「门禁给出的跳过理由」说的是同一件事。
+    原因词汇**就是**证据门禁那份（`app/service/admission.py` 的唯一词表），并且
+    值/参考范围这一类由**同一个函数**判出 —— 所以「判不出来」在这两处不可能再各起
+    一个名字。此前这句 docstring 声称同源，而实际上 ``missing_value`` 根本不在证据
+    门禁的词表里，空值一行在两侧得到两个不同的名字。
     """
     if not _decidable(metric):
         return "not_decidable"
     text, reference = _inference_inputs(metric)
-    text = text.strip()
-    if not text:
-        return "missing_value"
-    if any(marker in text for marker in ("<", ">", "≤", "≥")):
-        return "invalid_value"
-    if _single_number(text) is None:
-        return "invalid_value"
-    low, high = parse_reference_range(reference)
-    if low is None and high is None:
-        return "missing_reference_range"
-    return None
+    # 与准入结论**同一份**判定：空值一行在这一侧与证据门禁那一侧从此同名
+    # （此前分别是 `missing_value` 与 `invalid_value`）。
+    return value_level_reason(text, reference)
 
 
 def infer_abnormal_flag_for_metric(metric: Any) -> str | None:
@@ -395,48 +346,10 @@ def infer_abnormal_flag_for_metric(metric: Any) -> str | None:
     return infer_abnormal_flag(text, reference)
 
 
-def parse_reference_range(value: str | None) -> tuple[float | None, float | None]:
-    text = (value or "").strip()
-    match = _RANGE_RE.search(text)
-    if match:
-        low, high = float(match["low"]), float(match["high"])
-        return (low, high) if low <= high else (None, None)
-    match = _UPPER_RE.search(text)
-    if match:
-        return None, float(match["high"])
-    match = _LOWER_RE.search(text)
-    if match:
-        return float(match["low"]), None
-    return None, None
-
-
-def infer_abnormal_flag(value: str | None, reference: str | None) -> str | None:
-    text = (value or "").strip()
-    if not text or any(marker in text for marker in ("<", ">", "≤", "≥")):
-        return None
-    number = _single_number(text)
-    if number is None:
-        return None
-    low, high = parse_reference_range(reference)
-    if low is None and high is None:
-        return None
-    if low is not None and number < low:
-        return "L"
-    if high is not None and number > high:
-        return "H"
-    return "N"
-
-
-def _single_number(value: str | None) -> float | None:
-    matches = _NUMBER_RE.findall(value or "")
-    return float(matches[0]) if len(matches) == 1 else None
-
-
-def _evidence_contains_value(evidence: str, value: float) -> bool:
-    for match in _NUMBER_RE.findall(unicodedata.normalize("NFKC", evidence)):
-        if math.isclose(float(match), value, rel_tol=1e-9, abs_tol=1e-12):
-            return True
-    return False
+# 参考范围解析、数值解析与异常判定的**实现**住在 `app/service/admission.py`
+# （「解读准入」）。这里保留 `parse_reference_range` / `infer_abnormal_flag` 的
+# **同名导出**，因为 `vision_encoder`（抽取时判异常标记）与既有测试从这个模块取它们
+# —— 换掉导入路径是纯粹的搬家，不捎带在收敛词表这一票里。
 
 
 def _coordinates_for_boundary(value: object) -> list[float] | None:

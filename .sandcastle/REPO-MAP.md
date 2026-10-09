@@ -27,7 +27,7 @@ accurate at the moment it is generated and at the moment the commit lands.
 
 ## Tests
 
-- tests/ — 44 test file(s, recursive)
+- tests/ — 45 test file(s, recursive)
 - frontend/e2e/ — 14 test file(s, recursive)
 - pytest (pyproject.toml / pytest.ini present)
 
@@ -82,6 +82,8 @@ app/
     train.py
   service/
     __init__.py
+    admission_vocabulary.py
+    admission.py
     condition_tags.py
     data_augment.py
     deep_link.py
@@ -89,9 +91,7 @@ app/
     llm_expander.py
     mall_goods.py
     medical_rag.py
-    metric_effective_value.py
-    metric_rows.py
-    ... (14 more)
+    ... (16 more)
   __init__.py
   config.py
   main.py
