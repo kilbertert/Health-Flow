@@ -82,6 +82,7 @@ app/
     train.py
   service/
     __init__.py
+    admission_projection.py
     admission_vocabulary.py
     admission.py
     condition_tags.py
@@ -90,8 +91,7 @@ app/
     evidence_bridge.py
     llm_expander.py
     mall_goods.py
-    medical_rag.py
-    ... (16 more)
+    ... (17 more)
   __init__.py
   config.py
   main.py
@@ -143,6 +143,7 @@ frontend/
   src/
     components/
     pages/
+    admissionText.js
     api.js
     App.jsx
     main.jsx
