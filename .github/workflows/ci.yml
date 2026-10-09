@@ -93,5 +93,10 @@ jobs:
       # `frontend/node_modules` is absent. Without `npm ci` above, "all green"
       # arrives as `445 passed, 4 skipped` — a skip count read as a pass, the
       # same failure shape as a skipped required job counting as success.
+      #
+      # `-rs` prints why each skip happened. This log is the artifact a reviewer
+      # actually reads, and a bare count cannot answer "were those the three
+      # frontend contract tests, or something that silently regressed into
+      # skipping?" — the question this whole step exists to keep answerable.
       - name: Run tests
-        run: uv run pytest -q
+        run: uv run pytest -q -rs
