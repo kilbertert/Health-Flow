@@ -56,7 +56,7 @@ pytestmark = pytest.mark.skipif(
 def _production_topology_reachable() -> bool:
     """这台机器能不能解析 `dev-host` 的 36 号目标。
 
-    不能就整体跳过：脚本的第一件事是环境前置检查，它要 `dev-host show 36` —— 那需要
+    解析不了就跳过用到它的用例（**不是**整体跳过）：脚本的第一件事是环境前置检查，它要 `dev-host show 36` —— 那需要
     主机清单（库外）、ssh 配置与私钥。它们只存在于开发机上，**刻意不**在 GitHub-hosted
     runner 上（也就不该因为「CI 没有生产环境的钥匙」而变红）。这是一次**明确的跳过**，
     不是通过 —— 所以 `test_transfer_refuses_a_payload...` 自己再判一次，并说明原因。
@@ -70,13 +70,14 @@ def _production_topology_reachable() -> bool:
 
 _TOPOLOGY = _production_topology_reachable()
 
-pytestmark = [
-    pytestmark,
-    pytest.mark.skipif(
-        not _TOPOLOGY,
-        reason="需要本机的 dev-host 主机清单与到 36 的访问（开发机才有，CI 刻意没有）",
-    ),
-]
+# The skip is applied per-test rather than module-wide on purpose: a guard that can never
+# run is not a guard. The argument-validation and exit-code-discipline tests need no host
+# at all, so they keep running in CI — only the ones that actually drive the remote block
+# or reach 36 are skipped away.
+needs_topology = pytest.mark.skipif(
+    not _TOPOLOGY,
+    reason="需要本机的 dev-host 主机清单与到 36 的访问（开发机才有，CI 刻意没有）",
+)
 
 _FAKE_SYSTEMCTL = """#!/bin/sh
 # 只实现远端块用到的三个子命令；每个调用都记进日志，好断言「重启有没有发生」。
@@ -320,7 +321,14 @@ def test_requires_a_target() -> None:
     assert "--commit" in result.stderr
 
 
-def test_reports_a_bad_revision() -> None:
+@needs_topology
+def test_bad_revision_is_a_deployment_failure_not_an_environment_one() -> None:
+    """坏 sha 走的是「部署失败」（1），不是「环境不对」（65）。
+
+    这一条需要 host：环境前置检查排在解析 commit **之前**（那是刻意的——`dev-host`
+    跑不通时没必要先去解析什么），所以没有 dev-host 的机器上它会先撞到 65。那正好是
+    下面那条用的场景，两条一起构成这组退出码的完整边界。
+    """
     result = _run_script(dict(os.environ), "--commit", "0" * 40, "--dry-run")
     assert result.returncode == 1
     assert "仓库里没有 commit" in result.stderr
@@ -346,6 +354,7 @@ def test_environment_fault_is_not_reported_as_a_deployment_failure() -> None:
 # ── 幂等 ────────────────────────────────────────────────────────────────────
 
 
+@needs_topology
 def test_no_change_when_the_marker_already_names_the_target(host: _FakeHost) -> None:
     """标记 == 目标 → 成功退出、**不重启**、不动任何东西。
 
@@ -364,6 +373,7 @@ def test_no_change_when_the_marker_already_names_the_target(host: _FakeHost) -> 
     assert not (host.root / "frontend.old").exists()
 
 
+@needs_topology
 def test_marker_comparison_uses_the_full_sha(host: _FakeHost) -> None:
     """标记必须与目标**等宽**比较。
 
@@ -381,6 +391,7 @@ def test_marker_comparison_uses_the_full_sha(host: _FakeHost) -> None:
 # ── 真正的部署：自检与入口一致性 ────────────────────────────────────────────
 
 
+@needs_topology
 def test_deploys_and_selfchecks_against_the_live_entry_point(host: _FakeHost) -> None:
     """健康且线上确实在提供这一版 → 自检通过。
 
@@ -402,6 +413,7 @@ def test_deploys_and_selfchecks_against_the_live_entry_point(host: _FakeHost) ->
     assert not (host.root / "frontend.old").exists()
 
 
+@needs_topology
 def test_selfcheck_failure_restores_the_previous_frontend(host: _FakeHost) -> None:
     """自检不过 → 用**写入之前**建的回滚点恢复。
 
@@ -425,6 +437,7 @@ def test_selfcheck_failure_restores_the_previous_frontend(host: _FakeHost) -> No
     assert (host.root / "deployed-revision").read_text().strip() == "a" * 40
 
 
+@needs_topology
 def test_stop_is_reported_as_drift_not_silently_repaired(host: _FakeHost) -> None:
     """unit 的绑定地址与仓库声明不一致时：报出来，不改它。
 
@@ -446,6 +459,7 @@ def test_stop_is_reported_as_drift_not_silently_repaired(host: _FakeHost) -> Non
 # ── 产物身份（策略门） ──────────────────────────────────────────────────────
 
 
+@needs_topology
 def test_transfer_refuses_a_payload_that_does_not_match_the_declared_identity() -> None:
     """`dev-host` 侧的负控：身份不符必须被拒。
 
@@ -478,6 +492,7 @@ def test_transfer_refuses_a_payload_that_does_not_match_the_declared_identity() 
     assert "产物身份不符" in (result.stdout + result.stderr)
 
 
+@needs_topology
 def test_rollback_to_is_the_same_path_as_commit(host: _FakeHost) -> None:
     """应急回滚与自动部署共用同一个脚本、同一条路径。
 
