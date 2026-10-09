@@ -162,30 +162,59 @@ def test_no_second_vocabulary_is_declared_anywhere():
     """静态守卫：全仓库只有一处声明这些原因名。
 
     没有这一条时，「词表归一」会被下一个人在一个新文件里重新写一份 `Literal[...]`
-    悄悄推翻 —— 而那正是本票要修的病。守卫只查**声明**（`Literal` / 集合字面量里的
-    取值），不查使用：`reason="missing_value"` 这种消费是正常的。
+    —— 或者**一个元组/集合/列表常量** —— 悄悄推翻，而那正是本票要修的病。本票自己
+    就是把词表从 `Literal[...]` 搬成 `tuple[...]` 的，所以只查 `Literal` 的守卫会漏掉
+    最像它的那种复现。
+
+    查的是**声明**：一组原因名字面量的集合/序列/字典键、或 `Literal` 的实参。单个字面量
+    的消费（`reason="missing_value"`）与判断（`reason == "missing_value"`）不在此列 ——
+    它们不是第二份词表。
+
+    阈值是 3 个**不同**名字：低于它，一次针对某个投影的局部集合与真正的词表无法可靠
+    区分，而误报会让这条守卫被删掉。
     """
     reason_names = vocabulary()
     offenders: list[str] = []
     for path in sorted(REPO_ROOT.joinpath("app").rglob("*.py")):
         if path.name == "admission_vocabulary.py":
             continue  # 它的家
-        source = path.read_text(encoding="utf-8")
-        tree = ast.parse(source)
+        tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
-            # `Literal["a", "b"]` / `Literal[*SOMETHING]` 里出现的名字字面量
-            if isinstance(node, ast.Subscript) and _is_literal(node.value):
-                literals = {
-                    elt.value
-                    for elt in getattr(node.slice, "elts", [])
-                    if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
-                }
-                if len(literals & reason_names) >= 3:
-                    offenders.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}")
+            if _is_declaration_of_reason_names(node, reason_names):
+                offenders.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}")
     assert not offenders, (
         "这些位置重新声明了一份原因词表（应改为从 app/service/admission_vocabulary.py 取）："
         + ", ".join(offenders)
     )
+
+
+def _string_literals(value: ast.AST) -> set[str]:
+    """一个 AST 节点里**字面量**字符串的集合。名字/属性引用（如 `Literal[X]` 的 `X`）
+    不算 —— 那正是「从词表派生」的正确写法。"""
+    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+        return {value.value}
+    if isinstance(value, (ast.Tuple, ast.List, ast.Set)):
+        # 星号展开（`(*A, *B)`）里的名字引用跳过，它也是派生。
+        return set().union(*(_string_literals(elt) for elt in value.elts)) if value.elts else set()
+    return set()
+
+
+def _is_declaration_of_reason_names(node: ast.AST, reason_names: frozenset[str]) -> bool:
+    candidates: list[ast.AST] = []
+    if isinstance(node, ast.Subscript) and _is_literal(node.value):
+        # `Literal["a", "b"]`：实参里的字符串（星号展开里的名字引用不计）。
+        slice_value = node.slice
+        candidates = list(slice_value.elts) if isinstance(slice_value, (ast.Tuple, ast.List)) else [slice_value]
+    elif isinstance(node, (ast.Set, ast.List, ast.Tuple)):
+        candidates = list(node.elts)
+    elif isinstance(node, ast.Dict):
+        candidates = [key for key in node.keys if key is not None]
+    elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "frozenset":
+        candidates = list(node.args)
+    literals: set[str] = set()
+    for candidate in candidates:
+        literals |= _string_literals(candidate)
+    return len(literals & reason_names) >= 3
 
 
 def _is_literal(node: ast.expr) -> bool:
@@ -209,6 +238,10 @@ def _is_literal(node: ast.expr) -> bool:
         # 值这一类。
         ({"metric_value": ""}, "missing_value"),
         ({"metric_value": "6.5/7.2"}, "invalid_value"),
+        # 带符号的值：**值这一类优先于证据完备性**。这一条守住判定顺序 —— 旧顺序是
+        # 「先看单位/证据/页码，再看值」，于是同一行（`<20` 且缺单位）从这里
+        # `invalid_value` 变成 `missing_unit`。改回旧顺序时它会红。
+        ({"metric_value": "<20", "unit": None}, "invalid_value"),
         ({"reference_range": None}, "missing_reference_range"),
         # 判定过、在区间内 —— 「正常」，不是「没能解读」。
         ({"metric_value": "5.0"}, "within_reference_range"),
@@ -240,22 +273,46 @@ def test_the_tally_covers_every_row_exactly_once():
     这份 PRD 的硬指标就是这个等式 —— 此前 `pending` / `excluded` 的行落在等式之外，
     所以「三桶相加 != 行数」永远成立，而没有任何东西会因此报错。
     """
+    # **每一个取值都至少出现一次**：台账的职责是把每个结论恰好归一类，所以漏掉一个
+    # 取值时「这一条能加总」不构成证据。`no_published_knowledge_card` 由证据服务产生
+    # （不是本仓的门禁），所以它由下面单独一条覆盖 —— 这里断言的是「本仓能产出的结论
+    # 全覆盖」。
     rows = [
-        _row(id=1),  # 进入解读
+        _row(id=1),  # None：进入解读
         _row(id=2, metric_value="5.0"),  # within_reference_range
-        _row(id=3, metric_code=None),  # unknown_metric_code
-        _row(id=4, metric_value=""),  # missing_value
-        _row(id=5, confirmation_status="pending"),  # pending
-        _row(id=6, confirmation_status="excluded"),  # excluded
-        _row(id=7, unit=None, evidence_text=None),  # missing_unit（值本身可解析）
+        _row(id=3, metric_value=""),  # missing_value
+        _row(id=4, metric_value="6.5/7.2"),  # invalid_value
+        _row(id=5, unit=None, evidence_text=None),  # missing_unit
+        _row(id=6, evidence_text=None),  # missing_source_evidence（值可解析）
+        _row(id=7, page_number=None),  # missing_source_page
+        _row(id=8, reference_range=None),  # missing_reference_range
+        _row(id=9, metric_code=None),  # unknown_metric_code
+        _row(id=10, confirmation_status="pending"),  # pending
+        _row(id=11, confirmation_status="excluded"),  # excluded
     ]
     reasons = [admission_reason(metric, code=metric.metric_code) for metric in rows]
     counts = tally(reasons)
+    assert set(reasons) == {None, *(vocabulary() - {"no_published_knowledge_card"})}, (
+        "这条测试要覆盖本仓能产生的**每一个**取值；漏掉的取值会让「能加总」不再是证据"
+    )
 
     assert counts.total == len(rows)
-    # 进入解读 1 / skipped 3（within_range + missing_value + missing_unit）/
-    # unmatched 1 / 未评估 2（pending + excluded）。
-    assert (counts.included, counts.skipped, counts.unmatched, counts.not_evaluated) == (1, 3, 1, 2)
+    # 进入解读 1 / skipped 7（within_range + missing_value + invalid_value + missing_unit
+    # + missing_source_evidence + missing_source_page + missing_reference_range）/
+    # unmatched 1 / 未评估 2。
+    assert (counts.included, counts.skipped, counts.unmatched, counts.not_evaluated) == (1, 7, 1, 2)
+
+
+def test_the_tally_refuses_a_reason_outside_the_vocabulary():
+    """台账认不出的结论必须报错，而不是静默归到某一类里。"""
+    with pytest.raises(ValueError):
+        tally(["not_a_reason"])
+
+
+def test_the_tally_covers_no_published_knowledge_card_too():
+    """`no_published_knowledge_card` 由证据服务产生（不是本仓的门禁），台账同样要认它。"""
+    counts = tally(["no_published_knowledge_card", "no_published_knowledge_card"])
+    assert (counts.unmatched, counts.total) == (2, 2)
 
 
 def test_a_row_shown_as_abnormal_but_kept_out_of_the_reading_carries_a_reason():

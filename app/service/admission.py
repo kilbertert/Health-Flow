@@ -96,6 +96,10 @@ def value_level_reason(value_text: str | None, reference: str | None) -> str | N
 
     准入结论与异常判定的守卫都消费本函数，所以同一行在这两个问题上不可能再得到两个
     名字（此前空值一行分别得到 `invalid_value` 与 `missing_value`）。
+
+    **两侧调的是同一个函数，不是两份「碰巧一致」的抄写** —— 这是本票的验收线之一，而
+    它是靠这条调用关系成立的，不是靠断言。测试能钉住的是「结论逐字相同」；「同一处
+    实现」只有这一条路径本身在守。
     """
     return value_reason(value_text) or reference_reason(reference)
 

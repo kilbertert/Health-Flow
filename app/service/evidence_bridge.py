@@ -72,11 +72,9 @@ METRIC_ALIASES = {
     "谷草转氨酶": "ast",
     "血钙": "calcium",
 }
+# 名称归一化用的括号剥离。**不是**参考范围解析的那一个 —— 参考范围的括号由
+# `admission.parse_reference_range` 的正则自己处理，这里剥的是指标名里的括注。
 _PARENTHETICAL_RE = re.compile(r"[（(][^）)]*[）)]")
-_NUMBER_RE = re.compile(r"(?<![\d.])-?\d+(?:\.\d+)?(?![\d.])")
-_RANGE_RE = re.compile(r"(?P<low>-?\d+(?:\.\d+)?)\s*(?:-|~|至|到)\s*(?P<high>-?\d+(?:\.\d+)?)")
-_UPPER_RE = re.compile(r"(?:<|<=|≤)\s*(?P<high>-?\d+(?:\.\d+)?)")
-_LOWER_RE = re.compile(r"(?:>|>=|≥)\s*(?P<low>-?\d+(?:\.\d+)?)")
 
 
 class EvidenceBridgeError(RuntimeError):

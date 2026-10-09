@@ -75,8 +75,6 @@ UNMATCHED_REASONS: frozenset[str] = frozenset(UNMATCHED_REASONS_ORDERED)
 # `skipped` / `unmatched` 里，而是随指标行逐条出域（见 PRD #176 的第二张票）。
 NOT_EVALUATED_REASONS: frozenset[str] = frozenset({"pending", "excluded"})
 
-# 「值/参考范围」这一类原因：准入结论与异常判定的守卫在这几条上必须同名。
-VALUE_LEVEL_REASONS: frozenset[str] = frozenset({"missing_value", "invalid_value", "missing_reference_range"})
 
 # 参与解读的确认状态：证据门禁的入口守卫与判定守卫必须同为这两个。
 ADMITTED_STATUSES: frozenset[str] = frozenset({"confirmed", "corrected"})
