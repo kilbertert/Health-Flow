@@ -1,0 +1,170 @@
+name: CD
+
+# Deploy whatever merges to `main` onto 36 (yidong-36, the service host).
+#
+# While this workflow did not exist, the path from "merged to main" to "36 is
+# running it" was entirely manual: `ops/service-host/README.md` prose plus one
+# `artifacts/qa/` record per deployment. Measured on 2026-10-09, that had drifted
+# to 25 commits behind main (11 of them touching `app/`), with no revision marker
+# on the host — "which revision is live?" could only be answered by probing the API
+# for a capability and reasoning about which commit introduced it. That is how the
+# drift was found, and it is not a thing to rely on.
+#
+# Division of labour with CI: `ci.yml` runs the deterministic checks and is the
+# Ruleset's required check; this workflow only ships what already passed them. It
+# does not re-run the suite — it runs on `main`, and `main` is only reachable
+# through a pull request carrying that required check.
+#
+# No approval gate. That is the owner's explicit decision, matching AI-Ops: the
+# `production-36` environment is kept for its *deployment ledger* and its
+# main-only branch restriction, but it has no required reviewer. Rollback is one
+# action — re-add a required reviewer on that environment — and needs no edit here,
+# because there is deliberately no "auto-approve" code to remove with it.
+
+on:
+  push:
+    branches:
+      - main
+    # Only paths that change what actually runs. `**` would mean a documentation
+    # merge restarts production, and this repository merges documentation often.
+    #
+    # The trap: when `paths` does not match, there is *no signal at all* — so a
+    # file that a deployment really executes but is missing from this list
+    # produces "changed it but it never deployed" with nothing to notice.
+    # Anything added to `deploy-36.sh`'s own inputs belongs here.
+    paths:
+      - "app/**"
+      - "frontend/src/**"
+      - "frontend/public/**"
+      - "frontend/index.html"
+      - "frontend/package.json"
+      - "frontend/package-lock.json"
+      - "frontend/vite.config.js"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "deploy/deploy-36.sh"
+      - "ops/service-host/systemd/**"
+      - ".github/workflows/cd.yml"
+  # Manual dispatch is only for re-running the current `main` (for instance after a
+  # failed deployment). There is deliberately **no input for choosing a commit**: an
+  # input that can name any fetched commit would let whoever can trigger this deploy
+  # a revision that never passed the required checks, which is the Ruleset bypassed.
+  # Rollback goes through `--rollback-to`, not through a commit picker.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-36:
+    name: Deploy to 36
+    # Concurrency at the **job** level, not the workflow level. This is a measured
+    # failure mode, not a style preference — AI-Ops hit all of it over four rounds:
+    #   * workflow level + cancel-in-progress: false → **deadlock**. The lock is
+    #     taken when the run is created, so a run parked on an approval gate holds
+    #     the slot and never releases it; later runs sit at "waiting for another
+    #     serialized run to finish" with jobs=0 forever.
+    #   * workflow level + cancel-in-progress: true → **interrupts a deployment that
+    #     is mid-write**. A new push cancels the running job before it can self-check
+    #     or roll back, and nobody is left fixing production.
+    # Job level takes the lock as the job is about to start, so a queued run does not
+    # hold it and a running deployment is not killed.
+    #
+    # Known gap to remember: job-level serialises but does **not** order. Two queued
+    # runs can land out of order and the later one will not move production
+    # backwards, because the deployment is idempotent on the revision marker — but
+    # if an approval gate is ever added back, that gap becomes real and needs an
+    # explicit ordering guard (is the target commit an ancestor of what is live?).
+    concurrency:
+      group: cd-36-deploy
+      cancel-in-progress: false
+    # A repository-specific label, not bare `self-hosted`. Bare `self-hosted` means
+    # "any self-hosted runner", so any newly registered runner could claim this job
+    # and receive the deployment credentials and the ability to write production.
+    # The label narrows it to the known machine — same reasoning as AI-Ops' `AI-Ops`
+    # label on its CD job.
+    runs-on: [self-hosted, health-flow]
+    timeout-minutes: 30
+    # The environment carries the deployment ledger (which commit deployed, and how
+    # it went) and the branch restriction (main only). It has **no required
+    # reviewer** — see the header. Do not add a step that approves this job's own
+    # deployment: GitHub's environment approval happens *before* the job's steps
+    # run, so with a reviewer such a step is never reached, and without one it does
+    # nothing. It would be dead code wearing the shape of a safety net.
+    environment: production-36
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          # deploy-36.sh needs the target commit's tree to build the frontend from
+          # it, and `--rollback-to` may name an older commit.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.13"
+
+      # `dev-host` parses the host registry with `python3 -c` + `tomllib`, so it
+      # needs Python 3.11+. The runner's PATH is
+      # `/home/claude/.local/bin:/usr/local/bin:/usr/bin:/bin`, so a bare `python3`
+      # is /usr/bin/python3 (3.10) and raises `ModuleNotFoundError: tomllib` —
+      # measured. That is an environment fault rather than a deployment failure, and
+      # deploy-36.sh reports it with its own exit code (65); this step is what puts
+      # an interpreter with `tomllib` in front so the deployment can proceed.
+      - name: Put an interpreter with tomllib on PATH
+        run: |
+          set -euo pipefail
+          PATH=/home/claude/miniconda3/bin:$PATH python3 -c "import tomllib" \
+            || { echo "miniconda 的 python3 也没有 tomllib —— 环境不对，不是部署失败" >&2; exit 65; }
+
+      - name: Deploy
+        id: deploy
+        env:
+          PATH: /home/claude/miniconda3/bin:/home/claude/.local/bin:/usr/local/bin:/usr/bin:/bin
+          TARGET_SHA: ${{ github.sha }}
+        run: deploy/deploy-36.sh --commit "$TARGET_SHA"
+
+      # The summary must run on failure too, or a failed deployment says nothing —
+      # the lesson this repository already recorded for architecture-review.yml
+      # (#133: 12 failures, 11 of them upstream quota exhaustion, and the summary
+      # was written only on the success branch).
+      - name: Summarize
+        if: always()
+        env:
+          TARGET_SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+        run: |
+          {
+            echo "### CD — 部署到 36"
+            echo
+            echo "- commit: \`${TARGET_SHA}\`"
+            echo "- 步骤结果: \`${DEPLOY_OUTCOME}\`"
+            echo "- run: ${RUN_URL}"
+            echo
+            if [ "$DEPLOY_OUTCOME" != "success" ]; then
+              echo "**部署未成功。** 36 上的服务状态与回滚点见上面步骤的日志"
+              echo "（\`backup=\` 行给出恢复点；\`selfcheck=failed\` 表示脚本已自行回滚）。"
+              echo
+              echo "回滚：本地执行 \`deploy/deploy-36.sh --rollback-to <上一个已知良好 commit>\`。"
+              echo "本 workflow **没有**「指定 commit」的输入（那会绕过 main 保护），"
+              echo "所以回滚只能走本地脚本 —— 它默认用同一个身份，因此自动路径修不了的时候它也能用。"
+              echo
+              echo "注意：部署失败**不是**业务验收结论。"
+            else
+              echo "**已部署。** 自检断言的是机器能回答的两件事：\`/ready\` 的形状，"
+              echo "以及入口实际提供的 bundle 的 sha256 等于本次构建的 sha256。"
+              echo "业务验收（需要商城票据建立的会话）仍由人执行，见 \`ops/service-host/README.md\`。"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

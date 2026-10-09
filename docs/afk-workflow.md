@@ -59,6 +59,37 @@ Git bundles enter a clean delivery checkout before the host write token is used.
 Missing delivery credentials produce `agent:blocked`; there is no non-triggering
 `GITHUB_TOKEN` fallback.
 
+## What happens after the merge
+
+Delivery does not end at the merge. Merging to `main` deploys — no further human
+action, and no separate approval step.
+
+- **Checks gate the merge, the merge triggers the deploy.** `.github/workflows/ci.yml`
+  runs `ruff check` and `pytest` on every pull request and on `main`, and is a
+  required check in the branch ruleset. `.github/workflows/cd.yml` then ships what
+  merged; it deliberately does **not** re-run those checks, because it runs on
+  `main` and `main` is only reachable through a pull request carrying them.
+- **The trigger set is a whitelist.** `cd.yml` deploys only when `app/**`, the
+  frontend sources and build inputs, `pyproject.toml`, `uv.lock`, or the deploy
+  assets themselves change. A documentation merge must not restart the service.
+  The trap to remember: when `paths` does not match there is *no signal at all*, so
+  a file a deployment really executes and that is missing from that list produces
+  "changed it but it never deployed" with nothing to notice.
+- **One script, two callers.** `deploy/deploy-36.sh` is the only deployment path —
+  the automated one and the human emergency `--rollback-to` share it, so the two
+  cannot drift apart. It drives `dev-host`, which enforces the artifact-identity
+  gate (`--artifact-sha256`) for a service host.
+- **What the post-deploy self-check asserts** is only what a machine can answer:
+  the shape of `/ready`, and that the entry point is actually serving the bundle
+  this build produced (its sha256). Everything needing a session — the real
+  upload → confirm → interpret path — is still operator-run business acceptance,
+  and a deployment that self-checks green does not claim it.
+- **Rollback** is re-running the same script with `--rollback-to <commit>`. The
+  host keeps a frontend snapshot per deployment, and the script restores it
+  automatically when the self-check fails. There is deliberately no "pick a
+  commit" input on the workflow: that would let whoever can trigger a deploy ship
+  a revision that never passed the required checks.
+
 ## Providers
 
 The configured Sandcastle profile is server-global: `claude` or

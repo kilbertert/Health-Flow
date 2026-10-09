@@ -25,8 +25,53 @@ privilege escalation rather than mere file permissions.
 | `/opt/health-flow/data` | required by the application; see the note below |
 | `/opt/health-flow/frontend` | the built frontend served when `SERVE_FRONTEND=true` |
 | `/opt/health-flow/ops` | operational scripts from this directory |
+| `/opt/health-flow/deployed-revision` | the **部署修订** — the full 40-character sha of the commit that is live |
 | `/var/log/health-flow` | service logs, owned by the identity |
-| `/var/backups/health-flow` | host-side backups |
+| `/var/backups/health-flow` | host-side backups, one frontend snapshot per deployment |
+
+## Deploying a revision
+
+**Use `deploy/deploy-36.sh`.** It is the only deployment path: `.github/workflows/cd.yml`
+calls it on every merge to `main`, and a human emergency rollback calls the same
+script with `--rollback-to <commit>`. Two separate entry points would drift apart
+— that is exactly how the tar/rsync pairing bug documented in AI-Ops happened.
+
+```bash
+# from the repository checkout, on the development host
+deploy/deploy-36.sh --commit <sha>            # what cd.yml runs
+deploy/deploy-36.sh --commit <sha> --dry-run  # build + print the remote command; touches nothing
+deploy/deploy-36.sh --rollback-to <sha>       # re-deploy a known-good revision
+```
+
+What it does, and the reasoning that is easy to lose:
+
+- **The artifact is built here, not there.** The host has no Node toolchain and
+  no `uv`, and `/opt/health-flow` is not a git checkout. This matches the section
+  below: the frontend is built on a development host and transferred.
+- **Everything reaches the host under an artifact identity.** The transfer goes
+  through `dev-host cp --artifact-sha256`, so the write gate enforces "a change
+  arrives as an identified artifact" rather than merely requesting it.
+- **The frontend directory is replaced, not extracted over.** Extracting over the
+  live tree leaves files the new `index.html` no longer references, so `assets/`
+  ends up holding more than one build. This was observed for real on 2026-10-06.
+- **The marker and every comparison use the full 40-character sha.** A short sha
+  compared against a long one makes every idempotent re-run look stale.
+- **It reports binding drift and does not fix it.** The unit on the host runs
+  `--host 0.0.0.0`; `ops/service-host/systemd/health-flow.service` declares
+  `127.0.0.1`. Closing that gap is a change of exposure, and the policy is that an
+  exposure is changed from *observed traffic*, not from which ports are listening.
+  The deploy script reports the divergence so it is visible, and leaves the
+  decision to a separate, deliberate change.
+- **After deploying it self-checks two machine-answerable things**: the shape of
+  `/ready`, and that the entry point is serving the bundle this build produced
+  (byte-for-byte, by sha256). A failed self-check restores the frontend snapshot
+  taken *before* any write and rolls the marker back.
+
+**The report worker stays disabled.** Deployment does not enable it; report
+extraction remains paused under the low-speed single-topic acceptance recorded
+below. Uploading still works and jobs queue durably.
+
+## Installation
 
 **Why `data/` exists as well as `var/`.** The application creates a *relative*
 `data/` directory at startup whenever the database URL is SQLite, regardless of
@@ -106,14 +151,22 @@ It is not built at deploy time on the target.
 
 ## Verification
 
-Three probes, all run as the service identity, all exiting nonzero on mismatch:
+The **deployment's own** self-check is `deploy/deploy-36.sh` (see above): it asserts
+`/ready`'s shape and that the entry point serves the bundle this build produced.
+That runs on every merge, unattended.
 
-- `upload-probe.sh` — asserts a protected route and the upload endpoint are
-  **refused without a session** (the negative case), that registration yields a
-  usable session, that the session cookie carries `Secure` and `HttpOnly`, and
-  that an upload returns `202 processing`.
+The probes below are the operator-run acceptance checks, all run as the service
+identity, all exiting nonzero on mismatch:
+
+- `upload-probe.sh` — **stale, and it will report a false failure.** It asserts
+  `POST /api/auth/register` returns 201, but that route was retired with the
+  account system and the live deployment answers **405** (measured 2026-10-09).
+  Sessions are now minted by exchanging a mall ticket. Fixing it needs a ticket
+  the development host cannot mint, so the repair is its own ticket and this file
+  does not claim the probe passes.
 - `cookie-probe.sh` — asserts the session cookie's hardening attributes on their
-  own, printing attribute names only and never the token value.
+  own, printing attribute names only and never the token value. It registers an
+  account first, so it is stale in the same way as above.
 - `bridge-probe.py` — calls the same function the report API calls to reach the
   evidence service, so it proves the real cross-service path (configuration,
   key, loopback edge, response contract) rather than a synthetic request.
