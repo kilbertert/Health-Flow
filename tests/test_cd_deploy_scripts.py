@@ -17,6 +17,11 @@
 最要紧的一条是**负控**：产物身份不符必须被拒。那是策略门 —— `dev-host` 只放行
 「产物身份与载荷一致」的写入，而这条断言如果写成永远为真，生产就会在没有任何人察觉的
 情况下接受任何字节。
+
+本文件里另有三条**静态**守卫，它们不构建、不碰主机，所以 CI 里也跑：两个在生成期展开
+的变量方向（该赋值的赋了没、该转义的转义了没）、以及远端块里不许出现反引号。它们存在的
+理由是同一件事：那三类错误在**本地 dry-run 里完全正常**，只在真的执行时现形，而 `bash -n`
+一个字都不报。
 """
 
 from __future__ import annotations
@@ -27,6 +32,7 @@ import shutil
 import socket
 import stat
 import subprocess
+import tarfile
 import tempfile
 import time
 from pathlib import Path
@@ -307,7 +313,7 @@ def host(scratch):
 # ── 静态守卫：远端块里每一个在生成期展开的变量都得先被赋值 ──────────────────
 
 
-def test_every_generation_time_variable_in_the_remote_block_is_assigned_first() -> None:
+def test_generation_time_variables_are_all_assigned_before_the_heredoc() -> None:
     """远端块里**未转义**的 `$VAR` 在生成期展开 —— 它们必须先有值。
 
     这正是本文件里连续踩到两次的那一类：先是散文里的反引号被当成命令替换（`bash -n`
@@ -336,9 +342,119 @@ def test_every_generation_time_variable_in_the_remote_block_is_assigned_first() 
     # 环境变量也是合法的来源（`PATH`、`HOME` 之类由调用者提供）。
     provided = {"PATH", "HOME", "PWD", "LANG", "LC_ALL", "TMPDIR", "SHELL", "USER"}
     missing = referenced - assigned - provided
+    # 反过来的那一半同样要盯：**转义**的 `\$VAR` 是远端期变量，块必须自己给它一个值。
+    # 反过来写（把生成期的值当远端期的转义掉）在 `set -u` 下就是 `VAR: unbound variable`，
+    # 而它在本地 dry-run 里看起来完全正常 —— 实测就撞到过一次。
+    escaped = {
+        name
+        for line in lines[start + 1 : end]
+        for name in re.findall(r"\\\$\{?([A-Z_][A-Z0-9_]*)", line)
+    }
+    defined_in_block = set(re.findall(r"^([A-Z_][A-Z0-9_]*)=", "\n".join(lines[start + 1 : end]), re.MULTILINE))
+    undefined = escaped - defined_in_block
+    assert not undefined, (
+        f"远端块把生成期就有的值转义成了远端期变量，但块里从未定义它们：{sorted(undefined)}。"
+        "这些值其实在生成期就有 —— 把它们转义掉等于在远端读一个不存在的变量。"
+    )
     assert not missing, (
         f"远端块在生成期引用了未赋值的变量：{sorted(missing)}。"
         "它们在 `set -u` 下会让脚本直接以『unbound variable』退出 —— 而 `bash -n` 不会报。"
+    )
+
+
+def test_the_remote_block_contains_no_backticks() -> None:
+    """远端块里不许出现反引号，连注释里也不许。
+
+    这是一个**重复了三次**的坑，每次都只在真的跑一遍时才现形，而 `bash -n` 一个字都不报：
+
+    1. 最初是散文里的反引号 —— 实测八处，产出八行 `command not found` 与一次被中断的
+       命令替换；
+    2. 然后是恢复块里新写的 `$BACKUP` 少了反斜杠，生成期直接 `BACKUP: unbound variable`；
+    3. 再然后是**给恢复块新加的注释**里的反引号（`rm -rf`、`prev`、`frontend.broken`），
+       把整段远端命令切成碎片 —— 第一次真实 CD 运行就是这么失败的（37902002692）。
+
+    裸 heredoc body 会做命令替换，所以注释里的反引号与代码里的同样致命。定这条规矩比
+    每次记得转义可靠：反引号在这个块里没有正当用途，散文改用单引号或中文引号即可。
+    """
+    source = SCRIPT.read_text(encoding="utf-8")
+    lines = source.splitlines()
+    start = next(i for i, line in enumerate(lines) if "REMOTE_CMD <<EOF" in line)
+    end = next(i for i in range(start + 1, len(lines)) if lines[i].rstrip() == "EOF")
+    offenders = [
+        f"{start + 1 + offset}: {line}"
+        for offset, line in enumerate(lines[start + 1 : end], start=1)
+        if "`" in line
+    ]
+    assert not offenders, (
+        "远端块里出现了反引号（裸 heredoc 会把它当命令替换）：\n" + "\n".join(offenders)
+    )
+
+
+@needs_topology
+def test_the_remote_block_paths_exist_inside_the_artifact(tmp_path: Path) -> None:
+    """远端块里引用的**块内路径**必须真的在产物里。
+
+    这一条是拿真实产物对账，不是读注释：`--dry-run` 会真的打包，于是可以把包里
+    `tar tzf` 出来的清单与远端块里写死的路径逐条比对。
+
+    两次真实部署各栽在这里一次，都是同一个形状 —— **本地 dry-run 看起来完全正常**：
+    `pip install` 指的是打包前的 `$BUILD/<wheel>`，而解包后文件在 `$STAGE_DIR/pkg/` 下，
+    于是远端 pip 报 "file does not exist" 并回滚。路径写错在本地没有任何症状，因为两侧
+    都没有人真的执行过那条命令。
+    """
+    result = _run_script(dict(os.environ), "--commit", TARGET_SHA, "--dry-run")
+    assert result.returncode == 0, result.stderr
+    artifact = Path(_parse_dry_run(result.stdout)["artifact"])
+
+    with tarfile.open(artifact) as tar:
+        names = {"\u0000" + n.lstrip("./") for n in tar.getnames()}
+    assert any(n.endswith(".whl") for n in names), "产物里没有 wheel"
+
+    block = _parse_dry_run(result.stdout)["block"]
+    # `$STAGE_DIR` 是**生成期**值，所以在打印出来的块里已经是绝对路径；路径段就跟着它。
+    found = re.findall(r"(/[\w./-]*deploy-36-[0-9a-f]+)(?=[\"/])", block)
+    assert found, "远端块里找不到解包目录的绝对路径"
+    stage_dir = found[0]
+    referenced = re.findall(re.escape(stage_dir) + r"/([A-Za-z0-9_./-]+)", block)
+    assert referenced, "远端块里没有任何 $STAGE_DIR 下的路径，说明这条守卫的解析坏了"
+    for rel in referenced:
+        assert "\u0000" + rel in names, (
+            f"远端块引用了 $STAGE_DIR/{rel}，而产物里没有这个路径。"
+            f"包里的顶层条目：{sorted(n[1:] for n in names if n.count('/') <= 1)[:10]}"
+        )
+
+
+@needs_topology
+def test_the_staged_files_are_readable_by_the_service_identity(host: _FakeHost) -> None:
+    """解包出来的东西必须对服务身份可读。
+
+    远端块以 root 解包，而装包那一步是 `runuser -u health-flow`。归档自带模式，所以一个
+    0600 的 wheel 在 root 解包之后就**只有 root 读得到** —— 实测：pip 报
+    "Permission denied"、部署回滚。修法是解包后 `chmod -R a+rX`。
+
+    这一条用一个**限制性 umask** 跑（解包由测试进程完成，umask 会传给子进程），于是归档
+    里的模式是收紧的，而"解包后是否放开"这件事就真的可观测了：`chmod` 去掉 → 模式仍被
+    收紧 → 断言红。
+    """
+    host.seed_deployed("a" * 40)
+    parsed = host.stage()
+    host.serve()
+
+    previous = os.umask(0o077)
+    try:
+        result = host.run_remote(parsed["block"])
+    finally:
+        os.umask(previous)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "selfcheck=passed" in result.stdout
+    # 部署成功后中间目录被清掉，所以对账的是**装进去的那一份**：前端树必须对 others 可读
+    # （服务以另一个身份运行），而它是从解包目录 `cp -a` 过来的。
+    installed = host.root / "frontend" / "index.html"
+    assert installed.is_file()
+    mode = stat.S_IMODE(installed.stat().st_mode)
+    assert mode & 0o044, (
+        f"部署后的前端对组/其他不可读（mode={oct(mode)}）—— 服务以另一个身份运行，读不到它"
     )
 
 
