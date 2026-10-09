@@ -1,0 +1,97 @@
+name: CI
+
+# The project's own deterministic checks, on every pull request and on every
+# merge to main. Until this workflow existed the only required check was
+# `Workflow policy` — the scaffold's self-check (map freshness, workflow
+# boundaries, sandbox network) — so no workflow in this repository had ever run
+# pytest or ruff, and a commit that reddened the whole suite could merge with
+# zero signal at the PR stage. `consensus-contract.json` lists
+# `deterministic-ci` as a non-exceptionable invariant; this is that check.
+#
+# Why GitHub-hosted and not the self-hosted runner the agent-*.yml workflows
+# use: the repository is PUBLIC, so hosted minutes cost nothing, and a
+# persistent runner must never execute untrusted pull-request code. The
+# alternative — a fork gate — is worse, not safer: GitHub counts a *skipped*
+# required job as a success, so one misjudged gate silently satisfies the
+# branch Ruleset for every fork PR. That reasoning is the same one AI-Ops
+# records in its own ci.yml.
+#
+# Job-level `concurrency` (not workflow-level), and the reason is a measured
+# failure mode rather than a preference — see .github/workflows/cd.yml for the
+# four-round account of workflow-level locks deadlocking a queued run.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    # This job's `name` is the required-status-check context. Adding it to the
+    # Ruleset is a separate, ordered step: it can only be added after it has run
+    # green at least once on main. A required check that has never reported stays
+    # pending forever and blocks every pull request — so this file must land
+    # first, and the Ruleset edit follows the first green run on main.
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.13"
+
+      # `--extra dev`, not `--dev`. The test dependencies (pytest, ruff) live in
+      # `[project.optional-dependencies] dev`, so `uv sync --locked --dev`
+      # installs nothing and still exits 0. What happens next is the trap:
+      # `uv run pytest` finds no pytest in the venv and falls back to whatever
+      # pytest is on PATH, which produces `ModuleNotFoundError: No module named
+      # 'app'` across the suite — an environment fault that reads exactly like
+      # broken code. Measured on a clean clone of e2db15c.
+      - name: Install locked dependencies
+        run: uv sync --locked --extra dev
+
+      - name: Run static checks
+        run: uv run ruff check .
+
+      # Deliberately NOT `ruff format --check`: 27 files on main would be
+      # reformatted, and adopting a formatter is its own change with its own
+      # diff. Mixing it into the commit that introduces the test gate would make
+      # the gate's first run unreadable.
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build the frontend
+        working-directory: frontend
+        run: npm run build
+
+      # Order matters: three contract tests drive the real frontend modules
+      # through esbuild and `@pytest.mark.skipif` themselves out when
+      # `frontend/node_modules` is absent. Without `npm ci` above, "all green"
+      # arrives as `445 passed, 4 skipped` — a skip count read as a pass, the
+      # same failure shape as a skipped required job counting as success.
+      - name: Run tests
+        run: uv run pytest -q
