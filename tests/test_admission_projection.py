@@ -44,12 +44,15 @@ def _row(**overrides):
         "unit": "mmol/L",
         "reference_range": "3.9-6.1",
         "page_number": 1,
-        "evidence_text": "空腹血糖 6.5 mmol/L (3.9-6.1)",
         "source_file_index": 1,
         "confirmation_status": "confirmed",
         "metric_code": "fasting_glucose",
     }
     values.update(overrides)
+    # 原文证据里必须**真的含这个值**：门禁要求如此，手写一个与值不符的字符串会让几乎
+    # 每个用例都以 `missing_source_evidence` 失败 —— 那是测试自己造的假象。
+    if "evidence_text" not in overrides:
+        values["evidence_text"] = f"空腹血糖 {values['metric_value']} mmol/L ({values['reference_range']})"
     return MetricModel(**values)
 
 
@@ -75,8 +78,18 @@ def test_every_parsed_row_can_be_mapped_to_exactly_one_conclusion():
     counts = ledger(reasons)
 
     assert counts.total == len(rows)
-    assert counts.total == counts.included + counts.skipped + counts.unmatched + counts.not_evaluated
-    assert (counts.included, counts.skipped, counts.unmatched, counts.not_evaluated) == (1, 3, 1, 2)
+    assert counts.total == (
+        counts.included + counts.normal + counts.skipped + counts.unmatched + counts.not_evaluated
+    )
+    # 进入解读 1 / normal 1（在参考区间内）/ skipped 2（缺单位、值还没解析出来）/
+    # unmatched 1 / 未评估 2。
+    assert (counts.included, counts.normal, counts.skipped, counts.unmatched, counts.not_evaluated) == (
+        1,
+        1,
+        2,
+        1,
+        2,
+    )
 
 
 def test_a_row_shown_as_abnormal_but_kept_out_of_the_reading_now_carries_a_reason():
@@ -92,6 +105,28 @@ def test_a_row_shown_as_abnormal_but_kept_out_of_the_reading_now_carries_a_reaso
     from app.service.evidence_bridge import infer_abnormal_flag_for_metric
 
     assert infer_abnormal_flag_for_metric(metric) == "H"
+
+
+def test_a_normal_heavy_report_does_not_claim_rows_failed_to_be_read():
+    """一份「大部分正常」的报告，台账里的「未进入解读」不许把正常指标算进去。
+
+    这是患者可见的缺陷（评审指出）：`within_reference_range` 的语义是「判定过，在参考
+    区间内」—— **正常**。它若并入 `skipped`，页面会一边说「均在参考区间内」、一边说
+    「有 N 项未进入解读」，而 N 里大半是正常指标 —— 正是本次改动要消灭的那种自相矛盾。
+    """
+    rows = [
+        _row(id=1, metric_value="5.0"),  # 正常
+        _row(id=2, metric_value="5.2"),  # 正常
+        _row(id=3, metric_value="5.4"),  # 正常
+        _row(id=4, unit=None, evidence_text=None),  # 缺单位 —— 真的没进解读
+        _row(id=5),  # 进入解读
+    ]
+    counts = ledger(metric_reasons(rows))
+
+    assert counts.normal == 3, "三条正常指标要单独成一桶"
+    assert counts.skipped == 1, "只有真的没进解读的那一条算 skipped"
+    assert counts.skipped + counts.unmatched == 1, "页面那句「N 项未进入解读」的分子"
+    assert counts.total == 5
 
 
 def test_rows_that_have_not_been_assessed_carry_no_conclusion():
@@ -125,7 +160,14 @@ def test_the_ledger_has_no_field_other_than_the_counts():
     """台账只描述行数，不带时间戳或别的旁证。"""
     from app.schema.report import AdmissionLedger
 
-    assert set(AdmissionLedger.model_fields) == {"included", "skipped", "unmatched", "not_evaluated", "total"}
+    assert set(AdmissionLedger.model_fields) == {
+        "included",
+        "normal",
+        "skipped",
+        "unmatched",
+        "not_evaluated",
+        "total",
+    }
 
 
 # ── 响应级：两条形状都真的出域 ──────────────────────────────────────────────
@@ -171,6 +213,40 @@ def test_a_confirmed_report_carries_neither_conclusion_nor_ledger():
         session.close()
 
 
+def test_the_ledger_and_the_skipped_array_agree_when_the_catalog_re_resolves_a_row():
+    """目录在确认时不可用、评估时恢复：台账与被实际处理的那一行必须同口径。
+
+    这是两份形状最容易被做成分叉的地方 —— 门禁会用权威目录再裁决一次编码，而逐行
+    投影若只看落定的编码，那一行会一边被送进匹配、一边显示「没有可对应的编码」。台账
+    的 `unmatched` 会变成一个既不等于 `unmatched` 数组、也不等于 `skipped` 数组的
+    **第三个数**，读的人无法判断该信哪个。
+    """
+    import tests.test_report_confirmation as T
+    from app.api.report import _assess_report, _ordered_metrics, _report_response
+
+    # 确认那刻目录不可用 → 落定编码为空；评估时目录可用（catalog 由 fetch 提供）。
+    session, report = T._assessment_fixture(
+        metric_code=None, metric_name="空腹血糖", metric_value="6.5", evidence_text="空腹血糖 6.5 mmol/L 3.9-6.1"
+    )
+    with patch("app.api.report.match_published_evidence", return_value=T._evidence_result()):
+        asyncio.run(_assess_report(report, session))
+    session.refresh(report)
+    metrics = _ordered_metrics(session, report.id).all()
+
+    catalog = ["fasting_glucose"]
+    with_catalog = _report_response(report, metrics, catalog=catalog)
+    without_catalog = _report_response(report, metrics)
+    try:
+        # 目录可用：名称能解析出编码 → 这一行没有「没有编码」这个结论。
+        assert all(m.admission_reason != "unknown_metric_code" for m in with_catalog.metrics)
+        assert with_catalog.admission.unmatched == 0
+        # 目录不可用：不猜 —— 与门禁同一条规矩。
+        assert any(m.admission_reason == "unknown_metric_code" for m in without_catalog.metrics)
+        assert without_catalog.admission.unmatched == 1
+    finally:
+        session.close()
+
+
 def test_the_ledger_and_the_skipped_array_agree_on_what_was_skipped():
     """台账的 `skipped` 计数与 `skipped` 数组长度一致 —— 两份形状同源。"""
     session, response = _assessed_report(metric_code="fasting_glucose", metric_value="6.5")
@@ -200,6 +276,9 @@ fs.writeFileSync(path.join(outDir, 'result.json'), JSON.stringify({
   texts: cases.reasons.map((reason) => mod.admissionText(reason)),
   groups: mod.admissionGroups(cases.metrics),
   notable: cases.reasons.map((reason) => mod.notableAdmission(reason)),
+  notParsed: (cases.notParsed || []).map((m) => mod.valueNotParsed(m)),
+  valueReasons: (cases.notParsed || []).map((m) => mod.valueReasonOrNull(m)),
+  missingTexts: mod.missingTexts(cases.vocabulary || []),
 }));
 """
 
@@ -298,6 +377,18 @@ def test_groups_are_grouped_by_reason_and_never_mention_not_read_for_normal_rows
 
 @needs_node[0]
 @needs_node[1]
+@needs_node[0]
+@needs_node[1]
+def test_every_reason_in_the_server_vocabulary_has_a_sentence():
+    """词表里的每一个原因都必须有一句话。
+
+    少一个就会在界面上显示「原因未识别」—— 那不是兜底的兜底，是漏配。这条守卫让
+    「服务端加了新原因」变成一个**会红的测试**，而不是一句没人看见的文案。
+    """
+    result = _drive_frontend({"reasons": [], "metrics": [], "vocabulary": sorted(vocabulary())})
+    assert result["missingTexts"] == [], f"这些原因在 ADMISSION_TEXT 里没有对应文案：{result['missingTexts']}"
+
+
 def test_an_unknown_reason_falls_back_instead_of_guessing():
     """服务端加了新原因而前端还没跟上时：说「未进入解读」，不猜一个更具体的意思。
 
@@ -309,24 +400,75 @@ def test_an_unknown_reason_falls_back_instead_of_guessing():
     assert "数值" not in text and "参考范围" not in text
 
 
+@needs_node[0]
+@needs_node[1]
+def test_a_row_whose_value_cannot_be_parsed_cannot_default_to_confirmed():
+    """#129 的守卫：值解析不出一个数的行，默认**不能**是「确认」。
+
+    这一条必须在**评估之前**就生效，而那时服务端的准入结论还没有值（逐行
+    `admission_reason` 全是 `null`）—— 所以它只能由「值这一类」的服务端名字来判。
+    本票的改动一度丢掉了它（改成只看 `admission_reason`），这条断言就是那次回归的
+    护栏：它同时覆盖两个时机。
+    """
+    result = _drive_frontend(
+        {
+            "reasons": [],
+            "metrics": [],
+            "notParsed": [
+                # 评估之后：服务端说了名字 —— 多值（invalid_value）与还没解析（missing_value）。
+                {"admission_reason": "invalid_value", "abnormal_flag": "H"},
+                {"admission_reason": "missing_value", "abnormal_flag": "H"},
+                # 参考范围缺失**不**在此列：值本身正常，让人去修正数字是误导。
+                {"admission_reason": "missing_reference_range", "abnormal_flag": "H"},
+                # 正常行。
+                {"admission_reason": "within_reference_range", "abnormal_flag": "N"},
+                # 评估之前（准入结论为 null）：多值异常仍必须被拦下。
+                {"admission_reason": None, "abnormal_flag": "H", "metric_value": "3.87 4.00",
+                 "inferred_abnormal_flag": None},
+                # 评估之前、可解析的异常：不该被拦（否则患者被挡在一个完全能确认的指标前）。
+                {"admission_reason": None, "abnormal_flag": "H", "metric_value": "6.9",
+                 "inferred_abnormal_flag": "H"},
+                # 旧响应（字段缺失）：无从判断，保守不拦。
+                {"admission_reason": None, "abnormal_flag": "H", "metric_value": "3.87 4.00"},
+            ],
+        }
+    )
+    assert result["notParsed"] == [True, True, False, False, True, False, False], result["notParsed"]
+    # 「还没解析出来」与「不是一个数」在这一侧也要分开 —— 患者要做的动作不同。
+    assert result["valueReasons"] == [
+        "invalid_value",
+        "missing_value",
+        None,
+        None,
+        "invalid_value",
+        None,
+        None,
+    ], result["valueReasons"]
+
+
 # ── 静态守卫：前端不再自己推导 ──────────────────────────────────────────────
 
 
-def test_the_frontend_no_longer_derives_pending_or_excluded():
-    """前端不再从 `confirmation_status` 推出「待核对 / 已排除」。
+def test_the_frontend_never_derives_a_status_outside_the_one_synonym_helper():
+    """「待核对 / 已排除」只能由一个**同义**读取点产出，别处一律不得读原始状态。
 
-    那两句话现在由服务端的准入结论给出。守卫查的是**原始状态字段被读去推导展示状态**
-    这一件事 —— `confirmation_status` 仍可作为表单初值与请求载荷，所以只禁止它与
-    展示分支出现在同一处。
+    服务端的准入结论是那个问题的答案。前端仍需要在**评估之前**就显示患者自己的表态
+    （排除 / 尚未核对），那是同一个概念、同一个来源，所以它被集中在一个函数里并写明
+    理由 —— 而不是散在展示分支里各读一次。这条守卫禁止后者。
     """
-    source = (REPO_ROOT / "frontend" / "src" / "pages" / "Upload.jsx").read_text(encoding="utf-8")
-    code = "\n".join(line.split("//", 1)[0] for line in source.splitlines())
-    offenders = [
-        line.strip()
-        for line in code.splitlines()
-        if "confirmation_status" in line and ("=== 'excluded'" in line or "=== 'pending'" in line)
-    ]
-    assert not offenders, "展示状态不得从原始 confirmation_status 推导：" + "; ".join(offenders)
+    upload = (REPO_ROOT / "frontend" / "src" / "pages" / "Upload.jsx").read_text(encoding="utf-8")
+    code = "\n".join(line.split("//", 1)[0] for line in upload.splitlines())
+    assert "confirmation_status" not in code, (
+        "展示层不得直接读原始 confirmation_status；要读就走 admissionBeforeAssessment"
+    )
+
+    module = (REPO_ROOT / "frontend" / "src" / "admissionText.js").read_text(encoding="utf-8")
+    body = module[module.index("export function admissionBeforeAssessment") :]
+    body = body[: body.index("\n}")]
+    reads = [line.strip() for line in body.splitlines() if "confirmation_status" in line]
+    assert reads, "这个函数必须真的读 confirmation_status（否则守卫的锚点失效）"
+    # 每一处读取都必须是在**比对两个具体取值**，不是把原值原样用出去。
+    assert all("status ===" in line for line in reads), reads
 
 
 def test_the_summary_card_is_driven_by_the_server_ledger():

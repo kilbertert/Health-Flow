@@ -38,7 +38,10 @@ const SINGLE_VALUE = {
   evidence_text: 'Triglyceride 三酸甘油酯 1.05 mmol/L (<1.70)',
 };
 
-const MARKER = '数值无法识别为单个数字';
+// 服务端给这条值的名字（`admission.value_reason` → 准入词表）是 `invalid_value`，
+// 界面把它说成一句患者能懂的话。旧的「数值无法识别为单个数字」把「多值」与
+// 「参考范围缺失」压成同一句，后者让患者去修正一个没有毛病的数字（#184）。
+const MARKER = '数值不是一个数（如多值或带符号），需要修正';
 
 function json(route, body) {
   return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
@@ -119,7 +122,7 @@ test('显式把多值行改成确认也被挡下，并说明该怎么办', async
   await page.locator('.ant-select-item-option').filter({ hasText: '确认' }).first().click();
 
   await page.getByRole('button', { name: '确认并生成健康提示' }).click();
-  await expect(page.getByText(/无法识别为单个数字.*请「修正」为单个数值或「排除」/)).toBeVisible();
+  await expect(page.getByText(/项未进入解读.*请「修正」或「排除」/)).toBeVisible();
   expect(confirmed).toBe(false);
 });
 

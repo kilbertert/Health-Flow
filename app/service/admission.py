@@ -25,6 +25,7 @@ from typing import Any
 
 from app.service.admission_vocabulary import (
     ADMITTED_STATUSES,
+    NORMAL_REASONS,
     NOT_EVALUATED_REASONS,
     SKIPPED_REASONS,
     UNMATCHED_REASONS,
@@ -158,24 +159,33 @@ def admission_reason(
 
 @dataclass(frozen=True)
 class AdmissionTally:
-    """一整份报告的行数台账：每一行**恰好**归一类，且三类相加等于已解析行数。"""
+    """一整份报告的行数台账：每一行**恰好**归一类，四类相加等于已解析行数。
+
+    `normal` 单列是有理由的，不是把 `skipped` 拆细：`within_reference_range` 的语义是
+    「判定过，在参考区间内」—— **正常**。它与「没能进入解读」是两回事，患者侧的说法也
+    必须不同（服务端在同一张卡片上会说「均在参考区间内」）。把它并进 `skipped` 会让
+    「有 N 项未进入解读」把每一条正常指标都算进去，而那正是本次改动要消灭的矛盾。
+    """
 
     included: int
+    normal: int
     skipped: int
     unmatched: int
     not_evaluated: int
 
     @property
     def total(self) -> int:
-        return self.included + self.skipped + self.unmatched + self.not_evaluated
+        return self.included + self.normal + self.skipped + self.unmatched + self.not_evaluated
 
 
 def tally(reasons: list[str | None]) -> AdmissionTally:
     """把逐行的准入结论汇成台账。``None`` 计入 ``included``。"""
-    counters = {"included": 0, "skipped": 0, "unmatched": 0, "not_evaluated": 0}
+    counters = {"included": 0, "normal": 0, "skipped": 0, "unmatched": 0, "not_evaluated": 0}
     for reason in reasons:
         if reason is None:
             counters["included"] += 1
+        elif reason in NORMAL_REASONS:
+            counters["normal"] += 1
         elif reason in SKIPPED_REASONS:
             counters["skipped"] += 1
         elif reason in UNMATCHED_REASONS:

@@ -166,6 +166,9 @@ class AdmissionLedger(BaseModel):
     """
 
     included: int = 0
+    # 「判定过，在参考区间内」—— **正常**，不是「没能进入解读」。单列是为了让患者侧的
+    # 「有 N 项未进入解读」不把每一条正常指标算进去（那正是本次改动要消灭的矛盾）。
+    normal: int = 0
     skipped: int = 0
     unmatched: int = 0
     not_evaluated: int = 0

@@ -1,4 +1,11 @@
-import { admissionGroups, admissionText, notableAdmission } from '../admissionText';
+import {
+  admissionBeforeAssessment,
+  admissionGroups,
+  admissionText,
+  notableAdmission,
+  valueNotParsed,
+  valueReasonOrNull,
+} from '../admissionText';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { reportStatusColor, reportStatusLabel } from '../reportStatus.js';
 import {
@@ -194,6 +201,10 @@ export function displayFlag(metric) {
   if (inferred !== undefined && inferred !== null) return inferred;
   const raw = metric?.abnormal_flag;
   if (inferred === null) {
+    // 评估之前：患者已经做过的表态（排除 / 尚未核对）也要如实显示，不该等到评估
+    // 之后才出现。这条**同义**映射由 `admissionText.js` 单点持有 —— 见那里的说明。
+    const preAssessment = admissionBeforeAssessment(metric);
+    if (preAssessment) return preAssessment;
     // 判不出来，但模型宣称异常 —— 交患者核对（这正是 #129 要保住的场景）。
     if (isAbnormal(raw)) return '待核对';
     // 其余判不出来的行（如模型标 N、或没有参考范围）如实显示原始标记：
@@ -212,7 +223,12 @@ function initialDecision(metric) {
   //
   // 判据是服务端的结论，不是本地对 `inferred_abnormal_flag` 的解读：那两件事在
   // 「参考范围缺失」上会分叉 —— 值完全正常，只是判不了，而去修正数值救不了它。
-  if (notableAdmission(metric?.admission_reason)) return 'pending';
+  //
+  // 两条合起来覆盖两个时机：**评估之后**看服务端的准入结论（那时它才有值）；
+  // **评估之前**（确认页面对的就是这个状态）只能看「值解析不出一个数」这一条 ——
+  // 见 `valueNotParsed` 的说明，那是 #129 的守卫，它必须在这里、也必须只用同一个
+  // 问题的服务端名字。
+  if (notableAdmission(metric?.admission_reason) || valueNotParsed(metric)) return 'pending';
   if ((flag === 'H' || flag === 'L') && metric?.evidence_text && metric?.page_number) return 'confirmed';
   if (flag === 'H' || flag === 'L') return 'pending';
   return flag === '待核对' ? 'pending' : 'excluded';
@@ -254,8 +270,8 @@ function MetricCard({ metric, draft, metricCatalog, disabled, onUpdateDraft, onO
           {abnormalTag(displayFlag(metric))}
           {/* 服务端说这一行没进解读时，如实说**它的原因**，而不是等它被后端悄悄
               丢掉、或拿「数值无法识别」一句盖住四种不同的事实。 */}
-          {notableAdmission(metric.admission_reason) && (
-            <Tag color="orange">{admissionText(metric.admission_reason)}</Tag>
+          {chipReason(metric) && (
+            <Tag color="orange">{admissionText(chipReason(metric))}</Tag>
           )}
         </button>
         {/* 确认页与报告单一致：定位缺失时不再是沉默的「没有按钮」——
@@ -436,6 +452,20 @@ function evidenceAlertType(hasFindings, hasUnmatched) {
 }
 
 
+/** 指标旁那一枚橙色标签要说的话，或 `null`（这一行没有什么要说的）。
+ *
+ * 两个来源，都是服务端的名字：已有准入结论时用它；还没评估时（确认页）用
+ * `valueReasonOrNull` —— 那时唯一确定的事实就是「值解析不出一个数」，而它同样是
+ * `admission.parse_reference_range` / `value_reason` 那条路上的一个名字。
+ *
+ * 「在参考区间内」不在此列：它是正常。
+ */
+export function chipReason(metric) {
+  const reason = metric?.admission_reason;
+  if (reason && notableAdmission(reason)) return reason;
+  return valueReasonOrNull(metric);
+}
+
 /** 报告级台账 → 患者能读懂的分行说明。
  *
  * 台账是服务端算好的四类行数，所以这些话与卡片上方的摘要**同源**：摘要说「均在参考
@@ -445,6 +475,8 @@ function evidenceAlertType(hasFindings, hasUnmatched) {
 export function admissionLines(ledger) {
   if (!ledger) return [];
   const lines = [];
+  // `skipped` 这一桶在服务端**已经排除了**「在参考区间内」（那一桶是 `normal`），
+  // 所以这句话不会把正常指标算进去 —— 它与卡片上方的摘要同源。
   if (ledger.skipped > 0 || ledger.unmatched > 0) {
     lines.push({
       key: 'not-read',
@@ -667,9 +699,9 @@ function EvidenceSummaryCard({ result, admissionLedger = null, onOpenSource }) {
       {/* 逐条按**原因**说，不再把七个原因压成四个词、也不再把它与「正常」混在一起。
           这里读的是报告级台账（服务端算好的四类行数），不是 `skipped` 数组的长度：
           「尚未核对」「患者已排除」两类不在 `skipped` 里，而它们同样需要一句说明。 */}
-      {admissionLines(ledger).length > 0 && (
+      {admissionLines(admissionLedger).length > 0 && (
         <div style={{ margin: '12px 0 0' }}>
-          {admissionLines(ledger).map((line) => (
+          {admissionLines(admissionLedger).map((line) => (
             <Typography.Paragraph key={line.key} type="secondary" style={{ margin: 0 }}>
               {line.text}
             </Typography.Paragraph>
@@ -1068,8 +1100,11 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
     // 显式选了「确认」但值仍是多值/带符号的行：接受它就等于接受一次**静默丢弃**。
     // 后端要求恰好一个数，这种值它会连行一起丢掉（reason=invalid_value），
     // 而用户会以为已经确认过了。挡在这里，明确要求修正或排除。
+    // 这一处**不能**只看准入结论：走到这里的是确认动作，而那时报告还没评估
+    // （准入结论全是 `null`）。#129 要保住的正是这个时机 —— 患者把一个多值行显式选了
+    // 「确认」，而后端会连行丢掉。所以这里用同一条不依赖评估的判据。
     const unusable = (result.metrics || []).filter(
-      (metric) => decisionOf(metric) === 'confirmed' && notableAdmission(metric.admission_reason),
+      (metric) => decisionOf(metric) === 'confirmed' && valueNotParsed(metric),
     );
     if (unusable.length > 0) {
       // 按**原因**分组说，不再把四种事实压成一句「数值无法识别为单个数字」——
@@ -1152,8 +1187,8 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
         <Space size={4} wrap>
           {abnormalTag(displayFlag(record))}
           {/* 表形态下同样要标出来——这是桌面端默认视图 */}
-          {notableAdmission(record.admission_reason) && (
-            <Tag color="orange">{admissionText(record.admission_reason)}</Tag>
+          {chipReason(record) && (
+            <Tag color="orange">{admissionText(chipReason(record))}</Tag>
           )}
         </Space>
       ),

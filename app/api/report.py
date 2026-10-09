@@ -7,6 +7,7 @@ import hmac
 import json
 import logging
 import math
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -588,10 +589,11 @@ def _report_response(
     metrics: list[MetricModel],
     *,
     owned_by_account: bool = False,
+    catalog: Iterable[str] | None = None,
 ) -> MedicalReportResponse:
     extraction_job = getattr(report, "extraction_job", None)
     assessed = has_conclusion(report.status)
-    pairs, ledger = admission_shapes(metrics, assessed=assessed)
+    pairs, ledger = admission_shapes(metrics, assessed=assessed, catalog=catalog)
     return MedicalReportResponse(
         id=report.id,
         patient_id=report.patient_id,
@@ -905,7 +907,9 @@ async def _assess_report(
     db.commit()
     db.refresh(report)
     metrics = _ordered_metrics(db, report.id).all()
-    return _report_response(report, metrics, owned_by_account=owned_by_account)
+    # 把**这次评估用的**目录传下去：准入台账必须与门禁做过的裁决同一口径，否则
+    # 「确认那刻目录不可用、评估时目录恢复」的行会一边被送进匹配、一边显示「没有编码」。
+    return _report_response(report, metrics, owned_by_account=owned_by_account, catalog=catalog)
 
 
 @router.get("/report/{report_id}/recommendations", response_model=RecommendationResponse)

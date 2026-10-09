@@ -20,23 +20,35 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 from app.schema.report import AdmissionLedger
 from app.service.admission import admission_reason, tally
 from app.service.admission_vocabulary import ADMITTED_STATUSES
+from app.service.evidence_bridge import resolve_metric_code
 
 
-def metric_reasons(metrics: list[Any]) -> list[str | None]:
+def metric_reasons(metrics: list[Any], *, catalog: Iterable[str] | None = None) -> list[str | None]:
     """逐行的准入结论，顺序与输入一致。``None`` = 服务端没有拦下这一行。
 
-    编码直接取行上**落定的**那一个（`metric_code`）。落定为空的行在这里得到
-    `unknown_metric_code`，而评估时的门禁会用权威目录再裁决一次 —— 两者可能不同
-    （确认那刻目录不可用时的降级路径）。这个差异是**有意的**：逐行结论回答的是
-    「这次评估里它进没进解读」，而它进没进由门禁那一刻的裁决决定，不是由后来目录
-    恢复与否决定。所以这个字段在评估之后才有意义，`assessed_at` 为空时前端不读它。
+    编码的解析规则与证据门禁**一致**（`resolve_metric_code`）：落定的编码优先，为空时
+    在权威目录**可用**的前提下重新裁决一次。传 ``catalog=None`` 时（目录不可用的降级
+    路径）不猜 —— 与门禁同一条规矩。
+
+    为什么要与门禁用同一条规则：两份形状回答的是同一个问题（「这一行进没进解读」），
+    规则一旦分叉，台账的 `unmatched` 会成为一个既不等于 `unmatched` 数组、也不等于
+    `skipped` 数组的**第三个数** —— 读的人无法判断该信哪个。此前这里只看落定的编码，
+    于是「确认那刻目录不可用、评估时目录恢复」的行会同时显示「没有可对应的编码」并被
+    实际送进了匹配。
     """
-    return [admission_reason(metric, code=getattr(metric, "metric_code", None)) for metric in metrics]
+    reasons: list[str | None] = []
+    for metric in metrics:
+        code = getattr(metric, "metric_code", None)
+        if not code and catalog is not None:
+            code = resolve_metric_code(getattr(metric, "metric_name", "") or "", catalog)
+        reasons.append(admission_reason(metric, code=code))
+    return reasons
 
 
 def ledger(reasons: list[str | None]) -> AdmissionLedger:
@@ -50,6 +62,7 @@ def ledger(reasons: list[str | None]) -> AdmissionLedger:
     counts = tally(reasons)
     return AdmissionLedger(
         included=counts.included,
+        normal=counts.normal,
         skipped=counts.skipped,
         unmatched=counts.unmatched,
         not_evaluated=counts.not_evaluated,
@@ -57,14 +70,16 @@ def ledger(reasons: list[str | None]) -> AdmissionLedger:
     )
 
 
-def metrics_with_reasons(metrics: list[Any], *, assessed: bool) -> list[tuple[Any, str | None]]:
+def metrics_with_reasons(
+    metrics: list[Any], *, assessed: bool, catalog: Iterable[str] | None = None
+) -> list[tuple[Any, str | None]]:
     """给逐行契约用：``(数据库行, 准入结论)`` 的配对。
 
     只在 ``assessed`` 时给结论 —— 「还没评估」与「进入了解读」是两个不同的答案，
     而逐行字段只有一个 `None` 能表达「没有拦下」。区分它们的责任在报告级台账上，
     所以这里不硬塞一个词进去。
     """
-    reasons = metric_reasons(metrics) if assessed else [None] * len(metrics)
+    reasons = metric_reasons(metrics, catalog=catalog) if assessed else [None] * len(metrics)
     return list(zip(metrics, reasons, strict=True))
 
 
@@ -72,6 +87,7 @@ def admission_shapes(
     metrics: list[Any],
     *,
     assessed: bool,
+    catalog: Iterable[str] | None = None,
 ) -> tuple[list[tuple[Any, str | None]], AdmissionLedger | None]:
     """一次给出两份出域形状：逐行结论与报告级台账。
 
@@ -82,7 +98,7 @@ def admission_shapes(
     逐行结论同理：那时没有任何结论可言，写一个 `pending` 会把「患者还没核对那一行」
     与「整份报告还没评估」混成同一个词。
     """
-    pairs = metrics_with_reasons(metrics, assessed=assessed)
+    pairs = metrics_with_reasons(metrics, assessed=assessed, catalog=catalog)
     if not assessed:
         return pairs, None
     return pairs, ledger([reason for _, reason in pairs])

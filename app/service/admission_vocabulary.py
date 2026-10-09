@@ -86,6 +86,12 @@ ADMITTED_STATUSES: frozenset[str] = frozenset({"confirmed", "corrected"})
 # `Literal[*X]` 是 Python 3.11+ 的写法；CI 与部署都钉在 3.13。
 AdmissionReasonLiteral = Literal[*SKIPPED_REASONS_ORDERED, *UNMATCHED_REASONS_ORDERED, *NOT_EVALUATED_ORDERED]
 
+# 这些原因是「判定过，在参考区间内」—— **正常**，不是「没能进入解读」。它们必须从
+# 「未进入解读」那类说法里排除，否则每一份报告都会说「有 N 项未进入解读」而 N 里
+# 大半是正常指标，与同一张卡片上方的摘要直接矛盾。
+NORMAL_REASONS_ORDERED: tuple[str, ...] = ("within_reference_range",)
+NORMAL_REASONS: frozenset[str] = frozenset(NORMAL_REASONS_ORDERED)
+
 
 def vocabulary() -> frozenset[str]:
     """词表的全部取值。供守卫使用：它必须与各子集的并集完全相等。"""

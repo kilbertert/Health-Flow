@@ -14,6 +14,29 @@
 //      把七个原因压成四个词，并把 `within_reference_range`（在参考区间内，即「正常」）
 //      也说成「未进入匹配」—— 与同一张卡片上方刚说过的「均在参考区间内」直接矛盾。
 
+/**
+ * 评估**之前**的准入状态，或 `null`（没有能同义读出的）。
+ *
+ * 服务端的准入结论要等评估之后才有（那时才写进 `admission_reason`），但有两个状态是
+ * 患者**自己**的表态，不该等到评估之后才显示：
+ *
+ * - `excluded` —— 患者明确排除；
+ * - `pending` —— 还没核对。
+ *
+ * 这里读的是 `confirmation_status` 的两个值，而它们与该状态**同义**（同一个概念、
+ * 同一个来源：患者自己的表态，记录在唯一的那个列上），不是第二处判定。这正是为什么
+ * 它必须**只在这里**：`app/service/admission.py` 对同一行的结论就是这两个词，两个方向
+ * 翻的是同一份词表。
+ *
+ * 与 `valueReasonOrNull` 的分工：那一条回答「值用不用得了」（与确认状态无关）；这一条
+ * 回答「患者对这条表过什么态」。
+ */
+export function admissionBeforeAssessment(metric) {
+  if (metric?.confirmation_status === 'excluded') return 'excluded';
+  if (metric?.confirmation_status === 'pending') return '待核对';
+  return null;
+}
+
 /** 原因 → 患者可见的一句话。键与 `app/service/admission_vocabulary.py` 的词表一致。 */
 export const ADMISSION_TEXT = Object.freeze({
   // 尚未核对、患者已排除：两种显式的准入结论。
@@ -35,16 +58,67 @@ export const ADMISSION_TEXT = Object.freeze({
   no_published_knowledge_card: '暂无已审核的关联知识卡',
 });
 
-/** 这些原因属于「正常」，不属于「没能解读」—— 与摘要口径必须一致。 */
+/** 这些原因属于「正常」，不属于「没能解读」—— 与摘要口径必须一致。
+ *
+ * 与后端 `admission_vocabulary.NORMAL_REASONS` 同一份口径：台账把这一桶单列，所以
+ * 患者侧的「有 N 项未进入解读」不会把每一条正常指标算进去。 */
 export const NORMAL_REASONS = Object.freeze(['within_reference_range']);
 
-/** 这些原因属于「患者自己的决定」，不是缺陷。 */
-export const PATIENT_DECISION_REASONS = Object.freeze(['excluded', 'pending']);
+/**
+ * 值这一类原因的**子集**：它们说「这个值还没被解析成一个数」。
+ *
+ * 这是 #129 的守卫所依赖的那两条：多值/带符号的值会被后端整行丢掉，而界面若默认
+ * 「确认」，患者会以为它参与了解读（报告 44 的三个异常项就是这么消失的）。
+ *
+ * 「参考范围缺失」**不在**此列：它的值完全正常，让人去修正数字是误导 —— 这一条的区别
+ * 正是本次改动要修的东西。
+ */
+export const VALUE_UNPARSED_REASONS = Object.freeze(['missing_value', 'invalid_value']);
+
+/**
+ * 这一行为什么「值用不了」，或 `null`（值没问题 / 无从判断）。
+ *
+ * **两个时机各有来源，都不是新规则**：
+ *
+ * 1. 服务端已经给出准入结论时（报告 `assessed`），直接读它。
+ * 2. 还没有结论时（确认页面对的就是这个状态 —— 那时每一行的 `admission_reason` 都是
+ *    `null`），用服务端给出的**异常判定**反推同一件事：判定为空**且**模型宣称它异常，
+ *    这条值就解析不出一个数。空值与多值在这里分开说，因为患者要做的事不同。
+ *
+ * 为什么确认页不能只信准入结论：准入结论要等评估之后才有，而确认页必须**在提交之前**
+ * 就说明白（#129 的核心）。所以这一段判定留在前端，但用的是**同一个问题的服务端名字**
+ * —— 不是第二套解析规则（旧代码在这里复刻过一遍数值与范围解析，那才是要消灭的东西）。
+ */
+export function valueReasonOrNull(metric) {
+  const reason = metric?.admission_reason;
+  if (reason) return VALUE_UNPARSED_REASONS.includes(reason) ? reason : null;
+  if (reason !== null && reason !== undefined) return null;
+  if (metric?.inferred_abnormal_flag === undefined) return null; // 旧响应：无从判断
+  if (metric.inferred_abnormal_flag !== null) return null;
+  if (!isAbnormalLike(metric?.abnormal_flag)) return null;
+  return String(metric?.metric_value ?? '').trim() === '' ? 'missing_value' : 'invalid_value';
+}
+
+/** 这一行值用不了吗（见 `valueReasonOrNull`）。 */
+export function valueNotParsed(metric) {
+  return valueReasonOrNull(metric) !== null;
+}
+
+/** 与 `abnormalTag` 同源的原始标记判定（`Upload.jsx` 的 `isAbnormal` 只认大写，
+ * 这里对全角/小写一视同仁 —— 抽取模型两种写法都产出过）。 */
+function isAbnormalLike(flag) {
+  return ['H', 'HIGH', '高', 'L', 'LOW', '低', 'A', '*'].includes(String(flag || '').toUpperCase());
+}
 
 /** 服务端没给结论（`null` / `undefined`）：进入解读，或这份报告还没评估。 */
 export function admissionText(reason) {
   if (reason === null || reason === undefined || reason === '') return null;
   return ADMISSION_TEXT[reason] ?? '未进入解读（原因未识别）';
+}
+
+/** 词表里的每一个原因都必须有一句话 —— 缺一个就会在界面上显示「原因未识别」。 */
+export function missingTexts(reasons) {
+  return (reasons || []).filter((reason) => !(reason in ADMISSION_TEXT));
 }
 
 /** 这一行的结论是不是「正常」。（不是「没能解读」，也不是缺陷。） */
