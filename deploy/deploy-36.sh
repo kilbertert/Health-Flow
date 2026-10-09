@@ -278,7 +278,7 @@ step_failed() { echo "mutate-failed=\$1"; mutate_rc=1; }
 #
 # **Can't build a rollback point ⇒ don't write.** That is the whole rule, and it is why
 # the missing-frontend case is a refusal rather than a proceed. The earlier shape had
-# `if [ -d frontend ]` around the backup and then swapped a directory in regardless —
+# 'if [ -d frontend ]' around the backup and then swapped a directory in regardless —
 # so a host with no frontend deployed, failed its self-check, and entered recovery with
 # no backup, where the only thing it could do was leave an **empty** directory behind.
 # The failure mode was worse than not deploying, and the log said only
@@ -299,6 +299,12 @@ echo "backup=\$BACKUP"
 
 rm -rf "$STAGE_DIR" && mkdir -p "$STAGE_DIR" || step_failed "prepare-stage"
 tar xzf "$REMOTE_TARBALL" -C "$STAGE_DIR" || step_failed "extract"
+
+# The extract runs as root and carries the archive's own modes, so the wheel ends up
+# unreadable to the service identity — measured: pip then fails with "Permission denied"
+# and the deploy rolls back. The frontend keeps its modes because it is copied with
+# -a into a tree that gets chowned anyway.
+chmod -R a+rX "$STAGE_DIR" 2>/dev/null || true
 
 # ---- 内容一致性：解出来的前端必须逐字节等于本机构建输出 ----
 if [ "\$mutate_rc" = "0" ]; then
@@ -336,12 +342,12 @@ fi
 #
 # 'pip check' is what makes that assumption **checkable** rather than merely stated.
 # Without it a commit that adds a runtime dependency installs cleanly, the self-check
-# can still pass (whenever the new code path is not on `/ready`), and the missing
+# can still pass (whenever the new code path is not on '/ready'), and the missing
 # package surfaces as a production 500 in the new feature. It is a real gate here and
 # not a formality: it exits nonzero the moment the venv and the wheel disagree.
 if [ "\$mutate_rc" = "0" ]; then
   runuser -u health-flow -- "$APP_ROOT/.venv/bin/pip" install \
-      --quiet --no-deps --force-reinstall "$STAGE_DIR/$(basename "$WHEEL")" \
+      --quiet --no-deps --force-reinstall "$STAGE_DIR/pkg/$(basename "$WHEEL")" \
     || step_failed "pip-install"
   runuser -u health-flow -- "$APP_ROOT/.venv/bin/pip" check \
     || step_failed "pip-check"
@@ -429,13 +435,13 @@ echo "ready-status=\$(ready_field status)"
 echo "report_provider=\$(ready_field report_provider)"
 echo "account_auth=\$(ready_field account_auth)"
 echo "live-asset-sha=\$(live_asset_sha)"
-# Restore to a temp directory and swap it in, rather than `rm -rf` then extract. The
-# `rm -rf first` shape has no recovery if the extract fails: the live frontend is already
+# Restore to a temp directory and swap it in, rather than 'rm -rf' then extract. The
+# 'rm -rf first' shape has no recovery if the extract fails: the live frontend is already
 # gone and the replacement is half-written. Building beside the target and moving keeps
 # the running tree in place until there is something to move onto it — the same shape as
 # the forward path's directory swap, for the same reason.
 #
-# `frontend.broken` is deliberately kept: it is what was live when the self-check failed,
+# 'frontend.broken' is deliberately kept: it is what was live when the self-check failed,
 # which is the first thing anyone investigating wants. Each rollback overwrites the
 # previous one, so it cannot accumulate.
 restore_ok=0
@@ -458,8 +464,8 @@ fi
 if [ "\$restore_ok" = "1" ]; then
   # The marker is restored to what was live **before** this deploy — and that includes
   # the case where nothing was: an absent marker must come back absent. Writing the
-  # target sha there instead would make the next run read `prev == TARGET_SHA`, print
-  # `state=no-change`, and skip the retry entirely — pinning a revision that failed its
+  # target sha there instead would make the next run read 'prev == TARGET_SHA', print
+  # 'state=no-change', and skip the retry entirely — pinning a revision that failed its
   # self-check as the live one, with CI green on every subsequent merge. That is the
   # exact failure this idempotence block exists to prevent, inverted.
   if [ -n "\$prev" ]; then
