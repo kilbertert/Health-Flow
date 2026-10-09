@@ -390,6 +390,7 @@ def test_the_remote_block_contains_no_backticks() -> None:
     )
 
 
+@needs_topology
 def test_the_remote_block_paths_exist_inside_the_artifact(tmp_path: Path) -> None:
     """远端块里引用的**块内路径**必须真的在产物里。
 
