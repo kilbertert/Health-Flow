@@ -493,6 +493,32 @@ def test_transfer_refuses_a_payload_that_does_not_match_the_declared_identity() 
 
 
 @needs_topology
+@needs_topology
+def test_a_run_leaves_no_worktree_registration_behind() -> None:
+    """跑完不能留下 worktree 登记。
+
+    worktree 是**仓库里的登记**，不只是目录。跑完不注销，登记就比目录活得久，之后每次
+    `git worktree list` 都带着一条悬挂项 —— 那是审计违规，而且会把真正的违规埋掉。
+    实测：本脚本的第一版在自己的测试里漏了 55 条。
+
+    断言的是「登记数在一次运行前后相同」，不是「目录被删了」：`--dry-run` 刻意保留暂存
+    目录，登记的注销与它无关。
+    """
+    def registrations() -> int:
+        return len(
+            subprocess.run(
+                ["git", "worktree", "list"], cwd=REPO_ROOT,
+                capture_output=True, text=True, check=True,
+            ).stdout.strip().splitlines()
+        )
+
+    before = registrations()
+    result = _run_script(dict(os.environ), "--commit", TARGET_SHA, "--dry-run")
+    assert result.returncode == 0, result.stderr
+    assert registrations() == before, "跑了 dry-run 之后多出了 worktree 登记"
+
+
+@needs_topology
 def test_rollback_to_is_the_same_path_as_commit(host: _FakeHost) -> None:
     """应急回滚与自动部署共用同一个脚本、同一条路径。
 

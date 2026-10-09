@@ -91,13 +91,30 @@ REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 cd "$REPO_ROOT"
 
 STAGE=$(mktemp -d)
+
+# The frontend is built from the target commit's tree via a scratch worktree, and a
+# worktree is a **registration in the repository**, not just a directory. If the run
+# ends without unregistering it, the registration outlives the directory and every
+# later `git worktree list` carries a dangling entry — an audit violation, and noise
+# that buries a real one. Measured: the first version of this script leaked 55 of
+# them across its own test runs. So registration is paired with this trap from the
+# moment it can happen.
+FRONTEND_WT="$STAGE/src"
+cleanup_worktree() {
+  if [ -e "$FRONTEND_WT/.git" ]; then
+    git worktree remove --force "$FRONTEND_WT" >/dev/null 2>&1 || true
+  fi
+  git worktree prune >/dev/null 2>&1 || true
+}
+
 # `--dry-run` keeps its scratch tree: it prints the artifact path so the caller can
 # hash the very payload whose identity it declares, and a test that consumes the
-# seam cannot do that if the seam deletes its own output on exit.
+# seam cannot do that if the seam deletes its own output on exit. It still prunes the
+# worktree registration — that is metadata in the repository, not the scratch tree.
 if [ "${DRY_RUN:-0}" = "1" ]; then
-  trap 'printf "%s\n" "（--dry-run：暂存目录保留在 $STAGE）" >&2' EXIT
+  trap 'cleanup_worktree; printf "%s\n" "（--dry-run：暂存目录保留在 $STAGE）" >&2' EXIT
 else
-  trap 'rm -rf "$STAGE"' EXIT
+  trap 'cleanup_worktree; rm -rf "$STAGE"' EXIT
 fi
 
 # ── 0. 环境前置检查 ─────────────────────────────────────────────────────────
@@ -162,8 +179,8 @@ WHEEL=$(ls "$BUILD/pkg"/*.whl)
 
 # The frontend build must come from the target commit's tree, so check out that
 # tree into a scratch worktree rather than building whatever is on disk.
+# (`FRONTEND_WT` itself is defined above, next to the trap that unregisters it.)
 info "前端（从 $SHORT_SHA 的树构建）"
-FRONTEND_WT="$STAGE/src"
 git worktree add --detach --quiet "$FRONTEND_WT" "$FULL_SHA"
 ( cd "$FRONTEND_WT/frontend" && npm ci --silent && npm run build >/dev/null )
 FRONTEND_DIST="$FRONTEND_WT/frontend/dist"
