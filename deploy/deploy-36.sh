@@ -101,10 +101,17 @@ STAGE=$(mktemp -d)
 # moment it can happen.
 FRONTEND_WT="$STAGE/src"
 cleanup_worktree() {
-  if [ -e "$FRONTEND_WT/.git" ]; then
-    git worktree remove --force "$FRONTEND_WT" >/dev/null 2>&1 || true
-  fi
-  git worktree prune >/dev/null 2>&1 || true
+  # `git worktree remove` **要能跑**才跑：它相对**当前目录**解析仓库，而脚本在
+  # `--dry-run` 之下会把调用方的 cwd（测试临时目录）留在身边 —— 在那里执行会得到
+  # 「not a working tree」，登记留在仓库里（实测：一套测试跑完漏了 3 条，而这条
+  # 清理**看起来**执行过了）。
+  #
+  # 两段都从 $REPO_ROOT 出发，并用 `-C` 而不是 `cd`：脚本已经把 cwd 改到仓库根了，
+  # 但清理函数不该依赖「谁在什么时候调用它」。
+  git -C "$REPO_ROOT" worktree remove --force "$FRONTEND_WT" >/dev/null 2>&1 || true
+  # `prune` 是**兜底**：`remove` 失败时（目录已被删、或上面那条路径问题）它按
+  # `gitdir` 文件清理那些指向已不存在目录的登记。两者都失败才是真漏。
+  git -C "$REPO_ROOT" worktree prune >/dev/null 2>&1 || true
 }
 
 # `--dry-run` keeps its scratch tree: it prints the artifact path so the caller can

@@ -67,10 +67,17 @@ def test_confirmed_row_uses_the_model_values_it_was_confirmed_with():
     assert effective.source == "confirmed"
 
 
-def test_pending_row_uses_the_extracted_values():
+def test_undecided_row_uses_the_model_values_and_says_so():
+    """还没处理的行：值是模型抽取值，而来源**就是那个决策的名字**。
+
+    这里曾经断言 `"extracted"` —— 而 `pending` 与 `extracted` 是同一条事实的两个名字
+    （#191 的核心）。现在 `source` 与 `confirmation_status` 共用一份词表，所以按来源分支
+    就是按决策分支，写不出两份实现。
+    """
     effective = effective_value(_metric())
     assert effective.value == "6.5"
-    assert effective.source == "extracted"
+    assert effective.source == "pending"
+    assert effective.source == _metric().confirmation_status
     assert effective.is_decidable
 
 
