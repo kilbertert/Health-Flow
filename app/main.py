@@ -14,6 +14,11 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import get_settings
+from app.config_freshness import (
+    FRESHNESS_STALE,
+    config_freshness,
+    process_started_at,
+)
 from app.data.mysql_client import get_mysql_client
 from app.service.report_ownership import UNOWNED_SENTINEL, report_owner_kind
 from app.service.tickets import TicketError, build_verifier
@@ -144,9 +149,25 @@ async def readiness_check():
     production = settings.APP_ENV.casefold() in {"prod", "production"}
     mall_status = "configured" if configured else ("unconfigured" if not production else "missing")
 
+    # `report_provider: configured` 只说明键**存在**。它对**不可用**的键一无所知，
+    # 也对「这份键比磁盘上的旧」一无所知 —— 2026-10-10 的事故里，本进程一直报 configured，
+    # 而报告在全部失败（#201）。所以再加一个「已加载的配置是否仍等于磁盘」的信号。
+    #
+    # 它不替代机制：让读者必然重读的是 unit 上的 PartOf= 与 .path 监听。这里只是让
+    # **机制失效**时可见（restart 失败、或操作者手停了服务）。
+    #
+    # 只有 `stale` 降级，`unknown` 不降级 —— 这条区别是刻意的：`stale` 是一个**正向观测到
+    # 的事实**（文件比进程新），而 `unknown` 只是「我这里没被告知是哪份文件」。把 unknown
+    # 也当警报会产生一个部署顺序陷阱：unit 的安装是 PR 合并之后的操作者步骤，而合并就会
+    # 触发部署 —— 若 unknown 降级，那次部署会因为自检失败而回滚，于是「装 unit 之前先别
+    # 合并」成了一条没人写下来的规则。反过来，stale 检测不依赖 .path 是否装好：文件一动就
+    # 会被看出来，所以 unknown 不需要当警报。
+    freshness, config_changed_at = config_freshness(settings.HEALTHFLOW_ENV_FILE)
+    started = process_started_at()
     core_ready = db_ok and evidence_configured and provider_configured
+    degraded = not core_ready or mall_status == "missing" or freshness == FRESHNESS_STALE
     return {
-        "status": "degraded" if (not core_ready or mall_status == "missing") else "ready",
+        "status": "degraded" if degraded else "ready",
         "database": "ok" if db_ok else "unavailable",
         "evidence_service": "configured" if evidence_configured else "unconfigured",
         "mall_goods": mall_status,
@@ -154,6 +175,9 @@ async def readiness_check():
         "report_owner": report_owner,
         "account_auth": "required" if settings.report_account_required else "optional",
         "report_model": settings.VLLM_MODEL if provider_configured else "unconfigured",
+        "config_freshness": freshness,
+        "config_file_changed_at": config_changed_at.isoformat() if config_changed_at else None,
+        "process_started_at": started.isoformat() if started else None,
     }
 
 

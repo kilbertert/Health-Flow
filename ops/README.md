@@ -76,5 +76,16 @@ systemctl --user restart health-flow             # after changing the frontend b
 systemctl --user restart health-flow-report-worker
 ```
 
+The worker unit carries `PartOf=health-flow.service`, so restarting the portal
+brings the worker along — they read the same `EnvironmentFile=` and that file is
+only read **at start**, so a sibling left running keeps the previous values. This
+is a deliberate propagation and not an accident of ordering; the measured
+reasoning is in the worker unit's comments and in the service host's README.
+
+There is deliberately **no `.path` unit here**, unlike on the service host: this
+machine runs neither service, so there is no long-running reader to keep fresh.
+Adding one for symmetry would be a mechanism with no consumer. `PartOf=` is here
+only so the pair stays identical to the deployed one.
+
 If uploads stay at `processing`, check the worker first: it is the only consumer
 of the report queue, and the portal does not parse reports inline.
