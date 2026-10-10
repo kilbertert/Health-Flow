@@ -1214,10 +1214,14 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
     );
     if (unresolved.length > 0) {
       // 两个值的行有它自己的一句：闸门拦下它是因为「用哪个数还没选」，而那句泛泛的
-      // 「需要确认、修正或排除」说不清他要做什么（#204）。
+      // 「需要确认、修正或排除」说不清他要做什么（#204）。两类都有时**两句都说** ——
+      // 只说一句会让另一类的条数等到患者修完这一批才露面。
       const dual = unresolved.filter((metric) => dualValueChoice(metric)).length;
+      const others = unresolved.length - dual;
       if (dual > 0) {
-        message.warning(`还有 ${dual} 项页面上有两个值，请选择用哪一个`);
+        const lines = [`还有 ${dual} 项页面上有两个值，请选择用哪一个`];
+        if (others > 0) lines.push(`另有 ${others} 个异常候选项需要确认、修正或排除`);
+        message.warning(lines.join('；'));
         return;
       }
       message.warning(`还有 ${unresolved.length} 个异常候选项需要确认、修正或排除`);

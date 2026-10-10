@@ -58,9 +58,22 @@ _SIGN_MARKERS = ("<", ">", "≤", "≥")
 _TWO_VALUE_BLOCKERS = (":", "^")
 
 
+# 值文本里的数值**字面量**边界。与 `_number_re` **分开**是刻意的：`_number_re` 还服务
+# 「原文证据里有没有这个数」的比对（那里放宽是安全的），而这一条只判「值能不能用」——
+# 它额外把千分位逗号与指数记法排除在外：`1,234` 与 `1e3` 被抽成两个数字会让页面给出两个
+# **错的**候选（`1` 与 `234`），患者点哪个都是错的。
+#
+# 上限写在明处：空格分组的数字（`1 234`）仍会被看成两个值 —— 而空格恰好是「两个值」最
+# 常见的形态（`3.39 / 3.63`、`76.1kg 83.6kg`），两者无法从字面区分。
+# 数字类**显式**写出来（ASCII + 全角），而不是用 `\d`：JS 的 `\d` 只认 ASCII，而两侧
+# 必须是同一份判据。全角数字在报告里真实出现过（`１.２`），一行全角写的双值若在服务端
+# 是 `two_values`、在页面上什么都不显示，患者就白等一次。
+_value_number_re = re.compile(r"(?<![0-9０-９.,eE])-?[0-9０-９]+(?:\.[0-9０-９]+)?(?![0-9０-９.,eE])")
+
+
 def _numbers(value_text: str | None) -> list[float]:
-    """文本里出现的**全部**数值，按出现顺序。"""
-    return [float(match) for match in _number_re.findall(value_text or "")]
+    """文本里出现的**全部**数值字面量，按出现顺序。"""
+    return [float(match) for match in _value_number_re.findall(value_text or "")]
 
 
 def single_number(value: str | None) -> float | None:
@@ -70,7 +83,7 @@ def single_number(value: str | None) -> float | None:
     `evidence_bridge` 的私有函数，而前端为了同一个判断复刻过一遍（`valueIsUsable`
     的注释写着「必须与后端 `_single_number` 一致」）。
     """
-    matches = _number_re.findall(value or "")
+    matches = _value_number_re.findall(value or "")
     return float(matches[0]) if len(matches) == 1 else None
 
 

@@ -117,29 +117,41 @@ export function valueReasonOrNull(metric) {
   if (metric?.inferred_abnormal_flag === undefined) return null; // 旧响应：无从判断
   if (metric.inferred_abnormal_flag !== null) return null;
   if (!isAbnormalLike(metric?.abnormal_flag)) return null;
-  // 与 `app/service/admission.value_reason` 同一条判据的出口，顺序也一样：空 → 带符号
-  // （哪怕含多个数字，如 `<3 x 10^6/L`，它问不出「用哪个」）→ 两个数 → 一个坏的数。
+  // 判据是 `app/service/admission.value_reason` 的**逐字复刻**：空 → 带符号（哪怕含多个
+  // 数字，如 `<3 x 10^6/L`，它问不出「用哪个」）→ 恰好两个数 → 一个坏的数 → 没有问题。
   // 「两个数」必须与「不是一个数」分开 —— 页面据此把两个候选列出来让患者**选一个**
   // （#204），而不是问他「数值是多少」（他本来就写着那两个数）。
+  //
+  // **最后那条 `return null` 不能省**：一处只到 `invalid_value` 为止的实现会把
+  // `3.63 mmol/L` 这种好值判成坏值，患者被挡在一个服务端认为没问题的行前面。
+  // 两侧由 `tests/test_two_value_agreement.py` 对一组输入逐条比对（含全角数字）。
   const text = String(metric?.metric_value ?? '').trim();
   if (text === '') return 'missing_value';
-  if (['<', '>', '≤', '≥'].some((marker) => text.includes(marker))) return 'invalid_value';
-  // 恰好两个数、且不含 `:` / `^`（`0 x 10^6/L` 与 `10:00` 不是「用哪个」的问题）。
-  // 与后端 `admission.value_reason` 同一条判据 —— 两处分叉会让同一行在评估前后
-  // 得到不同的说法，而那正是本仓库一路在消灭的形状。
-  if (dualValues(metric).length === 2 && ![':', '^'].some((marker) => text.includes(marker))) {
+  if (SIGN_MARKERS.some((marker) => text.includes(marker))) return 'invalid_value';
+  const numbers = dualValues(metric);
+  if (numbers.length === 2 && !TWO_VALUE_BLOCKERS.some((marker) => text.includes(marker))) {
     return 'two_values';
   }
-  return 'invalid_value';
+  if (numbers.length === 0 || numbers.length >= 2) return 'invalid_value';
+  return null;
 }
+
+/** 后端的 `admission._SIGN_MARKERS` / `_TWO_VALUE_BLOCKERS` —— 同一份口径的**一个**家。
+ * 这里放的是取值，判定只有 `valueReasonOrNull` 一处（与后端 `value_reason` 对位）。 */
+export const SIGN_MARKERS = Object.freeze(['<', '>', '≤', '≥']);
+export const TWO_VALUE_BLOCKERS = Object.freeze([':', '^']);
 
 /** 一条值文本里的**全部**数值字面量，按出现顺序，**保留原文写法**。
  *
  * 保留原文（不 `Number()`）是有意的：患者选中的那个数会作为修正值提交，而 `4.00` 与
- * `4` 在报告上是两回事 —— 后者看起来像系统改写了他的值。判据本身与后端
- * `admission._numbers` 同一条正则，只是这里返回字符串。 */
+ * `4` 在报告上是两回事 —— 后者看起来像系统改写了他的值。
+ *
+ * 与后端 `admission._value_number_re` 同一条正则（连排除字符类也一样）：它额外把千分位
+ * 逗号与指数记法排除在外 —— `1,234` 被抽成两个数字会让页面给出两个**错的**候选。
+ * 全角数字（`１.２`）两边都能读 —— 否则一行全角写的双值在服务端是 `two_values`、
+ * 在页面上却什么都不显示。 */
 export function dualValues(metric) {
-  return String(metric?.metric_value ?? '').match(/(?<![\d.])-?\d+(?:\.\d+)?(?![\d.])/g) || [];
+  return String(metric?.metric_value ?? '').match(/(?<![0-9０-９.,eE])-?[0-9０-９]+(?:\.[0-9０-９]+)?(?![0-9０-９.,eE])/g) || [];
 }
 
 /** 这一行值用不了吗（见 `valueReasonOrNull`）。 */

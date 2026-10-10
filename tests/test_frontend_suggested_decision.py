@@ -174,16 +174,16 @@ def test_the_suggestion_is_not_the_patients_decision_for_no_row_shape():
     abnormal = {**_NORMAL, "id": 2, "metric_value": "6.5", "abnormal_flag": "H", "inferred_abnormal_flag": "H",
                 "reference_range": "3.9-6.1", "evidence_text": "血糖 6.5 mmol/L 3.9-6.1"}
     abnormal_no_evidence = {**abnormal, "id": 3, "evidence_text": None}
-    # 患者**已经排除**的一行、且模型标了异常：界面初选「待核对」而不是「已排除」——
-    # 那是对的，因为它是「建议」而非表态：患者把这一行重新看到、再决定一次。真正「患者
-    # 排除过」这件事由 `serverDecision` 单独承载（见下面的守卫），两者不混。
+    # 患者**已经排除**的一行：界面初选跟着它自己的状态走（「已排除」）。这条在
+    # `valueReasonOrNull` 修好之前是「待核对」—— 那时 `138` 这个**完全正常**的数被判成
+    # 「值用不了」，于是每一行都先撞上那条，永远看不到这一行真正的状态。
     excluded = {**_NORMAL, "id": 4, "confirmation_status": "excluded", "abnormal_flag": "H",
                 "inferred_abnormal_flag": None}
     assert _suggestions([_NORMAL, abnormal, abnormal_no_evidence, excluded]) == [
         "excluded",  # 正常：不打扰
         "confirmed",  # 异常且证据齐：建议确认（患者可改）
         "pending",  # 异常但缺证据：建议核对
-        "pending",  # 模型标异常但判定为空：建议核对
+        "excluded",  # 患者已经排除过它：初选就是他的表态（不重新问一次）
     ]
 
 
