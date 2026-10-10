@@ -155,11 +155,16 @@ def test_the_suggestion_is_not_the_patients_decision_for_no_row_shape():
 
 
 def test_the_submitted_payload_never_carries_a_client_computed_default():
-    """提交载荷里不得出现 `suggestedDecision`（或旧的 `initialDecision`）。
+    """提交载荷里的默认值**只允许给患者看到过的那一行**（`needsReview`）。
 
     这是本票的核心断言，而它必须按**代码**查而不是按行为查：一个「草稿没设就落回建议」的
     实现，在界面上与正确实现看起来完全一样，只在服务端落库后才发现「患者没看过的行被记成
     已排除」。所以断言落在载荷构造那一段源码上。
+
+    三件事同时成立才算对：
+    - 旧名字 `initialDecision` 不在（它读起来就像「患者的决定」，而它不是）；
+    - 建议只出现在 `needsReview` 为真的分支里 —— **隐藏**的正常行永远走不到它；
+    - 服务端已经给过的决策优先于它（重入确认时不丢服务端的结论）。
     """
     source = (REPO_ROOT / "frontend" / "src" / "pages" / "Upload.jsx").read_text(encoding="utf-8")
     code = "\n".join(line.split("//", 1)[0] for line in source.splitlines())
@@ -167,10 +172,16 @@ def test_the_submitted_payload_never_carries_a_client_computed_default():
 
     start = code.index("const observations = (result.metrics")
     payload = code[start : code.index("try {", start)]
-    assert "suggestedDecision" not in payload, "建议不得进入提交载荷"
-    assert "serverDecision" in payload and "draft.decision" in payload, (
-        "载荷只该认「患者动过它」或「服务端已经给过决策」"
+    statement_start = payload.index("const decided =")
+    decided = " ".join(payload[statement_start : payload.index(";", statement_start)].split())
+    assert "suggestedDecision" in decided, "患者看到过、又没动过的行，界面上那个初选就是他的答案"
+    assert "needsReview(metric)" in decided, (
+        "建议只能给**显示过的**行；漏掉这个条件就等于让隐藏的正常行也替患者表态"
     )
+    assert decided.index("serverDecision") < decided.index("suggestedDecision"), (
+        "服务端已经给过的决策优先于界面初选，否则重入确认会丢服务端的结论"
+    )
+    assert "draft.decision" in decided, "患者动过的行必须优先用他的选择"
 
 
 def test_the_payload_always_carries_a_value_the_server_accepts():
@@ -188,10 +199,10 @@ def test_the_payload_always_carries_a_value_the_server_accepts():
     code = "\n".join(line.split("//", 1)[0] for line in source.splitlines())
     start = code.index("const observations = (result.metrics")
     payload = code[start : code.index("try {", start)]
-    assignment = [line.strip() for line in payload.splitlines() if "const decided =" in line]
-    assert len(assignment) == 1, assignment
-    assert assignment[0].endswith("|| 'pending';"), (
-        "载荷的决策必须有一个服务端收得下的兜底；现在这一行是：" + assignment[0]
+    statement_start = payload.index("const decided =")
+    statement = " ".join(payload[statement_start : payload.index(";", statement_start) + 1].split())
+    assert statement.endswith(": 'pending');"), (
+        "载荷的决策必须有一个服务端收得下的兜底；现在这一条是：" + statement
     )
 
 

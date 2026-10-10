@@ -6,9 +6,11 @@
 
 三处仍**刻意不同**、且由测试钉住的地方（不是遗漏）：
 
-- `pending`（尚未核对）与 `excluded`（患者明确排除）是**准入结论**，不是「无法判定」。
-  一份待确认的报告里，患者正是要在确认页上看到模型标出的异常候选，所以「异常判定」
-  对 `pending` 行照常作答 —— 只有 `excluded` 退出异常口径（`_decidable`）。
+- **尚未核对不是准入结论**（#203）。一行值/单位/参考范围/原文证据/页码齐全时，判定照常
+  走完，落 `awaiting_confirmation`（可判、待核对）而不是提前收口 —— 那个词以前叫
+  `pending`，与「指标确认决策」词表里患者那个 `pending` 同名，于是「患者没看过的正常
+  行」与「判不了的行」在数据上不可分辨。`excluded` 仍然是一个表态、也是一个结论：
+  只有它退出异常口径（`_decidable`）。
 - 缺单位 / 缺原文证据 / 缺页码会让一行**没进解读**，却不妨碍它的异常判定显示 H。
   这个分叉是「报告单说 H、解读里没有它」的唯一来源，本模块如实保留它，不替它遮掩。
 - 准入结论回答「为什么没进解读」；异常判定的守卫回答「值能不能判」。两者在值/参考范围
@@ -119,10 +121,15 @@ def admission_reason(
     而且这样「值这一类原因」在两侧才必然同名。
     """
     status = getattr(metric, "confirmation_status", None) or "pending"
-    if status not in ADMITTED_STATUSES:
-        # 尚未核对与患者已排除是两种显式结论。今天它们落在三桶之外、由前端从原始
-        # `confirmation_status` 猜 —— 从这张票起由服务端给。
-        return "excluded" if status == "excluded" else "pending"
+    # 患者已排除是一个**结论**：不必再看他这一行的值 —— 是他自己说不要的。
+    if status == "excluded":
+        return "excluded"
+    # 尚未核对**不是**结论，只是「还没发生」。它必须让判定照常走完：可判的行
+    # （值/单位/参考范围/原文证据/页码齐全）落 `awaiting_confirmation`（可判、待核对），
+    # 判不了的行落它们各自真正的原因。此前这里对 `pending` 一律提前收口成 `pending`，
+    # 于是两种处置相反的行拿到同一个词：一行的正确处置是「什么都不用做」，另一行是
+    # 「必须他处理」（#203）。
+    pending_review = status not in ADMITTED_STATUSES
 
     effective = effective_value(metric)
     value_text = effective.value
@@ -148,10 +155,16 @@ def admission_reason(
     if high is not None and not _evidence_contains_value(evidence, high):
         return "missing_source_evidence"
     flag = infer_abnormal_flag(str(value), effective.reference_range)
-    # 判成 N 就是「在参考范围内」—— 准入结论如实说 `within_reference_range`。
-    # 它是「正常」，不是「未能解读」：把它并进「没能判定」那一类是误报（#161）。
-    if flag == "N":
+    # 还没核对的行到这里已经是「可判」的了（值/单位/参考范围/证据/页码都齐）。它**不是**
+    # 「未能进入解读」，那个结论要等患者核对过才成立 —— 所以这里如实说「可判、待核对」，
+    # 由**前端**按异常判定决定要不要请他处理（判成 H/L 要，判成 N 不要）。
+    #
+    # 判成 N 且已核对过的行说 `within_reference_range` —— 它是「正常」，不是「未能解读」：
+    # 把它并进「没能判定」那一类是误报（#161）。
+    if flag == "N" and not pending_review:
         return "within_reference_range"
+    if pending_review:
+        return "awaiting_confirmation"
     if not code:
         return "unknown_metric_code"
     return None
@@ -165,6 +178,10 @@ class AdmissionTally:
     「判定过，在参考区间内」—— **正常**。它与「没能进入解读」是两回事，患者侧的说法也
     必须不同（服务端在同一张卡片上会说「均在参考区间内」）。把它并进 `skipped` 会让
     「有 N 项未进入解读」把每一条正常指标都算进去，而那正是本次改动要消灭的矛盾。
+
+    `not_evaluated` 收「患者还没核对过的可判行」与「患者已排除的行」：**两者都确实没有
+    参与解读**（可判不等于已确认 —— 只有患者核对过的行才跨证据边界）。它们与 `skipped`
+    的区别是原因不在这一行的数据上，而在患者那一步还没发生/已表态。
     """
 
     included: int

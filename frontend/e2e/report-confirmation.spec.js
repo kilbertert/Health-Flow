@@ -63,6 +63,8 @@ function assessedResponse(seeded, reportUrl) {
       const seeded = await seed({ reports: ['pending_confirmation'] });
       await openPendingReport(page, seeded);
 
+      // NOTE: 这一行的初选是「确认」（它判成 H、证据齐），所以下面这段只是把它**换成
+      // 「修正」**再提交 —— 它证明「患者改过一行」这件事真的落进载荷，不代表别的行需要他动。
       const card = page.getByRole('button', { name: '甘油三酯指标卡片' });
       await expect(card).toBeVisible();
       await expect(card).toHaveAttribute('aria-expanded', 'false');
@@ -111,16 +113,26 @@ function assessedResponse(seeded, reportUrl) {
             observation.reference_range === '0.45-1.7',
         ),
       ).toBeTruthy();
-      // #195：患者**没动过**的那一行必须如实说「我没动它」（`pending`），**不能**被
-      // 客户端算成一个表态。服务端把它解成该行已落定的状态，没有落定过就仍是未决 ——
-      // 此前客户端把「界面默认」当患者的表态提交，于是没看过的正常行被记成「患者已排除」。
-      // 按**指标名**认「动过的那一行」，不按 id：seed 的 id 是自增的，写死会随夹具漂移。
-      // 动过的那条是「甘油三酯」（本用例把它改成了 corrected），其余一条没动。
-      const corrected = confirmationBody.observations.filter((observation) => observation.decision === 'corrected');
-      expect(corrected).toHaveLength(1);
-      const untouched = confirmationBody.observations.filter((observation) => observation.decision !== 'corrected');
-      expect(untouched.length).toBeGreaterThan(0);
-      expect(untouched.every((observation) => observation.decision === 'pending')).toBe(true);
+      // 载荷里的每一条都要说得通（#195 + #203）。三条来源各有名字，按**契约字段**认：
+      //   - 患者**动过**的那一行（本用例把它改成了 corrected）→ `corrected`；
+      //   - 其余**显示给他看过**的行（红色 H/L 候选：种子的甘油三酯与低密度脂蛋白胆固醇）
+      //     → 界面上那个初选就是他的答案，他不改也不该被记成「没决定」—— 否则报告 54/55
+      //     的 LDL-C / Non-HDL / Total Chol 会从解读里消失，而患者明明在页面上看到过它们；
+      //   - **隐藏**的正常行（种子的血红蛋白，确认页默认不显示）→ 如实说「我没动过这一行」
+      //     （`pending`），解出来是什么由服务端定。
+      // 按指标名认，不按 id：seed 的 id 是自增的，写死会随夹具漂移。
+      const decisionOf = new Map(confirmationBody.observations.map((o) => [o.metric_id, o.decision]));
+      const byName = (name) => {
+        const seededMetric = seeded.reports[0].metrics.find((metric) => metric.metric_name === name);
+        expect(seededMetric, `种子里没有 ${name}`).toBeTruthy();
+        return decisionOf.get(seededMetric.id);
+      };
+      expect(byName('甘油三酯')).toBe('corrected');
+      expect(byName('低密度脂蛋白胆固醇')).toBe('confirmed');
+      expect(byName('血红蛋白')).toBe('pending');
+      // 三种来源各自都必须真的出现在载荷里（少一个，「区分」就无从谈起）。
+      const seen = new Set(confirmationBody.observations.map((observation) => observation.decision));
+      expect(seen).toEqual(new Set(['corrected', 'confirmed', 'pending']));
     });
   });
 });

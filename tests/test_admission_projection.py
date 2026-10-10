@@ -26,7 +26,7 @@ from unittest.mock import patch
 import pytest
 
 from app.service.admission_projection import admission_shapes, ledger, metric_reasons
-from app.service.admission_vocabulary import vocabulary
+from app.service.admission_vocabulary import NO_ACTION_REASONS_ORDERED, vocabulary
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 NODE = shutil.which("node")
@@ -279,6 +279,7 @@ fs.writeFileSync(path.join(outDir, 'result.json'), JSON.stringify({
   notParsed: (cases.notParsed || []).map((m) => mod.valueNotParsed(m)),
   valueReasons: (cases.notParsed || []).map((m) => mod.valueReasonOrNull(m)),
   missingTexts: mod.missingTexts(cases.vocabulary || []),
+  noActionReasons: mod.NO_ACTION_REASONS,
 }));
 """
 
@@ -514,6 +515,35 @@ def test_the_summary_card_is_driven_by_the_server_ledger():
     code = "\n".join(line.split("//", 1)[0] for line in source.splitlines())
     assert "skipped.length > 0 && (" not in code, "底部说明不得再以 skipped 数组为准"
     assert "admissionLines(ledger)" in code, "底部说明应从报告级台账生成"
+
+
+def test_the_no_action_bucket_is_the_same_on_both_sides():
+    """「不必患者做任何事」的那两条，前端与服务端**逐字相同**。
+
+    它是一份口径，不是两份「碰巧一致」：后端用它把台账分成 `normal` / `skipped`（哪一句
+    说明该出现），前端用它决定逐行要不要挂橙色提示、以及哪些行进「待处理」集合。分叉的
+    时候同一行一边说「没问题」一边说「未进入解读」，而**两边看着都对**。
+
+    这条断言的是相等，不是各自等于某个字面量 —— 只往一侧加名字就会红。
+    """
+    result = _drive_frontend({"reasons": [], "metrics": []})
+    assert sorted(result["noActionReasons"]) == sorted(NO_ACTION_REASONS_ORDERED), (
+        "前端与服务端的「不必患者做任何事」必须同一份口径"
+    )
+
+
+def test_awaiting_confirmation_is_not_worded_as_never_entering_the_reading():
+    """「可判、待核对」不是「未能进入解读」—— 它有一条自己的、不说那句话的文案。
+
+    它与「在参考区间内」的差别只在**患者要不要动手**：一个不用，一个要（核对）。所以
+    报告单上它不该被判成「未进入解读」的一项，但也不该被说成「结论已给」—— 它确实还没
+    参与解读（台账的 `not_evaluated` 收它）。这一条同时钉住两句话都不许出现。
+    """
+    result = _drive_frontend({"reasons": ["awaiting_confirmation"], "metrics": []})
+    assert result["notable"] == [False], "它不该在指标旁挂一条「未进入解读」的提示"
+    text = result["texts"][0]
+    assert "尚未核对" in text, text
+    assert "未进入解读" not in text and "未进入匹配" not in text, text
 
 
 def test_the_frontend_no_longer_infers_value_usability_from_the_flag():

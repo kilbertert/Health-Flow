@@ -108,6 +108,7 @@ _ASSESSED_METRICS: tuple[dict[str, Any], ...] = (
 )
 
 # 待确认(pending_confirmation)报告的指标:解析完成、等待用户核对。
+# 两条异常(H,确认页显示) + 一条正常(不显示) —— 后者是「隐藏的行」这类断言的夹具。
 _PENDING_METRICS: tuple[dict[str, Any], ...] = (
     {
         "metric_name": "甘油三酯",
@@ -129,6 +130,20 @@ _PENDING_METRICS: tuple[dict[str, Any], ...] = (
         "evidence_text": "低密度脂蛋白胆固醇 3.6 mmol/L ↑",
         "bbox": [110.0, 370.0, 320.0, 390.0],
         "bbox_normalized": [55.0, 185.0, 160.0, 195.0],
+        "page_number": 1,
+    },
+    # 一条判得出、患者又**看不到**的正常行：确认页默认只显示异常候选，所以它不进列表、
+    # 患者也不会为它表态。它存在的理由是让「隐藏的行如实说『我没动过』」这件事在 e2e 里
+    # 可断言 —— 没有它，`observations` 里就只剩显示过的行，两种处置分不开（#203）。
+    {
+        "metric_name": "血红蛋白",
+        "metric_value": "138",
+        "unit": "g/L",
+        "reference_range": "115-150",
+        "abnormal_flag": "N",
+        "evidence_text": "血红蛋白 138 g/L (115-150)",
+        "bbox": [110.0, 420.0, 300.0, 440.0],
+        "bbox_normalized": [55.0, 210.0, 150.0, 220.0],
         "page_number": 1,
     },
 )
@@ -330,6 +345,12 @@ def seed_database(
                         "id": report.id,
                         "status": report.status,
                         "report_type": report.report_type,
+                        # 逐行的 id 与指标名:用例按**名字**认行(自增 id 会随夹具漂移),
+                        # 而名字→id 的映射只有种子自己知道。
+                        "metrics": [
+                            {"id": metric.id, "metric_name": metric.metric_name}
+                            for metric in report.metrics
+                        ],
                     }
                     for report in seeded
                 ],

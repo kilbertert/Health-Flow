@@ -253,18 +253,57 @@ def test_every_admitted_row_gets_exactly_one_conclusion(overrides, expected):
     assert admission_reason(_row(**overrides), code=_row(**overrides).metric_code) == expected
 
 
-@pytest.mark.parametrize(
-    ("status", "expected"),
-    [("pending", "pending"), ("excluded", "excluded")],
-)
-def test_unreviewed_and_excluded_rows_have_their_own_conclusions(status, expected):
-    """`pending` / `excluded` 是**显式结论**，不是「没有原因」。
+def test_excluded_rows_have_their_own_conclusion():
+    """`excluded` 是**显式结论**：患者表了态，不必再看这一行的值。
 
-    此前它们落在三桶之外，患者侧只能从原始 `confirmation_status` 猜 —— 而那是
+    此前它落在三桶之外，患者侧只能从原始 `confirmation_status` 猜 —— 而那是
     「同一概念两处判定」的另一个入口。
     """
-    assert admission_reason(_row(confirmation_status=status), code="fasting_glucose") == expected
-    assert expected in NOT_EVALUATED_REASONS
+    assert admission_reason(_row(confirmation_status="excluded"), code="fasting_glucose") == "excluded"
+    assert "excluded" in NOT_EVALUATED_REASONS
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        # 可判、但患者还没核对：值/单位/参考范围/原文证据/页码都齐。
+        ({}, "awaiting_confirmation"),
+        # 判不了的行落它们**真正**的原因 —— 不再被「尚未核对」提前收口（#203）。
+        ({"metric_value": "3.87 4.00"}, "invalid_value"),
+        ({"metric_value": ""}, "missing_value"),
+        ({"unit": None, "evidence_text": None}, "missing_unit"),
+        ({"reference_range": None}, "missing_reference_range"),
+    ],
+)
+def test_an_unreviewed_row_still_gets_its_real_reason(overrides, expected):
+    """**本票的核心**：尚未核对**不是**准入结论，判定照常走完。
+
+    此前 `admission_reason` 对 `confirmation_status='pending'` 一律返回 `pending` ——
+    于是「患者没看过的正常行」与「判不了的行」拿到同一个词，而两者处置相反：前者
+    **什么都不用做**，后者**必须他处理**。确认页因此要求患者逐条处理每一行
+    （报告 54 是 65/65，其中 46 行是判得完好的正常行）。
+
+    反过来也一样：判不了的行**不许**因为「反正他还没核对」就混进 `awaiting_confirmation`
+    —— 那会把「必须他处理」的那一类藏起来，比多显示更危险。
+    """
+    assert admission_reason(_row(confirmation_status="pending", **overrides), code="fasting_glucose") == expected
+
+
+def test_the_status_only_decides_the_last_word_for_a_judgeable_row():
+    """状态只决定**最后**那一个词；前面的值/证据/参考范围判定一字不动。
+
+    这条守住判定顺序，两半都要：
+    - **可判的行**（值/单位/参考范围/证据/页码都齐）还没核对时说「可判、待核对」，**不**
+      说 `unknown_metric_code` —— 编码是在确认那一步落定的，一行还没核对的行没有
+      「没有可对应的编码」这个结论可言，说了就是替它下一个还轮不到的判断。
+    - **判不了的行**不许被「反正他还没核对」收口 —— 那一类藏起来比多显示更危险。
+      （逐条已在上面那条参数化里覆盖，这里再钉住判定顺序不被反过来。）
+    """
+    judgeable_no_code = _row(confirmation_status="pending", metric_code=None)
+    assert admission_reason(judgeable_no_code, code=None) == "awaiting_confirmation"
+    # 判不了的行，状态也救不了它 —— 值这一类原因仍然优先。
+    unjudgeable = _row(confirmation_status="pending", metric_value="3.87 4.00", metric_code=None)
+    assert admission_reason(unjudgeable, code=None) == "invalid_value"
 
 
 def test_the_tally_covers_every_row_exactly_once():
@@ -287,7 +326,7 @@ def test_the_tally_covers_every_row_exactly_once():
         _row(id=7, page_number=None),  # missing_source_page
         _row(id=8, reference_range=None),  # missing_reference_range
         _row(id=9, metric_code=None),  # unknown_metric_code
-        _row(id=10, confirmation_status="pending"),  # pending
+        _row(id=10, confirmation_status="pending"),  # awaiting_confirmation
         _row(id=11, confirmation_status="excluded"),  # excluded
     ]
     reasons = [admission_reason(metric, code=metric.metric_code) for metric in rows]
@@ -298,7 +337,7 @@ def test_the_tally_covers_every_row_exactly_once():
 
     assert counts.total == len(rows)
     # 进入解读 1 / normal 1（在参考区间内，单列 —— 它是「正常」，不是「未进入解读」）/
-    # skipped 6 / unmatched 1 / 未评估 2。
+    # skipped 6 / unmatched 1 / 未评估 2（可判待核对 1 + 已排除 1）。
     assert (counts.included, counts.normal, counts.skipped, counts.unmatched, counts.not_evaluated) == (
         1,
         1,
