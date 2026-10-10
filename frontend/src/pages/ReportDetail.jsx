@@ -343,7 +343,14 @@ export default function ReportDetailPage({ account, reportId, onBack, onContinue
 
           <MetricOverview result={result} onOpenSource={setSourceMetric} />
 
-          <EvidenceResult result={result.evidence_result} onOpenSource={setSourceMetric} />
+          {/* 详情页与解读页共用同一个卡片，所以它也读同一份报告级台账 —— 服务端算好的
+              四类行数。漏传这个参数不会报错，但会让「有 N 项未进入解读」那句话在详情页
+              消失（解读页有、详情页没有），而两处说的是同一份报告。 */}
+          <EvidenceResult
+            result={result.evidence_result}
+            admissionLedger={result.admission}
+            onOpenSource={setSourceMetric}
+          />
 
           <Recommendations reportId={result.id} reportToken="" />
 
