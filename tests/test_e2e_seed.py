@@ -111,13 +111,21 @@ def test_seed_creates_completed_and_pending_reports(database_url):
         assert by_name["漏标的总胆固醇"].abnormal_flag is None
         assert by_name["漏标的总胆固醇"].metric_value == "6.9"
 
-        # 待确认报告:尚未评估,指标等待核对。
+        # 待确认报告:尚未评估,指标等待核对。两条异常(H,确认页显示)+ 一条正常
+        # (确认页默认不显示)—— 后者是「隐藏的行如实说没动过」那类断言的夹具(#203)。
         assert pending_row.evidence_result is None
         pending_metrics = session.scalars(select(MetricRecord).where(MetricRecord.report_id == pending_row.id)).all()
-        assert len(pending_metrics) == 2
+        assert len(pending_metrics) == 3
         assert all(
             metric.confirmation_status == "pending" and metric.confirmed_value is None for metric in pending_metrics
         )
+        pending_by_name = {metric.metric_name: metric for metric in pending_metrics}
+        assert pending_by_name["血红蛋白"].abnormal_flag == "N"
+        # 种子回报的行名→id 映射:用例按名字认行(自增 id 会随夹具漂移)。
+        reported = next(item for item in payload["reports"] if item["id"] == pending_row.id)
+        assert reported["metrics"] == [
+            {"id": metric.id, "metric_name": metric.metric_name} for metric in pending_metrics
+        ]
         # 坐标感知契约:指标携带页码、坐标与证据原文。
         for metric in (*completed_metrics, *pending_metrics):
             assert metric.page_number == 1

@@ -17,8 +17,12 @@
 /**
  * 评估**之前**的准入状态，或 `null`（没有能同义读出的）。
  *
- * 服务端的准入结论要等评估之后才有（那时才写进 `admission_reason`），但有两个状态是
- * 患者**自己**的表态，不该等到评估之后才显示：
+ * 评估之前 `admission_reason` 全是 `null`（服务端只在 `assessed` 时给结论），所以
+ * 「这一行患者还没核对过」只能从 `confirmation_status` 读 —— 这正是它在这里的原因，
+ * 而**不是**一个边角情况：确认页面对的报告**全部**是这种状态。
+ *
+ * 服务端的准入结论要等评估之后才有，但有两个状态是患者**自己**的表态，不该等到评估
+ * 之后才显示：
  *
  * - `excluded` —— 患者明确排除；
  * - `pending` —— 还没核对。
@@ -39,8 +43,15 @@ export function admissionBeforeAssessment(metric) {
 
 /** 原因 → 患者可见的一句话。键与 `app/service/admission_vocabulary.py` 的词表一致。 */
 export const ADMISSION_TEXT = Object.freeze({
-  // 尚未核对、患者已排除：两种显式的准入结论。
-  pending: '尚未核对，暂不参与解读',
+  // 可判、但患者还没核对（#203）：**不是**「未能解读」，所以不说那句话。这一行的值、
+  // 单位、参考范围、原文证据都齐，判得出 H/L/N —— 它只是还没参与解读。
+  //
+  // **这一条今天只出现在评估之后的报告单上**（确认页面对的报告还没评估，逐行结论是
+  // `null`，那里靠 `admissionBeforeAssessment`）。但患者仍可能走到它：报告评估过之后
+  // 又退回确认（重入），或他排除过某一行 —— 那时它落在台账的 `not_evaluated` 里，
+  // 底部那句「另有 N 项尚未核对或已排除，未参与解读」就是它。
+  awaiting_confirmation: '尚未核对，暂不参与解读',
+  // 患者已排除：一个表态，也是一个结论。
   excluded: '已排除，不参与解读',
   // 值这一类 —— 三句不同的话，对应三个不同的动作。
   missing_value: '数值还没解析出来',
@@ -58,11 +69,17 @@ export const ADMISSION_TEXT = Object.freeze({
   no_published_knowledge_card: '暂无已审核的关联知识卡',
 });
 
-/** 这些原因属于「正常」，不属于「没能解读」—— 与摘要口径必须一致。
+/** 判定过、且**患者不必为它做任何事**的两条结论 —— 逐行不挂提示、也不进待处理集合。
  *
- * 与后端 `admission_vocabulary.NORMAL_REASONS` 同一份口径：台账把这一桶单列，所以
- * 患者侧的「有 N 项未进入解读」不会把每一条正常指标算进去。 */
-export const NORMAL_REASONS = Object.freeze(['within_reference_range']);
+ * 两条各自的理由不同，所以它们在这一层是分开的（服务端台账里也分列 `normal` 与
+ * `not_evaluated`）：
+ *   - `within_reference_range` —— 结论已给：正常。
+ *   - `awaiting_confirmation` —— 结论已给：判得出（值/单位/参考范围/原文证据都齐），
+ *     缺的只是患者那一次核对；而「核对」正是确认页在做的事，报告单上不必逐行再说一遍。
+ *
+ * 与后端 `admission_vocabulary.NO_ACTION_REASONS` 同一份口径，由 `test_admission` 的守卫
+ * 钉住两者相等 —— 分叉会让同一行在两处得到不同的说法。 */
+export const NO_ACTION_REASONS = Object.freeze(['within_reference_range', 'awaiting_confirmation']);
 
 /**
  * 值这一类原因的**子集**：它们说「这个值还没被解析成一个数」。
@@ -121,20 +138,21 @@ export function missingTexts(reasons) {
   return (reasons || []).filter((reason) => !(reason in ADMISSION_TEXT));
 }
 
-/** 这一行的结论是不是「正常」。（不是「没能解读」，也不是缺陷。） */
-export function isNormalReason(reason) {
-  return NORMAL_REASONS.includes(reason);
+/** 这一行的结论是不是「不需要患者做任何事」（正常，或可判、待核对）。 */
+export function isNoActionReason(reason) {
+  return NO_ACTION_REASONS.includes(reason);
 }
 
 /**
  * 这行有没有一个**值得一提**的准入结论。
  *
- * 「在参考区间内」不算 —— 它是正常，不该在指标旁边挂一个提示。患者在指标列表里看到
- * 的应当是「没能进入解读」的那些，以及「还没核对 / 已排除」这两种需要他自己知道的状态。
+ * 「在参考区间内」与「可判、待核对」都不算 —— 前者结论已给（正常），后者缺的只是患者
+ * 那一次核对（确认页正在做）。患者在指标列表里看到的应当是「没能进入解读」的那些，以及
+ * 「已排除」这种需要他自己知道的状态。
  */
 export function notableAdmission(reason) {
   if (reason === null || reason === undefined || reason === '') return false;
-  return !isNormalReason(reason);
+  return !isNoActionReason(reason);
 }
 
 /**
