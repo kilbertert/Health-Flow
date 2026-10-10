@@ -49,6 +49,7 @@ from app.service.admission_projection import (
     admission_shapes,
     has_conclusion,
 )
+from app.service.confirmation_decision import is_excluded, require_full_coverage
 from app.service.deep_link import DeepLinkError, build_deep_link
 from app.service.evidence_bridge import (
     EvidenceBridgeError,
@@ -708,8 +709,14 @@ async def confirm_report(
     metrics = _ordered_metrics(db, report_id).all()
     by_id = {metric.id: metric for metric in metrics}
     supplied = {item.metric_id: item for item in confirmation.observations}
-    if len(supplied) != len(confirmation.observations) or not set(supplied) <= set(by_id):
-        raise HTTPException(status_code=422, detail="确认列表包含重复或未知指标")
+    if len(supplied) != len(confirmation.observations):
+        raise HTTPException(status_code=422, detail="确认列表包含重复指标")
+    # 请求必须**覆盖全部**已解析指标：「没提供」此前被静默当成「排除」—— 任何一条漏提交的
+    # 已解析指标会被置成 excluded，与患者明确排除不可区分（`confirmed_at` 照写、审计把两者
+    # 合在一个数组里）。一次漏提交的行从此是一次 422，而不是一次患者看不到的排除。
+    coverage = require_full_coverage(supplied, list(by_id))
+    if not coverage.ok:
+        raise HTTPException(status_code=422, detail=coverage.detail())
     # 目录读不到时**不挡死写路径**：患者核对好的二十项决策必须落库。
     # 降级为「维持模型值/清空」保存，等目录恢复再由评估时的权威目录重新裁决。
     # 这是 ARCHITECTURE.md 既定降级哲学（服务不可用时返回空证据并让上层继续运行，
@@ -724,8 +731,8 @@ async def confirm_report(
     confirmed_ids: list[int] = []
     excluded_ids: list[int] = []
     for metric in metrics:
-        item = supplied.get(metric.id)
-        if item is None or item.decision == "excluded":
+        item = supplied[metric.id]  # 覆盖面已由 require_full_coverage 保证
+        if is_excluded(item.decision):
             metric.confirmation_status = "excluded"
             metric.confirmed_value = None
             metric.confirmed_unit = None

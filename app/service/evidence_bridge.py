@@ -22,6 +22,7 @@ from app.service.admission import (
     single_number,
     value_level_reason,
 )
+from app.service.confirmation_decision import is_excluded
 from app.service.metric_effective_value import effective_value
 from app.service.origin_location import clean_bbox, page_url
 
@@ -314,8 +315,13 @@ def _decidable(metric: Any) -> bool:
     多显示一个异常候选危险得多。
 
     其余的「能不能判」由值、参考范围决定，与本函数无关（空值走 ``missing_value``）。
+
+    判据消费 `confirmation_decision.is_excluded`，不再自带一份「不等于 excluded」的反向
+    表述 —— 那是同一条判定的第二份写法（证据门禁读的是正面枚举 `ADMITTED_STATUSES`），
+    两者在**新增一种决策**时给出不同答案。两处的差别（这里对 ``pending`` 也作答）是**两个
+    不同的问题**，不是两份实现。
     """
-    return getattr(metric, "confirmation_status", None) != "excluded"
+    return not is_excluded(getattr(metric, "confirmation_status", None))
 
 
 def abnormal_flag_reason(metric: Any) -> str | None:

@@ -7,6 +7,10 @@ from pydantic import BaseModel, Field, model_validator
 
 from app.schema.evidence import PatientNotices
 from app.service.admission_vocabulary import AdmissionReasonLiteral
+from app.service.confirmation_vocabulary import (
+    DECISIONS_ORDERED,
+    REQUEST_DECISIONS_ORDERED,
+)
 
 
 class MetricRecord(BaseModel):
@@ -41,7 +45,9 @@ class MetricRecord(BaseModel):
     evidence_text: str | None = None
     source_id: str | None = None
     metric_code: str | None = None
-    confirmation_status: Literal["pending", "confirmed", "corrected", "excluded"] = "pending"
+    # 词表**派生自**「指标确认决策」的那一份（GLOSSARY.md 的词条）。此前这个 Literal
+    # 自己声明了四个名字，而请求那份声明了三个（没有 `pending`）—— 两份声明各写各的。
+    confirmation_status: Literal[*DECISIONS_ORDERED] = "pending"
     confirmed_value: str | None = None
     confirmed_unit: str | None = None
     confirmed_reference_range: str | None = None
@@ -224,7 +230,8 @@ class MedicalReportResponse(BaseModel):
 
 class MetricConfirmation(BaseModel):
     metric_id: int = Field(..., ge=1)
-    decision: Literal["confirmed", "corrected", "excluded"]
+    # 派生自同一份词表，**去掉 `pending`**：「还没决定」不是一个可以提交的决定。
+    decision: Literal[*REQUEST_DECISIONS_ORDERED]
     metric_code: str | None = None
     value: str | None = None
     unit: str | None = None
