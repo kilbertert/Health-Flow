@@ -1,0 +1,24 @@
+[Unit]
+Description=Restart both HealthFlow readers after their environment file changed
+# ---- 为什么需要它 ----
+#
+# EnvironmentFile= 只在启动时被读一次。手工编辑 env（不改代码、不触部署）之后，长驻进程
+# 继续持有一份被取代的凭据 —— 2026-10-10 事故的形状：操作者换了键，进程手里的键对 provider
+# 报 401，而磁盘上的键 200（#201）。
+#
+# PartOf= 补不上这个缺口：它只在**父被重启**时传播，而手工改 env 不会重启任何东西。
+# 真正「必然重读」的机制只能是「文件一变化就重启读者」。
+#
+# 实测（systemd 249）：PathChanged 在这些写法下都触发 ——
+#   1. `echo ... > file`（重定向写入）
+#   2. `echo ... >> file`（追加）
+#   3. `sed -i`（重命名替换）
+# 覆盖了手工编辑的三种常见写法。
+[Path]
+PathChanged=/opt/health-flow/var/health-flow.env
+# 一个 unit 名表达不了「两个读者」。两者必须一起重启，否则只重启了一半 —— 那正是本缺陷的
+# 形状（父被重启、兄弟没有）。所以指向一个显式重启两者的 oneshot（.path 只接受一个 Unit=）。
+Unit=health-flow-env-restart.service
+
+[Install]
+WantedBy=multi-user.target

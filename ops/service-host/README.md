@@ -73,15 +73,6 @@ below. Uploading still works and jobs queue durably.
 
 ## Installation
 
-**Why `data/` exists as well as `var/`.** The application creates a *relative*
-`data/` directory at startup whenever the database URL is SQLite, regardless of
-where the absolute `DATABASE_URL` points. Under `ProtectSystem=strict` the
-working directory is read-only, so the unit crash-loops unless `data/` exists
-and is listed in `ReadWritePaths`. It is a separate path from `var/` because
-`var/` is this project's convention while `data/` is what the code demands.
-
-## Installation
-
 1. Create the identity, the directories above, and grant `data/` to it.
 2. Build the Python wheel and the frontend bundle from a merged revision, and
    record their sha256 values.
@@ -108,8 +99,76 @@ and is listed in `ReadWritePaths`. It is a separate path from `var/` because
    `/ready` reports `report_provider: unconfigured` — a configuration gap that
    is invisible until the worker is enabled.
 
-7. Install the units and `systemctl enable --now health-flow`. Confirm
-   `/ready` reports `report_provider: configured` and `account_auth: required`.
+7. Install the units and enable the two that must start at boot. Confirm
+   `/ready` reports `report_provider: configured`, `account_auth: required`, and
+   `config_freshness: current`.
+
+   ```bash
+   # four files: the two readers, the watcher, and the oneshot it triggers
+   install -m 0644 ops/service-host/systemd/health-flow.service \
+                    ops/service-host/systemd/health-flow-report-worker.service \
+                    ops/service-host/systemd/health-flow-env.path \
+                    ops/service-host/systemd/health-flow-env-restart.service \
+                    /etc/systemd/system/
+   systemctl daemon-reload
+   # The worker is deliberately NOT enabled — see the note above. It still needs
+   # to be *started* once if extraction is in service; enabling it is what stays
+   # undone.
+   systemctl enable --now health-flow health-flow-env.path
+   ```
+
+   `health-flow-env-restart.service` has no `[Install]` on purpose: it is not
+   started at boot, only triggered by the `.path` unit. Enabling it would do
+   nothing and would suggest it is a service in its own right.
+
+   **Installing the units is an operator step, not a deploy step.** `deploy-36.sh`
+   deliberately does not touch them, and `cd.yml` deliberately does not fire on
+   `ops/service-host/systemd/**` — an exposure or a unit change is its own
+   decision. So after a merge that changes a unit, nothing has happened until
+   you run the block above.
+
+   **Why `health-flow-env.path` exists.** `EnvironmentFile=` is read **once, at
+   start**. Editing `var/health-flow.env` by hand — no code change, no deploy —
+   leaves the running processes holding the previous values. That is exactly
+   what failed on 2026-10-10: the worker started 09-30 16:49, the env file was
+   replaced 10-10 14:08:56, and every report failed with a provider 401 while
+   `/ready` cheerfully reported `report_provider: configured`. The `.path` unit
+   watches the file and restarts **both** readers on any change; `PartOf=` on the
+   worker covers the other half (a deploy restarts the parent, and the sibling
+   must come along rather than keep running old config *and* old code).
+
+   `/ready` now also reports `config_freshness` (`current` / `stale` /
+   `unknown`), and `stale` degrades `status`. So if the mechanism above is ever
+   missing or broken, `deploy-36.sh`'s own self-check — which asserts
+   `status == "ready"` — catches it instead of reporting a green deploy. The
+   plain consequence to remember: **a deploy whose reader did not restart now
+   fails its own self-check and rolls itself back**, which is the intended
+   behaviour and not a bug in the deploy script.
+
+   `unknown` (the process was never told which file feeds it) does **not**
+   degrade `status`. That asymmetry is deliberate and it is what makes the
+   rollout order safe: this code merges and deploys first, the units are
+   installed after, and the first deploy runs against a unit that does not yet
+   set `HEALTHFLOW_ENV_FILE`. A two-valued field would have that deploy roll
+   itself back over a condition that is not a defect.
+
+   **After editing the env file you no longer need to restart anything by hand.**
+   That is the point of the `.path` unit. Verify it rather than trusting it:
+
+   ```bash
+   systemctl show health-flow health-flow-report-worker -p ExecMainStartTimestamp
+   ```
+
+   The watcher uses `try-restart`, so an env edit does **not** un-pause a worker
+   you deliberately stopped — the "extraction stays paused" state above survives
+   an env change, a deploy, and anything else that restarts the portal.
+
+**Why `data/` exists as well as `var/`.** The application creates a *relative*
+`data/` directory at startup whenever the database URL is SQLite, regardless of
+where the absolute `DATABASE_URL` points. Under `ProtectSystem=strict` the
+working directory is read-only, so the unit crash-loops unless `data/` exists
+and is listed in `ReadWritePaths`. It is a separate path from `var/` because
+`var/` is this project's convention while `data/` is what the code demands.
 
 ### Before deploying a revision that changes the evidence contract
 
@@ -153,7 +212,30 @@ It is not built at deploy time on the target.
 
 The **deployment's own** self-check is `deploy/deploy-36.sh` (see above): it asserts
 `/ready`'s shape and that the entry point serves the bundle this build produced.
-That runs on every merge, unattended.
+That runs on every merge, unattended. Because `/ready` degrades on
+`config_freshness: stale`, this same self-check is also the guard that a reader
+did not restart — there is no second check for it.
+
+**What `/ready` answers that the other probes do not.** `report_provider:
+configured` only says a key is *present*; it says nothing about whether the
+provider accepts it, and nothing about whether the process is holding a
+superseded copy. Three fields cover that:
+
+```json
+{"config_freshness": "current|stale|unknown",
+ "config_file_changed_at": "<iso8601|null>",
+ "process_started_at": "<iso8601|null>"}
+```
+
+`stale` means the env file's mtime is later than this process's start time — the
+exact condition that made every report fail on 2026-10-10 while `/ready` stayed
+green. `config_file_changed_at` and `process_started_at` are there so "why is it
+stale" is answerable from the response alone, without logging into the host.
+
+Note what it still does **not** check: whether the credential is *valid*. Probing
+the provider on every readiness call would let one upstream hiccup pull the
+service out of rotation for a fault that does not affect report reading — the
+same reasoning already recorded in `app/main.py` for the mall connection.
 
 The probes below are the operator-run acceptance checks, all run as the service
 identity, all exiting nonzero on mismatch:

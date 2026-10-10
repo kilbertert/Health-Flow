@@ -440,6 +440,10 @@ def test_readiness_reports_unconfigured_mall_in_development(client_unused=None):
                 HEALTHFLOW_BASIC_PASSWORD="",
                 report_account_required=False,
                 database_url="sqlite://",
+                # 商城形态与**配置新鲜度**是正交的两件事，这里要钉的是前者。留空即
+                # /ready 报 config_freshness=unknown，而 unknown 刻意不降级（见
+                # app/main.py 的注释），所以本用例仍旧只检验商城那一维。
+                HEALTHFLOW_ENV_FILE="",
             ),
         ),
         patch("app.main.get_mysql_client") as mysql,
@@ -474,6 +478,10 @@ def test_readiness_flags_missing_mall_config_in_production():
                 HEALTHFLOW_BASIC_PASSWORD="",
                 report_account_required=False,
                 database_url="sqlite://",
+                # 商城形态与**配置新鲜度**是正交的两件事，这里要钉的是前者。留空即
+                # /ready 报 config_freshness=unknown，而 unknown 刻意不降级（见
+                # app/main.py 的注释），所以本用例仍旧只检验商城那一维。
+                HEALTHFLOW_ENV_FILE="",
             ),
         ),
         patch("app.main.get_mysql_client") as mysql,

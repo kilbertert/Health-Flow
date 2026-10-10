@@ -2,6 +2,24 @@
 Description=HealthFlow Durable Report Extraction Worker
 After=network-online.target health-flow.service
 Wants=network-online.target
+# 配置与代码都是**在启动时被物化**的：systemd 读 EnvironmentFile 一次，Python 把模块
+# 编译进内存一次。父服务被重启（部署会这么做）而本 unit 没有，本 unit 就继续持有过期
+# 配置与过期代码 —— 2026-10-10 的事故正是这一形状（#201）：worker 起于 09-30 16:49，
+# env 文件在 10-10 14:08 被替换，于是它对 provider 报 401 而磁盘上的键是好的。
+#
+# PartOf 让重启沿父级传播。实测（systemd 249，真实 transient unit）：
+#   * 只重启父级 -> 活跃的子级一起重启；
+#   * 子级「disabled 但 active」（本 unit 在服务主机上的确切状态，见 README「worker 保持
+#     disabled」）**照样**传播 —— 不 enable 不影响它；
+#   * 被操作者主动 `systemctl stop` 的子级**保持停止**，不会被复活。这是必须保住的语义：
+#     「抽取暂停」是一个刻意的状态，重启父级不该把它打开。
+#
+# 代价（明确接受）：重启会打断正在解析的任务。claim_next_job 把 job 置 running 并记
+# updated_at，而 recover_stale_jobs 只在 updated_at 早于 REPORT_JOB_STALE_SECONDS（默认
+# 1200 秒）时才回收。所以被打断的报告最多在「解析中」停留 20 分钟才被回收重跑 —— 是延迟，
+# 不是数据丢失（recover_stale_jobs 已正确处理「解析已提交、只是没 ack」的情形）。
+# 缩短这个窗口需要 worker 处理 SIGTERM 并主动把 job 放回队列，那是独立的一张票。
+PartOf=health-flow.service
 
 [Service]
 Type=simple
@@ -9,6 +27,9 @@ User=health-flow
 Group=health-flow
 WorkingDirectory=/opt/health-flow
 EnvironmentFile=/opt/health-flow/var/health-flow.env
+# 显式告知进程自己的 env 文件在哪，供 /ready 比对「已加载的配置是否仍等于磁盘」。
+# 不设置时 /ready 如实回答 `config_freshness: unknown`，而不是假装 current。
+Environment=HEALTHFLOW_ENV_FILE=/opt/health-flow/var/health-flow.env
 Environment=PYTHONDONTWRITEBYTECODE=1
 ExecStart=/opt/health-flow/.venv/bin/python -m app.service.report_worker
 Restart=on-failure

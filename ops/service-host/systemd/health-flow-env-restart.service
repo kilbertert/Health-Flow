@@ -1,0 +1,22 @@
+[Unit]
+Description=Restart both HealthFlow readers after their environment file changed
+# 由 health-flow-env.path 触发（env 文件变化时）。这里只做一件事：让两个读者重新读取。
+#
+# 为什么要显式列出两个 unit 名：`systemctl restart a b` 是一次事务、同时处理，不会中间
+# 失败一半；而分成两次调用就会出现「父重启了、子没有」的窗口 —— 那正是本缺陷的形状。
+#
+# 实测（systemd 249）：同时重启的 unit 里有 PartOf= 关系时，同一个 unit 不会被启动两次
+# （两者各自只起一次）。所以这里明确列出两个名字，不会与 PartOf 的传播叠加成重复重启。
+[Service]
+Type=oneshot
+# `try-restart` 而不是 `restart`，也不是 `start`。三种选择的差别不是风格，是语义：
+#
+#   * `start` 对 active 的 unit 是**空操作** —— 静默什么都不做。「看起来成功、实际没生效」
+#     正是本类缺陷的形状（#201），所以不能用它。
+#   * `restart` 对**没在跑**的 unit 是 `start`：一次 env 编辑会把操作者刻意停掉的 worker
+#     重新拉起来，把文档化的「抽取暂停」验收状态打开。
+#   * `try-restart` 只重启**正在跑**的读者，停着的不动 —— 正是我们要的。
+#
+# 实测（systemd 249）：两个都在跑 -> 各重启一次；worker 被刻意 stop -> 只有 portal 重启，
+# worker 保持 inactive。
+ExecStart=/bin/systemctl try-restart health-flow.service health-flow-report-worker.service

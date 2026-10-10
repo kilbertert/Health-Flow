@@ -107,6 +107,15 @@ class Settings(BaseSettings):
     AUTH_SESSION_DAYS: int = 30
     AUTH_COOKIE_SECURE: bool | None = None
 
+    # 本进程加载的那份 env 文件在磁盘上的位置，**由 unit 显式声明**（unit 里同时有
+    # `EnvironmentFile=` 与本变量）。用途只有一个：/ready 比对「已加载的配置是否仍等于
+    # 磁盘」，见 app/config_freshness.py。
+    #
+    # 为什么不让应用去读 unit 的 `EnvironmentFile=` 行：那要在进程内解析 unit 文本，脆且绕；
+    # 显式变量是另一个由 unit 声明的真值，且**未设置时**能如实回答 unknown，而不是伪造
+    # 一个「大概是这个路径」的猜测 —— 猜错方向会让过期检测静默失效（#201）。
+    HEALTHFLOW_ENV_FILE: str = ""
+
     @property
     def mysql_url(self) -> str:
         return (

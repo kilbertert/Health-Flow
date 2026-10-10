@@ -9,6 +9,9 @@ User=health-flow
 Group=health-flow
 WorkingDirectory=/opt/health-flow
 EnvironmentFile=/opt/health-flow/var/health-flow.env
+# 显式告知进程自己的 env 文件在哪，供 /ready 比对「已加载的配置是否仍等于磁盘」。
+# 不设置时 /ready 如实回答 `config_freshness: unknown`，而不是假装 current。
+Environment=HEALTHFLOW_ENV_FILE=/opt/health-flow/var/health-flow.env
 Environment=PYTHONDONTWRITEBYTECODE=1
 ExecStart=/opt/health-flow/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 10007
 Restart=on-failure
