@@ -174,16 +174,16 @@ def test_the_suggestion_is_not_the_patients_decision_for_no_row_shape():
     abnormal = {**_NORMAL, "id": 2, "metric_value": "6.5", "abnormal_flag": "H", "inferred_abnormal_flag": "H",
                 "reference_range": "3.9-6.1", "evidence_text": "血糖 6.5 mmol/L 3.9-6.1"}
     abnormal_no_evidence = {**abnormal, "id": 3, "evidence_text": None}
-    # 患者**已经排除**的一行、且模型标了异常：界面初选「待核对」而不是「已排除」——
-    # 那是对的，因为它是「建议」而非表态：患者把这一行重新看到、再决定一次。真正「患者
-    # 排除过」这件事由 `serverDecision` 单独承载（见下面的守卫），两者不混。
+    # 患者**已经排除**的一行：界面初选跟着它自己的状态走（「已排除」）。这条在
+    # `valueReasonOrNull` 修好之前是「待核对」—— 那时 `138` 这个**完全正常**的数被判成
+    # 「值用不了」，于是每一行都先撞上那条，永远看不到这一行真正的状态。
     excluded = {**_NORMAL, "id": 4, "confirmation_status": "excluded", "abnormal_flag": "H",
                 "inferred_abnormal_flag": None}
     assert _suggestions([_NORMAL, abnormal, abnormal_no_evidence, excluded]) == [
         "excluded",  # 正常：不打扰
         "confirmed",  # 异常且证据齐：建议确认（患者可改）
         "pending",  # 异常但缺证据：建议核对
-        "pending",  # 模型标异常但判定为空：建议核对
+        "excluded",  # 患者已经排除过它：初选就是他的表态（不重新问一次）
     ]
 
 
@@ -263,3 +263,22 @@ def test_server_decision_only_accepts_a_real_decision():
     for decision in ("confirmed", "corrected", "excluded"):
         assert f"'{decision}'" in body, decision
     assert "'pending'" not in body, "`pending` 不是服务端给过的决策"
+
+
+def test_a_dual_value_row_suggests_undecided_and_offers_both_numbers():
+    """两个值的行：初选是「还没决定」，而两个候选都摆出来（#204）。
+
+    它**不能**初选「确认」——一行 `3.39 / 3.63`（判成 H、证据齐）在旧实现里拿到的正是
+    「确认」，而患者对「用哪个数」根本没表过态，提交后后端会连行丢掉（#129 的老病根）。
+
+    候选**保留原文写法**（`4.00` 而不是 `4`）：它会被当成修正值提交，而报告上写的是哪个
+    是有意义的 —— 系统改写患者的数字看起来像另一回事。
+    """
+    dual = {**_NORMAL, "metric_value": "3.39 / 3.63", "abnormal_flag": "H",
+            "inferred_abnormal_flag": None, "reference_range": "<2.60",
+            "evidence_text": "LDL-C 3.39 3.63 mmol/L (<2.60)"}
+    assert _suggestions([dual]) == ["pending"]
+    assert _drive([dual])["decided"] == ["pending"]
+    # 带符号的多数字值不是「两个值」——它问不出「用哪个」。
+    signed = {**dual, "metric_value": "<3 x 10^6/L"}
+    assert _drive([signed])["decided"] == ["pending"]

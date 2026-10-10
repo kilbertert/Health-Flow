@@ -27,7 +27,7 @@ accurate at the moment it is generated and at the moment the commit lands.
 
 ## Tests
 
-- tests/ — 49 test file(s, recursive)
+- tests/ — 50 test file(s, recursive)
 - frontend/e2e/ — 14 test file(s, recursive)
 - pytest (pyproject.toml / pytest.ini present)
 

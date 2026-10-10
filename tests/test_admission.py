@@ -87,7 +87,8 @@ def _row(**overrides):
         # 值这一类：两侧以前**不同名**的那一条，现在是同一条。
         ({"metric_value": ""}, "missing_value"),
         ({"metric_value": "<20"}, "invalid_value"),
-        ({"metric_value": "6.5/7.2"}, "invalid_value"),
+        # 两个数都在（#204）：患者要做的不是重输一遍数字，是选一个。
+        ({"metric_value": "6.5/7.2"}, "two_values"),
         ({"reference_range": None}, "missing_reference_range"),
         ({"reference_range": "阴性"}, "missing_reference_range"),
     ],
@@ -237,7 +238,7 @@ def _is_literal(node: ast.expr) -> bool:
         ({"page_number": None}, "missing_source_page"),
         # 值这一类。
         ({"metric_value": ""}, "missing_value"),
-        ({"metric_value": "6.5/7.2"}, "invalid_value"),
+        ({"metric_value": "6.5/7.2"}, "two_values"),
         # 带符号的值：**值这一类优先于证据完备性**。这一条守住判定顺序 —— 旧顺序是
         # 「先看单位/证据/页码，再看值」，于是同一行（`<20` 且缺单位）从这里
         # `invalid_value` 变成 `missing_unit`。改回旧顺序时它会红。
@@ -269,7 +270,7 @@ def test_excluded_rows_have_their_own_conclusion():
         # 可判、但患者还没核对：值/单位/参考范围/原文证据/页码都齐。
         ({}, "awaiting_confirmation"),
         # 判不了的行落它们**真正**的原因 —— 不再被「尚未核对」提前收口（#203）。
-        ({"metric_value": "3.87 4.00"}, "invalid_value"),
+        ({"metric_value": "3.87 4.00"}, "two_values"),
         ({"metric_value": ""}, "missing_value"),
         ({"unit": None, "evidence_text": None}, "missing_unit"),
         ({"reference_range": None}, "missing_reference_range"),
@@ -303,7 +304,7 @@ def test_the_status_only_decides_the_last_word_for_a_judgeable_row():
     assert admission_reason(judgeable_no_code, code=None) == "awaiting_confirmation"
     # 判不了的行，状态也救不了它 —— 值这一类原因仍然优先。
     unjudgeable = _row(confirmation_status="pending", metric_value="3.87 4.00", metric_code=None)
-    assert admission_reason(unjudgeable, code=None) == "invalid_value"
+    assert admission_reason(unjudgeable, code=None) == "two_values"
 
 
 def test_the_tally_covers_every_row_exactly_once():
@@ -320,7 +321,8 @@ def test_the_tally_covers_every_row_exactly_once():
         _row(id=1),  # None：进入解读
         _row(id=2, metric_value="5.0"),  # within_reference_range
         _row(id=3, metric_value=""),  # missing_value
-        _row(id=4, metric_value="6.5/7.2"),  # invalid_value
+        _row(id=4, metric_value="6.5/7.2"),  # two_values
+        _row(id=12, metric_value="Nil"),  # invalid_value（定性项，不是两个数）
         _row(id=5, unit=None, evidence_text=None),  # missing_unit
         _row(id=6, evidence_text=None),  # missing_source_evidence（值可解析）
         _row(id=7, page_number=None),  # missing_source_page
@@ -328,7 +330,7 @@ def test_the_tally_covers_every_row_exactly_once():
         _row(id=9, metric_code=None),  # unknown_metric_code
         _row(id=10, confirmation_status="pending"),  # awaiting_confirmation
         _row(id=11, confirmation_status="excluded"),  # excluded
-        _row(id=12, metric_name="T Chol/HDL ratio", metric_value="3.7", reference_range=None),  # no_reference_concept
+        _row(id=13, metric_name="T Chol/HDL ratio", metric_value="3.7", reference_range=None),  # no_reference_concept
     ]
     reasons = [admission_reason(metric, code=metric.metric_code) for metric in rows]
     counts = tally(reasons)
@@ -338,12 +340,12 @@ def test_the_tally_covers_every_row_exactly_once():
 
     assert counts.total == len(rows)
     # 进入解读 1 / normal 1（在参考区间内，单列 —— 它是「正常」，不是「未进入解读」）/
-    # skipped 7（含 no_reference_concept —— 它也不该被说成「正常」）/
+    # skipped 8（含 no_reference_concept —— 它也不该被说成「正常」）/
     # unmatched 1 / 未评估 2（可判待核对 1 + 已排除 1）。
     assert (counts.included, counts.normal, counts.skipped, counts.unmatched, counts.not_evaluated) == (
         1,
         1,
-        7,
+        8,
         1,
         2,
     )
@@ -381,10 +383,27 @@ def test_a_row_shown_as_abnormal_but_kept_out_of_the_reading_carries_a_reason():
 
 @pytest.mark.parametrize(
     ("text", "expected"),
-    [("", "missing_value"), ("   ", "missing_value"), ("<20", "invalid_value"), ("6.5/7.2", "invalid_value")],
+    [
+        ("", "missing_value"),
+        ("   ", "missing_value"),
+        ("<20", "invalid_value"),
+        ("Nil", "invalid_value"),
+        ("6.5/7.2", "two_values"),
+        ("3.39 3.63", "two_values"),
+        # 带单位的两项不是「两个值」：那个 3 与 10 是一个带单位的界。
+        ("<3 x 10^6/L", "invalid_value"),
+        # 恰好两个数字但含 `^` / `:` —— 不是「用哪个」的问题。
+        ("0 x 10^6/L", "invalid_value"),
+        ("10:00", "invalid_value"),
+    ],
 )
 def test_value_reason_separates_not_parsed_yet_from_not_a_number(text, expected):
-    """「还没解析出来」与「不是一个数」是两句不同的话 —— 患者要做的动作不同。"""
+    """「还没解析出来」「不是一个数」「两个值」是三句不同的话 —— 患者要做的动作不同。
+
+    `two_values`（#204）与 `invalid_value` 的分别不是「几个数字」而是**患者要做什么**：
+    前者两个数都在、他只需要选一个；后者是值坏了、他得重新给一个。而带符号的值哪怕
+    含多个数字也仍然归 `invalid_value` —— 它问不出「用哪个」这个问题。
+    """
     assert value_reason(text) == expected
 
 
@@ -465,3 +484,29 @@ def test_no_module_imports_the_vocabulary_at_runtime_by_regex():
         f"只在字面量里出现的：{sorted(reason_names - vocabulary())}；"
         f"只在 Literal 里的：{sorted(vocabulary() - reason_names)}"
     )
+
+
+def test_two_values_is_a_distinct_reason_not_a_synonym_for_invalid_value():
+    """「两个值」与「不是一个数」是两句不同的话（#204）。
+
+    它们过去共用一个 `invalid_value`，于是页面问患者「这条的数值是多少」——而那两个数
+    **本来就是他写的**（页面上印一行、他手写一行）。分开之后页面把两个候选列出来让他
+    选一个。这条钉住的是判据本身，不是文案：
+
+    - 两个测量值 → `two_values`；
+    - 带符号的值哪怕含多个数字（`<3 x 10^6/L`）→ 仍是 `invalid_value`：它问不出
+      「用哪个」这个问题，那两个数字是一个带单位的界；
+    - 定性项的词（`Nil` / `Negative`）→ `invalid_value`（不是「两个值」）；
+    - 恰好一个数 → 没问题。
+    """
+    assert value_reason("3.39 / 3.63") == "two_values"
+    assert value_reason("1.53 1.50") == "two_values"
+    assert value_reason("76.1kg 83.6kg") == "two_values"
+    assert value_reason("<3 x 10^6/L") == "invalid_value"
+    # `0 x 10^6/L` 与 `10:00` 也抽出恰好两个数字，但那两个数之间没有可做的选择：
+    # 一个是「单位被抽进了值」，一个是时间。
+    assert value_reason("0 x 10^6/L") == "invalid_value"
+    assert value_reason("10:00") == "invalid_value"
+    assert value_reason("Nil") == "invalid_value"
+    assert value_reason("Negative") == "invalid_value"
+    assert value_reason("3.63") is None
