@@ -53,9 +53,13 @@ export const ADMISSION_TEXT = Object.freeze({
   awaiting_confirmation: '尚未核对，暂不参与解读',
   // 患者已排除：一个表态，也是一个结论。
   excluded: '已排除，不参与解读',
-  // 值这一类 —— 三句不同的话，对应三个不同的动作。
+  // 值这一类 —— 四句不同的话，对应四个不同的动作。
   missing_value: '数值还没解析出来',
-  invalid_value: '数值不是一个数（如多值或带符号），需要修正',
+  invalid_value: '数值不是一个数（如带符号或混入文字），需要修正',
+  // 两个数都在，缺的是「哪个才是这一项的当前值」—— 患者要做的不是重输一遍数字，
+  // 而是选一个（页面把两个都列出来给他点）。压进上一句会让页面问一个他已经答过的
+  // 问题（#204）。
+  two_values: '这一项页面上有两个值，需要选一个',
   // 参考范围这一类：**值本身没问题**，所以不说「数值无法识别」。
   missing_reference_range: '缺少参考范围，无法判断是否异常',
   // 证据不完备。
@@ -90,7 +94,7 @@ export const NO_ACTION_REASONS = Object.freeze(['within_reference_range', 'await
  * 「参考范围缺失」**不在**此列：它的值完全正常，让人去修正数字是误导 —— 这一条的区别
  * 正是本次改动要修的东西。
  */
-export const VALUE_UNPARSED_REASONS = Object.freeze(['missing_value', 'invalid_value']);
+export const VALUE_UNPARSED_REASONS = Object.freeze(['missing_value', 'invalid_value', 'two_values']);
 
 /**
  * 这一行为什么「值用不了」，或 `null`（值没问题 / 无从判断）。
@@ -113,7 +117,41 @@ export function valueReasonOrNull(metric) {
   if (metric?.inferred_abnormal_flag === undefined) return null; // 旧响应：无从判断
   if (metric.inferred_abnormal_flag !== null) return null;
   if (!isAbnormalLike(metric?.abnormal_flag)) return null;
-  return String(metric?.metric_value ?? '').trim() === '' ? 'missing_value' : 'invalid_value';
+  // 判据是 `app/service/admission.value_reason` 的**逐字复刻**：空 → 带符号（哪怕含多个
+  // 数字，如 `<3 x 10^6/L`，它问不出「用哪个」）→ 恰好两个数 → 一个坏的数 → 没有问题。
+  // 「两个数」必须与「不是一个数」分开 —— 页面据此把两个候选列出来让患者**选一个**
+  // （#204），而不是问他「数值是多少」（他本来就写着那两个数）。
+  //
+  // **最后那条 `return null` 不能省**：一处只到 `invalid_value` 为止的实现会把
+  // `3.63 mmol/L` 这种好值判成坏值，患者被挡在一个服务端认为没问题的行前面。
+  // 两侧由 `tests/test_two_value_agreement.py` 对一组输入逐条比对（含全角数字）。
+  const text = String(metric?.metric_value ?? '').trim();
+  if (text === '') return 'missing_value';
+  if (SIGN_MARKERS.some((marker) => text.includes(marker))) return 'invalid_value';
+  const numbers = dualValues(metric);
+  if (numbers.length === 2 && !TWO_VALUE_BLOCKERS.some((marker) => text.includes(marker))) {
+    return 'two_values';
+  }
+  if (numbers.length === 0 || numbers.length >= 2) return 'invalid_value';
+  return null;
+}
+
+/** 后端的 `admission._SIGN_MARKERS` / `_TWO_VALUE_BLOCKERS` —— 同一份口径的**一个**家。
+ * 这里放的是取值，判定只有 `valueReasonOrNull` 一处（与后端 `value_reason` 对位）。 */
+export const SIGN_MARKERS = Object.freeze(['<', '>', '≤', '≥']);
+export const TWO_VALUE_BLOCKERS = Object.freeze([':', '^']);
+
+/** 一条值文本里的**全部**数值字面量，按出现顺序，**保留原文写法**。
+ *
+ * 保留原文（不 `Number()`）是有意的：患者选中的那个数会作为修正值提交，而 `4.00` 与
+ * `4` 在报告上是两回事 —— 后者看起来像系统改写了他的值。
+ *
+ * 与后端 `admission._value_number_re` 同一条正则（连排除字符类也一样）：它额外把千分位
+ * 逗号与指数记法排除在外 —— `1,234` 被抽成两个数字会让页面给出两个**错的**候选。
+ * 全角数字（`１.２`）两边都能读 —— 否则一行全角写的双值在服务端是 `two_values`、
+ * 在页面上却什么都不显示。 */
+export function dualValues(metric) {
+  return String(metric?.metric_value ?? '').match(/(?<![0-9０-９.,eE])-?[0-9０-９]+(?:\.[0-9０-９]+)?(?![0-9０-９.,eE])/g) || [];
 }
 
 /** 这一行值用不了吗（见 `valueReasonOrNull`）。 */

@@ -128,7 +128,8 @@ def test_model_flag_is_ignored_by_inference():
     [
         (_metric(metric_value="", reference_range="3.9-6.1"), "missing_value"),
         (_metric(metric_value="<20", reference_range="3.9-6.1"), "invalid_value"),
-        (_metric(metric_value="6.5/7.2", reference_range="3.9-6.1"), "invalid_value"),
+        # 两个数都在（#204）：值这一类，但原因的名字说的是「选一个」而不是「修一个」。
+        (_metric(metric_value="6.5/7.2", reference_range="3.9-6.1"), "two_values"),
         (_metric(metric_value="5.2", reference_range=None), "missing_reference_range"),
         (_metric(metric_value="5.2", reference_range="阴性"), "missing_reference_range"),
     ],
