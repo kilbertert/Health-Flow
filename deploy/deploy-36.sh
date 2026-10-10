@@ -390,6 +390,18 @@ case "\$unit_host" in
 esac
 
 # ---- 重启 ----
+#
+# **只显式重启一个 unit，但这不等于只重启一个进程。** worker 的 unit 带
+# PartOf=$SERVICE，所以它随这次重启一起重启 —— 它读同一份 EnvironmentFile，而那份文件
+# 只在启动时被读一次，而 pip 刚刚在它脚下换过代码（app/api/report.py 等）。少了这层传播，
+# worker 会继续跑旧代码与旧凭据，而部署日志里**没有任何一行**说这件事：这正是 2026-10-10
+# 报告全量失败的成因之一（worker 起于 09-30，代码在 10-10 换过，见 #201）。
+#
+# 注意本段注释里**不许出现反引号**：这个 heredoc 是裸的，反引号会被当命令替换执行
+# （本仓踩过：八处散文反引号产出八行 command not found，而 bash -n 一个字都不报）。
+#
+# 这一对有静态守卫：tests/test_systemd_units.py 断言 SERVICE 的默认值就是 worker 的
+# PartOf= 目标，所以谁改了一侧都会立刻红。
 if systemctl restart "$SERVICE"; then :; else echo "restart-rc=nonzero"; fi
 sleep 5
 

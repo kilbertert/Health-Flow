@@ -1,11 +1,15 @@
 [Unit]
 Description=HealthFlow Durable Report Extraction Worker
 After=network-online.target health-flow.service
+# 与 ops/service-host/systemd/ 那一份保持同一语义：配置在**启动时被物化**，重启父级必须
+# 把本 unit 一起重启，否则它继续持有过期配置。理由与实测见服务主机那一份的注释（#201）。
+PartOf=health-flow.service
 
 [Service]
 Type=simple
 WorkingDirectory=/home/claude/Projects/health-flow
 EnvironmentFile=/home/claude/Projects/health-flow/var/health-flow.env
+Environment=HEALTHFLOW_ENV_FILE=/home/claude/Projects/health-flow/var/health-flow.env
 ExecStart=/home/claude/Projects/health-flow/.venv/bin/python3 -m app.service.report_worker
 Restart=on-failure
 RestartSec=3

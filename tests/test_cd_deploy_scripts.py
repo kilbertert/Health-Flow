@@ -141,6 +141,12 @@ with socketserver.TCPServer(("127.0.0.1", port), H) as httpd:
 
 READY_OK = '{"status":"ready","report_provider":"configured","account_auth":"required"}'
 READY_DEGRADED = '{"status":"degraded","report_provider":"unconfigured","account_auth":"required"}'
+# 配置过期也表现为 degraded（app/main.py），但**字段形状是完整的** —— 除了把它交给
+# `check_ok()` 没有别的办法在本地复现「进程手里是过期凭据」这件事，这正是这条用例的价值。
+READY_STALE = (
+    '{"status":"degraded","report_provider":"configured","account_auth":"required",'
+    '"config_freshness":"stale"}'
+)
 
 
 def _free_port() -> int:
@@ -594,6 +600,34 @@ def test_selfcheck_failure_restores_the_previous_frontend(host: _FakeHost) -> No
     assert (host.root / "deployed-revision").read_text().strip() == "a" * 40
     # 失败的那一份被留下而不是删掉 —— 它是排查时第一个要看的东西。
     assert (host.root / "frontend.broken").is_dir()
+
+
+@needs_topology
+def test_a_stale_reader_degrades_ready_and_so_fails_the_self_check(host: _FakeHost) -> None:
+    """**过期配置是一道部署门**：`/ready` 报 stale -> 自检不过 -> 回滚。
+
+    这条断言把两边的因果接上，而两边都已经存在，所以本用例不牵涉任何生产代码改动：
+
+      * `app/main.py` 的 readiness 在 `config_freshness == "stale"` 时把 status 降为 degraded；
+      * `deploy-36.sh` 的 `check_ok()` 断言 `status == "ready"`（这条断言早于本票存在）。
+
+    2026-10-10 的事故里，`/ready` 一直报 `report_provider: configured`，而报告在全部失败
+    （#201）—— 一个拿过期凭据工作的进程，此前在部署自检里是隐形的。现在它不再隐形：机制
+    （unit 上的 PartOf= 与 .path）若能自愈，失败就不会走到这里；机制若失效，这里拦住它，
+    而不是让它带着绿灯上线。
+
+    与上一个用例共用失败来源（`degraded`），但**判据不同**：那一条钉的是「degraded 会回滚」
+    这条路径，本条钉的是「过期就是一种 degraded」。两条都要在，否则只证明了一半。
+    """
+    host.seed_deployed("a" * 40)
+    parsed = host.stage()
+    host.serve(ready=READY_STALE)
+
+    result = host.run_remote(parsed["block"])
+
+    assert result.returncode == 1, result.stdout
+    assert "selfcheck=failed" in result.stdout
+    assert "restore=ok" in result.stdout, result.stdout
 
 
 @needs_topology
