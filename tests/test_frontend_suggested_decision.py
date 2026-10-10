@@ -9,8 +9,9 @@
 总览消失、生效值四元组全空，而服务端分不清那是患者定的还是界面定的。
 
 现在两者分开：建议（`suggestedDecision`）只决定界面初选哪一项，表态只由患者给出。提交
-载荷里的每一条只能是「患者动过它」或「服务端已经给过决策」，两者都没有时留空 —— 服务端
-按它自己的规则回一个明确的拒绝，而不是收到一个冒充患者决定的默认值。
+载荷里的每一条只能是「患者动过它」或「服务端已经给过决策」，两者都没有时如实说「这条我
+还没动」（`pending`）—— 那**不是**一个替患者作的默认，解出来是什么由服务端定（#195 的
+审查修复：载荷此前留空，撞的是服务端契约的校验错，患者与测试都看不出）。
 """
 
 from __future__ import annotations
@@ -169,6 +170,28 @@ def test_the_submitted_payload_never_carries_a_client_computed_default():
     assert "suggestedDecision" not in payload, "建议不得进入提交载荷"
     assert "serverDecision" in payload and "draft.decision" in payload, (
         "载荷只该认「患者动过它」或「服务端已经给过决策」"
+    )
+
+
+def test_the_payload_always_carries_a_value_the_server_accepts():
+    """每一条都必须带一个服务端收得下的 `decision` —— **不能是 `null`/`undefined`**。
+
+    这条是本票最直接的一次回归：`draft.decision || serverDecision(metric)` 对一条「患者
+    没动过、服务端也没落定过」的行求值成 `null`，而契约要求这个字段有值 —— 于是**什么都没
+    改就点确认**会撞一个校验错（422 的 `detail` 是一个数组，前端把它 stringify 后甩给患者）。
+    界面上看起来一切正常，只有真的提交才发现。
+
+    兜底只能是 `pending`（「这条我还没动」），因为它是**诚实**的那一句：解出来是什么由服务端
+    定。所以这里断言兜底存在且等于它。
+    """
+    source = (REPO_ROOT / "frontend" / "src" / "pages" / "Upload.jsx").read_text(encoding="utf-8")
+    code = "\n".join(line.split("//", 1)[0] for line in source.splitlines())
+    start = code.index("const observations = (result.metrics")
+    payload = code[start : code.index("try {", start)]
+    assignment = [line.strip() for line in payload.splitlines() if "const decided =" in line]
+    assert len(assignment) == 1, assignment
+    assert assignment[0].endswith("|| 'pending';"), (
+        "载荷的决策必须有一个服务端收得下的兜底；现在这一行是：" + assignment[0]
     )
 
 

@@ -25,6 +25,7 @@ from app.service.confirmation_decision import (
     effective_source,
     is_admitted,
     is_excluded,
+    request_decision,
     require_full_coverage,
 )
 from app.service.confirmation_vocabulary import (
@@ -115,14 +116,35 @@ def test_an_unknown_literal_status_is_rejected_not_silently_treated_as_undecided
 # ── 2. 一份词表：请求是它的子集，不是另写一份 ────────────────────────────────
 
 
-def test_the_request_vocabulary_is_the_decision_vocabulary_minus_pending():
-    """请求可以说什么 = 决策词表去掉「还没决定」。
+def test_the_request_vocabulary_can_say_undecided_too():
+    """请求**必须**能表达「这条我还没动」。
 
-    「还没决定」不是一个可以**提交**的决定 —— 请求的语义是「我把这些行决定了」，而不是
-    「我把这些行决定成了还没决定」。所以请求词表是决策词表的子集，不是另一个三值列表。
+    它必须能，因为服务端要求**覆盖全部**已解析指标（否则分不清「没提交」与「排除了」）。
+    而它表达的不是「患者决定成还没决定」—— 那是「患者对这条还没表态」，是一个诚实的表态，
+    由服务端解成该行已落定的状态（见 `test_an_undecided_request_row_keeps_what_the_server_already_decided`）。
     """
-    assert REQUEST_DECISIONS == DECISIONS - UNDECIDED_DECISIONS
-    assert "pending" not in REQUEST_DECISIONS
+    assert REQUEST_DECISIONS == DECISIONS
+    assert "pending" in REQUEST_DECISIONS
+
+
+def test_an_undecided_request_row_keeps_what_the_server_already_decided():
+    """请求里的「还没动」解出来是什么 —— 由**服务端**决定，不由客户端猜。
+
+    这是 #195 的另一半：客户端可以说「我没动这一行」，但**不能**说「所以它应该是 X」。
+    落定过的沿用上次的决定（患者在界面上没动它＝「和上次一样」，不是「撤回上次」）；
+    从没落定过的仍是「尚未决定」。
+    """
+
+    assert request_decision("pending", status="pending") == "pending"
+    assert request_decision("pending", status=None) == "pending"
+    # 重入确认：患者上次排除了它，这次没动它 —— 仍然是排除。
+    assert request_decision("pending", status="excluded") == "excluded"
+    assert request_decision("pending", status="corrected") == "corrected"
+    # 患者明确表态时，他的表态优先于落定状态。
+    assert request_decision("confirmed", status="excluded") == "confirmed"
+    # 坏数据仍然报错（与其余入口一致）。
+    with pytest.raises(ValueError):
+        request_decision("pending", status="confimed")
 
 
 def test_the_contracts_derive_their_literals_from_the_vocabulary():
@@ -249,6 +271,79 @@ def test_a_partial_confirmation_is_refused_instead_of_silently_excluding_the_res
     assert excinfo.value.status_code == 422
     assert "确认列表不完整" in excinfo.value.detail
     assert str(ids[1]) in excinfo.value.detail, "缺的那条要被点名"
+    session.close()
+
+
+def test_an_untouched_row_keeps_its_status_instead_of_being_excluded():
+    """**本票的核心**：患者没动过的行，落库时**保持原样**，不再被静默置成 excluded。
+
+    此前客户端把「界面默认」当患者的表态提交，于是「患者没看过的正常行」被记成「患者已
+    排除」。现在客户端说 `pending`（「我没动这一行」），服务端把它解成**该行已落定的状态**：
+    没落定过 → 仍是 `pending`（不是 `excluded`）。
+    """
+    from app.api.report import confirm_report
+    from app.schema.report import MetricConfirmation, ReportConfirmationRequest
+    from app.service.evidence_bridge import EvidenceBridgeError
+
+    # 夹具的第一条是 `confirmed`（夹具默认）、第二条是 `pending`（本文件加的）——
+    # 两种「没动过」都要保持原样，这正是这条用例要覆盖的：**落定过的沿用、没落定的仍是未决**。
+    session, report = _confirmation_fixture()
+    report.owner_id = "account:t:u"
+    session.commit()
+    ids = sorted(metric.id for metric in report.metrics)
+    before = {metric.id: metric.confirmation_status for metric in report.metrics}
+    assert set(before.values()) == {"confirmed", "pending"}, before
+
+    request = ReportConfirmationRequest(
+        observations=[MetricConfirmation(metric_id=metric_id, decision="pending") for metric_id in ids],
+        subject_consistency="same",
+    )
+    with (
+        patch("app.api.report.fetch_metric_catalog", side_effect=EvidenceBridgeError("目录暂不可用")),
+        patch("app.api.report._assess_report", side_effect=EvidenceBridgeError("证据服务暂不可用")),
+        patch("app.api.report.resolve_owner", return_value=_owner()),
+        pytest.raises(HTTPException) as excinfo,
+    ):
+        asyncio.run(confirm_report(report.id, _fake_request(), request, db=session))
+
+    assert excinfo.value.status_code == 503, "走到评估那一步，说明覆盖面与解算都过了"
+    from app.data.models import MetricRecord as MetricModel
+
+    saved = session.query(MetricModel).filter(MetricModel.report_id == report.id).all()
+    assert {metric.id: metric.confirmation_status for metric in saved} == before, (
+        "没动过的行必须保持原样（落定过的沿用、没落定的仍是未决），不得被记成「患者已排除」"
+    )
+    session.close()
+
+
+def test_a_reentry_row_keeps_the_decision_the_patient_made_last_time():
+    """重入确认：患者上次的决定，在他这次没动它时**不被撤回**。"""
+    from app.api.report import confirm_report
+    from app.schema.report import MetricConfirmation, ReportConfirmationRequest
+    from app.service.evidence_bridge import EvidenceBridgeError
+
+    session, report = _confirmation_fixture(confirmation_status="excluded")
+    report.owner_id = "account:t:u"
+    session.commit()
+    ids = sorted(metric.id for metric in report.metrics)
+    before = {metric.id: metric.confirmation_status for metric in report.metrics}
+
+    request = ReportConfirmationRequest(
+        observations=[MetricConfirmation(metric_id=metric_id, decision="pending") for metric_id in ids],
+        subject_consistency="same",
+    )
+    with (
+        patch("app.api.report.fetch_metric_catalog", side_effect=EvidenceBridgeError("目录暂不可用")),
+        patch("app.api.report._assess_report", side_effect=EvidenceBridgeError("证据服务暂不可用")),
+        patch("app.api.report.resolve_owner", return_value=_owner()),
+        pytest.raises(HTTPException),
+    ):
+        asyncio.run(confirm_report(report.id, _fake_request(), request, db=session))
+
+    from app.data.models import MetricRecord as MetricModel
+
+    saved = session.query(MetricModel).filter(MetricModel.report_id == report.id).all()
+    assert {metric.id: metric.confirmation_status for metric in saved} == before
     session.close()
 
 

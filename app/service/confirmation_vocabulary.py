@@ -41,12 +41,18 @@ ConfirmationDecision = Literal["pending", "confirmed", "corrected", "excluded"]
 DECISIONS_ORDERED: tuple[str, ...] = ("pending", "confirmed", "corrected", "excluded")
 DECISIONS: frozenset[str] = frozenset(DECISIONS_ORDERED)
 
-# 请求里可以出现的决定：**没有 `pending`**。
+# 请求里可以出现的决定。
 #
-# 「还没决定」不是一个可以提交的决定 —— 患者对一条指标的表态要么是一个决定，要么那一条
-# 不该出现在请求里。请求的语义是「我把这些行决定了」，而不是「我把这些行决定成了还没决定」。
-# 所以请求词表是决策词表去掉 `pending`，而不是另写一份三值列表。
-REQUEST_DECISIONS_ORDERED: tuple[str, ...] = ("confirmed", "corrected", "excluded")
+# 它**包含** `pending`，而那不是「患者决定成还没决定」—— 那是「患者对这条还没表态」。
+# 请求的整体语义是「我核对好了，这是我对**每一条**的表态」，而「这条我还没动」是其中一种
+# 诚实的表态（另一条路是客户端替患者猜一个，那正是 #195 要消灭的）。
+#
+# 它必须能表达，因为**服务端必须收到全部已解析指标**（否则分不清「没提交」与「排除了」，
+# 见 `confirmation_decision.require_full_coverage`）。所以请求词表的取值 == 决策词表；
+# 差别不在**能不能说**，而在**解出来是什么**：`pending` 由服务端解成该行**已经落定**的状态
+# （重入确认时沿用患者上次的决定），没有落定过就仍是「尚未决定」。见
+# `confirmation_decision.request_decision`。
+REQUEST_DECISIONS_ORDERED: tuple[str, ...] = DECISIONS_ORDERED
 REQUEST_DECISIONS: frozenset[str] = frozenset(REQUEST_DECISIONS_ORDERED)
 
 # 闸门：这些决定会让一行**进入解读**。正面枚举是唯一的写法，反向排除（「不等于 excluded」）

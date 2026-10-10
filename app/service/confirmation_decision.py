@@ -34,6 +34,7 @@ from app.service.confirmation_vocabulary import (
     ADMITTED_DECISIONS,
     DECISIONS,
     EXCLUDED_DECISIONS,
+    UNDECIDED_DECISIONS,
 )
 
 
@@ -61,6 +62,27 @@ def is_admitted(decision: str | None) -> bool:
     删一处另一处仍在。
     """
     return _checked(decision) in ADMITTED_DECISIONS
+
+
+def request_decision(decision: str | None, *, status: str | None) -> str:
+    """把**请求里的**一条表态解成落库决策。
+
+    请求必须覆盖全部已解析指标（否则分不清「没提交」与「排除了」），所以它必须能表达
+    「这条我还没动」—— 那由 `pending` 表示，而它**不是**一个「患者作的决定」：
+
+    - 这条行**已经落定过**（重入确认）→ 沿用那个状态。患者在界面上没动它，意思就是
+      「和上次一样」，不是「撤回上次的决定」。
+    - 从没落定过 → 仍然是「尚未决定」，落库为 `pending`。
+
+    这样就不存在「客户端替患者猜一个默认」这条路：客户端说的 `pending` 是**诚实的**，
+    而它解出来是什么由**服务端**决定。
+    """
+    value = _checked(decision)
+    if value not in UNDECIDED_DECISIONS:
+        return value
+    settled = status or "pending"
+    # 落定过的状态必须是词表里的（坏数据要报错，与其余入口一致）。
+    return settled if settled in DECISIONS else _checked(settled)
 
 
 def effective_source(decision: str | None) -> str:

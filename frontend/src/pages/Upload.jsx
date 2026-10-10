@@ -1167,7 +1167,14 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
     const observations = (result.metrics || []).map((metric) => {
       const draft = drafts[metric.id] || {};
       const selectedCode = draft.metric_code || metric.metric_code;
-      const decided = draft.decision || serverDecision(metric);
+      // 患者**动过**它 → 用他的选择；**服务端已经给过**决策（重入确认）→ 沿用那个；
+      // 两者都没有 → `pending`（「这条我还没动」）。
+      //
+      // `pending` 是客户端**唯一**允许说的第三种话：它不替患者作决定，只是如实说「他没动
+      // 这一行」。**解出来是什么由服务端决定** —— 该行已落定过的沿用，没落定的仍是未决
+      // （见 `confirmation_decision.request_decision`）。此前那句 `pending` 是服务端拒收
+      // 的（请求词表当时没有它），所以「什么都没动就点确认」会直接撞一个校验错。
+      const decided = draft.decision || serverDecision(metric) || 'pending';
       const item = {
         metric_id: metric.id,
         decision: decided,

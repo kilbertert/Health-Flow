@@ -111,6 +111,16 @@ function assessedResponse(seeded, reportUrl) {
             observation.reference_range === '0.45-1.7',
         ),
       ).toBeTruthy();
+      // #195：患者**没动过**的那一行必须如实说「我没动它」（`pending`），**不能**被
+      // 客户端算成一个表态。服务端把它解成该行已落定的状态，没有落定过就仍是未决 ——
+      // 此前客户端把「界面默认」当患者的表态提交，于是没看过的正常行被记成「患者已排除」。
+      // 按**指标名**认「动过的那一行」，不按 id：seed 的 id 是自增的，写死会随夹具漂移。
+      // 动过的那条是「甘油三酯」（本用例把它改成了 corrected），其余一条没动。
+      const corrected = confirmationBody.observations.filter((observation) => observation.decision === 'corrected');
+      expect(corrected).toHaveLength(1);
+      const untouched = confirmationBody.observations.filter((observation) => observation.decision !== 'corrected');
+      expect(untouched.length).toBeGreaterThan(0);
+      expect(untouched.every((observation) => observation.decision === 'pending')).toBe(true);
     });
   });
 });
