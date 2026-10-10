@@ -234,9 +234,14 @@ function serverDecision(metric) {
  *
  * 名字里的 `suggested` 是全部要点：它的结果是让患者少点几下，而不是替患者作决定。
  * 它只在一种情况下进提交载荷（见 `observationsFor`）：**这一行确实显示给患者看过**
- * （`needsReview`），而他没改 —— 那就是他的答案。**隐藏**的正常行永远走不到那里，
+ * （`needsReview`），而他没改 —— 那就是他的答案。**隐藏**的正常行拿不到这个初选，
  * 它们如实说「我没动过这一行」。那条分界线才是「把初选当答案」与「客户端替患者表态」
  * 的区别所在。
+ *
+ * 那两种情况今天对**每一种行形态**给出同一个答案（判成 H/L 或待核对的行 `needsReview`
+ * 必然为真，正常行又必然拿到「排除」而 `needsReview` 为假），所以这个条件在行为上是**冗余**
+ * 的。留着它是因为它写的是那条规则本身 —— 判据一旦新增一条返回 `pending` 的分支，载荷就
+ * 会跟着去替一个页面上没有的行表态，而那时唯一的信号是患者发现多出几个他答不上来的问题。
  *
  * 它回答的两个问题，判据都来自服务端：
  *   - 服务端说这一行没能进入解读（准入结论，或 #129 那条「值解析不出一个数」）→ 建议
@@ -1121,11 +1126,13 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
     }
     // 闸门问的是「**显示给他看过的**行里，还有没有他没处理的」。
     //
-    // 两个边界都要对，各关掉一种误拦：
-    //   - 取值规则与载荷**同一条**（含 `serverDecision`）：患者上次已经排除过的行（重入
-    //     确认）不该被要求再表态一次 —— #203 的实测现场里，报告 54 的 19 行就是这么被拦下的。
-    //   - 只查**显示过的**行：隐藏的正常行在载荷里如实说「还没动过」，它们不是「待处理」。
-    //     把它们算进来会让患者被一句「还有 N 个异常候选项」挡住，而页面上根本没有那几行。
+    // 取值规则与载荷**同一条**（含 `serverDecision`）：患者上次已经排除过的行（重入确认）
+    // 不该被要求再表态一次 —— #203 的实测现场里，报告 54 的 19 行就是这么被拦下的。
+    //
+    // `needsReview` 这个条件今天是**冗余**的（`suggestedDecision` 只在判成 H/L 或待核对时
+    // 返回 `pending`，而那些行 `needsReview` 必然为真），但它把「闸门只问显示过的行」这句
+    // 话写进了代码：以后有人给 `suggestedDecision` 加一条返回 `pending` 的判据时，闸门不会
+    // 跟着去拦一个页面上根本没有的行。
     const decisionOf = (metric) => drafts[metric.id]?.decision
       || serverDecision(metric)
       || (needsReview(metric) ? suggestedDecision(metric) : 'pending');
@@ -1165,9 +1172,15 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
     //     用界面上那个初选。他没改，就是他的答案 —— 那一条**确实被呈现过**。
     //
     // 最后一条与「客户端替患者猜一个默认」的差别全在 `needsReview` 上：**隐藏**的正常行
-    // 永远走不到这里（它们不进载荷，如实说「我没动过这一行」）。默认值曾经冒充患者表态的
-    // 那次事故（#195）正是把**没显示过的**行也算成了他的表态 —— 报告 54/55 的 LDL-C /
-    // Non-HDL / Total Chol 就是这么从解读里消失的。
+    // 拿不到那个初选，它们如实说「我没动过这一行」。默认值曾经冒充患者表态的那次事故
+    // （#195）正是把**没显示过的**行也算成了他的表态 —— 报告 54/55 的 LDL-C / Non-HDL /
+    // Total Chol 就是这么从解读里消失的。
+    //
+    // `needsReview` 今天是**冗余**的：`suggestedDecision` 只在判成 H/L 或待核对时返回
+    // `pending`，而那些行 `needsReview` 必然为真，所以两条路对今天每一种行形态给出同一
+    // 个答案。留着它是因为它写的正是那条规则（只有显示过的行才用初选）—— 以后有人给
+    // `suggestedDecision` 加一条返回 `pending` 的判据时，载荷不会跟着去替一个页面上没有的
+    // 行表态。这一条由 `tests/test_frontend_suggested_decision.py` 的守卫钉住。
     //
     // 兜底是 `pending`（「这条我还没动」），由服务端解：已落定过的沿用上次的决定，没落定
     // 过的仍是未决（见 `confirmation_decision.request_decision`）。

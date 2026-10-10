@@ -559,3 +559,26 @@ def test_the_frontend_no_longer_infers_value_usability_from_the_flag():
     assert "数值无法识别为单个数字" not in code
     # 旧的合并句同样不许回来。
     assert "未进入匹配（正常" not in code
+
+
+def test_an_unreviewed_row_is_counted_once_and_does_not_contradict_the_summary():
+    """还没核对过的行**只**进 `not_evaluated`，不进 `skipped`，也不进 `included`。
+
+    这是本票最容易出错的一处：服务端对还没核对过的行说「可判、待核对」（不是「未能进入
+    解读」），所以它不该落进 `skipped` —— 那一桶的字面意思是「这一行没能进入解读」，而
+    报告单会照着它说「有 N 项指标未进入解读」。若它同时进 `skipped`，同一张卡片会一边
+    说「可判」一边说「未进入解读」，患者看到的是一句自相矛盾的话。
+
+    （第二层保护是那个 `awaiting_confirmation` 没有自己的 `skipped` 桶；这一条钉住台账
+    计数本身。）
+    """
+    rows = [
+        _row(id=1),  # 已核对、判成 H → 进入解读
+        _row(id=2, confirmation_status="pending"),  # 可判、待核对
+        _row(id=3, confirmation_status="excluded"),  # 患者已排除
+    ]
+    counts = ledger(metric_reasons(rows))
+    assert counts.included == 1, "已核对且判成异常的行进入解读"
+    assert counts.not_evaluated == 2, "可判待核对 + 已排除"
+    assert counts.skipped == 0, "还没核对过不是「未能进入解读」"
+    assert counts.total == 3
