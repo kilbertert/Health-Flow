@@ -471,6 +471,32 @@ def test_the_frontend_never_derives_a_status_outside_the_one_synonym_helper():
     assert all("status ===" in line for line in reads), reads
 
 
+def _jsx_call_sites(source: str, component: str) -> list[tuple[int, str]]:
+    """`<Component ... />` 的每一处调用：`(行号, 那段文本)`。"""
+    found: list[tuple[int, str]] = []
+    start = 0
+    while (index := source.find(f"<{component}", start)) != -1:
+        end = source.index("/>", index) + 2
+        found.append((source[:index].count("\n") + 1, source[index:end]))
+        start = end
+    return found
+
+
+def test_every_page_that_renders_the_summary_card_passes_it_the_ledger():
+    """报告详情页与解读页共用同一个卡片，两处都必须把台账传进去。
+
+    漏传不会报错 —— 卡片对 `null` 台账是静默的（那是「还没有结论」的合法表示）。于是
+    同一份报告在解读页会看到「有 N 项未进入解读」，在详情页不会，而两处说的是同一件事。
+    这条守卫按**调用点**查：任何 `<EvidenceResult ...>` 都必须带 `admissionLedger`。
+    """
+    offenders: list[str] = []
+    for path in sorted((REPO_ROOT / "frontend" / "src").rglob("*.jsx")):
+        for line, call in _jsx_call_sites(path.read_text(encoding="utf-8"), "EvidenceResult"):
+            if "admissionLedger" not in call:
+                offenders.append(f"{path.relative_to(REPO_ROOT)}:{line} {call[:70]}")
+    assert offenders == [], "这些调用没有把报告级台账传进卡片：" + "; ".join(offenders)
+
+
 def test_the_summary_card_is_driven_by_the_server_ledger():
     """卡片底部读报告级台账，不再读 `skipped` 数组的长度。
 
