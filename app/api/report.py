@@ -49,7 +49,7 @@ from app.service.admission_projection import (
     admission_shapes,
     has_conclusion,
 )
-from app.service.confirmation_decision import is_excluded, require_full_coverage
+from app.service.confirmation_decision import is_excluded, request_decision, require_full_coverage
 from app.service.deep_link import DeepLinkError, build_deep_link
 from app.service.evidence_bridge import (
     EvidenceBridgeError,
@@ -732,7 +732,14 @@ async def confirm_report(
     excluded_ids: list[int] = []
     for metric in metrics:
         item = supplied[metric.id]  # 覆盖面已由 require_full_coverage 保证
-        if is_excluded(item.decision):
+        # 「这条我还没动」由服务端解：落定过的沿用上次的决定，没落定过的仍是 pending。
+        # 客户端因此不需要、也不允许替患者猜一个默认值（#195）。
+        decision = request_decision(item.decision, status=metric.confirmation_status)
+        if decision == "pending":
+            # 患者没动过这一行，而它此前也没落定过 —— **什么都不做**。
+            # 静默置成 excluded 正是本票要消灭的那件事（患者没看过的行会被记成他排除的）。
+            continue
+        if is_excluded(decision):
             metric.confirmation_status = "excluded"
             metric.confirmed_value = None
             metric.confirmed_unit = None
@@ -747,7 +754,7 @@ async def confirm_report(
         code = resolve_metric_code(requested_code, canonical_codes) or resolve_metric_code(
             metric.metric_name or "", canonical_codes
         )
-        if item.decision == "corrected":
+        if decision == "corrected":
             if not item.value or not item.unit:
                 raise HTTPException(status_code=422, detail=f"指标 {metric.id} 的修正值不完整")
             try:
@@ -764,30 +771,30 @@ async def confirm_report(
             # Confirmed unknown anomalies stay auditable but never cross the
             # evidence boundary; assessment reports them as unmatched.
             metric.metric_code = None
-            metric.confirmation_status = item.decision
-            metric.confirmed_value = item.value if item.decision == "corrected" else metric.metric_value
-            metric.confirmed_unit = item.unit if item.decision == "corrected" else metric.unit
+            metric.confirmation_status = decision
+            metric.confirmed_value = item.value if decision == "corrected" else metric.metric_value
+            metric.confirmed_unit = item.unit if decision == "corrected" else metric.unit
             metric.confirmed_reference_range = (
                 item.reference_range
-                if item.decision == "corrected" and item.reference_range is not None
+                if decision == "corrected" and item.reference_range is not None
                 else metric.reference_range
             )
             metric.confirmed_evidence_text = item.evidence_text or metric.evidence_text
             metric.confirmed_at = now
-            (corrected_ids if item.decision == "corrected" else confirmed_ids).append(metric.id)
+            (corrected_ids if decision == "corrected" else confirmed_ids).append(metric.id)
             continue
         metric.metric_code = code
-        metric.confirmation_status = item.decision
-        metric.confirmed_value = item.value if item.decision == "corrected" else metric.metric_value
-        metric.confirmed_unit = item.unit if item.decision == "corrected" else metric.unit
+        metric.confirmation_status = decision
+        metric.confirmed_value = item.value if decision == "corrected" else metric.metric_value
+        metric.confirmed_unit = item.unit if decision == "corrected" else metric.unit
         metric.confirmed_reference_range = (
             item.reference_range
-            if item.decision == "corrected" and item.reference_range is not None
+            if decision == "corrected" and item.reference_range is not None
             else metric.reference_range
         )
         metric.confirmed_evidence_text = item.evidence_text or metric.evidence_text
         metric.confirmed_at = now
-        (corrected_ids if item.decision == "corrected" else confirmed_ids).append(metric.id)
+        (corrected_ids if decision == "corrected" else confirmed_ids).append(metric.id)
     transition(report, "confirmed", db=db, action="confirmed", actor=resolve_owner(request).subject)
     apply_declaration(report, settled)
     report.evidence_result = None

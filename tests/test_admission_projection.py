@@ -449,26 +449,33 @@ def test_a_row_whose_value_cannot_be_parsed_cannot_default_to_confirmed():
 # ── 静态守卫：前端不再自己推导 ──────────────────────────────────────────────
 
 
-def test_the_frontend_never_derives_a_status_outside_the_one_synonym_helper():
-    """「待核对 / 已排除」只能由一个**同义**读取点产出，别处一律不得读原始状态。
+def test_the_frontend_never_derives_a_status_outside_the_named_helpers():
+    """`confirmation_status` 的读取集中在**两个有名字的**函数里，展示分支不各读一次。
 
-    服务端的准入结论是那个问题的答案。前端仍需要在**评估之前**就显示患者自己的表态
-    （排除 / 尚未核对），那是同一个概念、同一个来源，所以它被集中在一个函数里并写明
-    理由 —— 而不是散在展示分支里各读一次。这条守卫禁止后者。
+    服务端的准入结论是「这条指标进没进解读」的答案。前端仍要在这件事上读原始状态，但只有
+    两处、各有分工（`#191` 把它们分开之后）：
+
+    - `admissionText.admissionBeforeAssessment` —— **评估之前**显示患者自己的表态
+      （排除 / 尚未核对）。那是同一个概念、同一个来源，所以它集中在一个函数里并写明理由。
+    - `Upload.serverDecision` —— 重入确认时「服务端已经就这一行给过的决策」，用作提交
+      载荷的候选值。它**不是**展示。
+
+    这条守卫禁止的是**第三个读者**：展示分支里各读一次原始状态。
     """
     upload = (REPO_ROOT / "frontend" / "src" / "pages" / "Upload.jsx").read_text(encoding="utf-8")
     code = "\n".join(line.split("//", 1)[0] for line in upload.splitlines())
-    assert "confirmation_status" not in code, (
-        "展示层不得直接读原始 confirmation_status；要读就走 admissionBeforeAssessment"
+    reads = [line.strip() for line in code.splitlines() if "confirmation_status" in line]
+    assert reads == ["const status = metric?.confirmation_status;"], (
+        "展示层只允许 `serverDecision` 一个读取点；现在这些地方也在读：" + "; ".join(reads)
     )
 
     module = (REPO_ROOT / "frontend" / "src" / "admissionText.js").read_text(encoding="utf-8")
     body = module[module.index("export function admissionBeforeAssessment") :]
     body = body[: body.index("\n}")]
-    reads = [line.strip() for line in body.splitlines() if "confirmation_status" in line]
-    assert reads, "这个函数必须真的读 confirmation_status（否则守卫的锚点失效）"
+    comparisons = [line.strip() for line in body.splitlines() if "confirmation_status" in line]
+    assert comparisons, "这个函数必须真的读 confirmation_status（否则守卫的锚点失效）"
     # 每一处读取都必须是在**比对两个具体取值**，不是把原值原样用出去。
-    assert all("status ===" in line for line in reads), reads
+    assert all("status ===" in line for line in comparisons), comparisons
 
 
 def _jsx_call_sites(source: str, component: str) -> list[tuple[int, str]]:
