@@ -568,3 +568,50 @@ def test_a_row_without_an_abnormality_concept_is_not_blocked_by_its_missing_unit
     measured = _row(metric_value="6.5", unit=None, reference_range="3.9-6.1",
                     evidence_text="空腹血糖 6.5 mmol/L 3.9-6.1")
     assert admission_reason(measured, code="fasting_glucose") == "missing_unit"
+
+
+def test_a_qualitative_row_with_a_word_domain_is_judged_by_it():
+    """报告自己印出的**取值域**就是定性项的判据（#206）。
+
+    `Nitrite: 亚硝酸盐 Negative (Negative)` 的 `(Negative)` 不是「缺参考范围」——报告
+    说清楚了什么算正常。相符落 `within_reference_range`（正常），患者不用为它表态。
+
+    两条限制也钉住：词形不符、或值根本不是词域里的一个词（`Not Detected` 而报告没印
+    取值域）时，**不给结论** —— 那仍然要患者核对报告。而 ≥/≤ 那类数值阈值不受影响。
+    """
+    nitrite = _row(metric_name="Nitrite 亚硝酸盐", metric_value="Negative", unit=None,
+                   reference_range="(Negative)",
+                   evidence_text="Nitrite: 亚硝酸盐 Negative (Negative)")
+    assert admission_reason(nitrite, code=None) == "within_reference_range"
+    # 词的**形态**不讲究（大小写、括号、空白），但不同的词就是不同的词。
+    assert admission_reason(_row(metric_name="Nitrite", metric_value="NEGATIVE", unit=None,
+                                 reference_range="( Negative )",
+                                 evidence_text="Nitrite NEGATIVE (Negative)"), code=None) == (
+        "within_reference_range"
+    )
+    # 报告没印取值域：仍然要患者核对 —— 本票只认报告印出来的。
+    assert admission_reason(_row(metric_name="HBsAg", metric_value="Not Detected", unit=None,
+                                 reference_range=None,
+                                 evidence_text="HBsAg Not Detected"), code=None) == "invalid_value"
+
+
+def test_a_description_row_is_not_a_qualitative_test():
+    """描述/记录项与定性检验分开：前者**没有判据这回事**，后者有（#206）。
+
+    血型、尿液外观与透明度、检验日期不是检验结果 —— 它们没有「是否异常」这个概念，因此
+    不该让患者表态，也不该落 `invalid_value`（那会说「数值不是一个数」，而这一项从来没有
+    数值）。
+    """
+    for metric_name, value in (
+        ("Blood Group", "AB Rh(D) POSITIVE"),
+        ("Colour 颜色", "Pale Yellow"),
+        ("Transparency 透明度", "Clear"),
+        ("Specimen type", "Fasting"),
+    ):
+        row = _row(metric_name=metric_name, metric_value=value, unit=None, reference_range=None,
+                   evidence_text=f"{metric_name} {value}")
+        assert admission_reason(row, code=None) == "no_reference_concept", metric_name
+    # 名称像描述项、但值里带数字的：那是**一次测量**，不能跟着走这条路。
+    measured = _row(metric_name="Specimen Weight", metric_value="76.1", unit="kg",
+                    reference_range=None, evidence_text="Specimen Weight 76.1 kg")
+    assert admission_reason(measured, code=None) == "missing_reference_range"

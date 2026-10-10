@@ -315,6 +315,8 @@ def _decidable(metric: Any) -> bool:
     多显示一个异常候选危险得多。
 
     其余的「能不能判」由值、参考范围决定，与本函数无关（空值走 ``missing_value``）。
+    定性项（`Nitrite Negative (Negative)`）由报告自己印出的取值域判成 N，走的是
+    `admission.admission_reason` 的正路 —— 本函数对它与对数值项一视同仁。
 
     判据消费 `confirmation_decision.is_excluded`，不再自带一份「不等于 excluded」的反向
     表述 —— 那是同一条判定的第二份写法（证据门禁读的是正面枚举 `ADMITTED_STATUSES`），
