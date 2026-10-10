@@ -125,10 +125,46 @@ def value_reason(value_text: str | None) -> str | None:
 def reference_reason(reference: str | None) -> str | None:
     """参考范围能不能用：``missing_reference_range`` 或 ``None``。
 
-    定性指标（尿蛋白「阴性」）没有可解析的参考范围是常态 —— 这不是值的毛病。
+    只判断「有没有一个可解析的区间」。定性项印的是**取值域**（`(Negative)`、`(Nil)`）
+    而不是区间 —— 那种情形由 `word_domain_verdict` 与 `_has_no_own_interval` 分别处置，
+    不是「缺判据」。
     """
     low, high = parse_reference_range(reference)
     return "missing_reference_range" if low is None and high is None else None
+
+
+def word_domain_verdict(value_text: str | None, reference: str | None) -> bool | None:
+    """参考范围是一个**词**时，值与它是否相符 —— ``True`` 相符、``False`` 不符、``None``
+    这个判据不适用（没有词、或值不是这个词域里的一个词）。
+
+    定性项的报告原文常把它自己的取值域印在括号里：`Nitrite: 亚硝酸盐 Negative
+    (Negative)`、`Bilirubin: 尿胆红素 Nil (Nil)`。那就是**这一项的判据**，不是「缺参考
+    范围」—— 报告自己说清楚了什么算正常（#206：「只认报告印出来的取值域」）。
+
+    两条限制写在明处：
+    - 值的**词形**要能比：两侧都去掉括号、空白并折叠大小写，`Nil` 与 `NIL` 算相符，
+      `Nil` 与 `Negative` 不算（它们是报告上的两个不同的词）。
+    - 相符只说「正常」。**不符时本函数给不出结论**，交回调用方按值这一类处置（他需要
+      核对报告）—— 让一个词形的值跨证据边界是另一件事（`_observation_payload` 要一个
+      浮点数），不在本票射程内。
+    """
+    word = _as_word(reference)
+    if word is None:
+        return None
+    value = _as_word(value_text)
+    if value is None:
+        return None
+    return value == word
+
+
+def _as_word(text: str | None) -> str | None:
+    """文本当成一个**词**读出来；含数字或为空时返回 ``None``（那就不是词域）。"""
+    if not text:
+        return None
+    stripped = text.strip().strip("（）()").strip()
+    if not stripped or any(character.isdigit() for character in stripped):
+        return None
+    return " ".join(stripped.split()).casefold()
 
 
 def value_level_reason(value_text: str | None, reference: str | None) -> str | None:
@@ -171,9 +207,28 @@ def admission_reason(
     effective = effective_value(metric)
     value_text = effective.value
     reason = value_reason(value_text)
+    if reason == "invalid_value":
+        # 值不是一个数时，报告自己印出来的**取值域**仍然是判据（#206）：`Nitrite
+        # Negative (Negative)` 判成正常，患者不必为它表态。
+        verdict = word_domain_verdict(value_text, effective.reference_range)
+        if verdict is True:
+            return "within_reference_range"
+        # 描述/记录项（血型、尿液外观、检验日期）本来就没有「是否异常」这回事 ——
+        # 它们不是在等患者核对，而是这个判断对它不存在。
+        if _has_no_own_interval(metric, effective) or _is_description(metric, effective):
+            return "no_reference_concept"
+        return reason
     if reason is not None:
         return reason
-    if _has_no_own_interval(metric, effective) and parse_reference_range(effective.reference_range) == (None, None):
+    # **没有异常概念**（比值型、描述型，见 `_has_no_own_interval`）在任何别的判定之前
+    # 答掉：它比缺单位更根本 —— 这一类本来就没有「单位」这回事（比值是无量纲的），拿缺
+    # 单位去拦它会把一个不存在的问题推给患者。顺序错了，那一类就永远走不到（#205 复核）。
+    #
+    # 只在**没有可解析范围**时成立：一个有自己区间的项即使名字里有「比率」也照常判。
+    if _has_no_own_interval(metric, effective) and parse_reference_range(effective.reference_range) == (
+        None,
+        None,
+    ):
         return "no_reference_concept"
     if not effective.unit:
         return "missing_unit"
@@ -188,15 +243,8 @@ def admission_reason(
         return "missing_source_evidence"
     low, high = parse_reference_range(effective.reference_range)
     if low is None and high is None:
-        # 没有可解析的范围。两种情形分开（#205 / #206）：比值型的项**本来就没有自己的
-        # 区间**（它的意义由分子分母决定），描述型的项**本来就没有异常概念**（血型、
-        # 外观、透明度）—— 这两类都不该问患者，也不该说成「系统缺了判据」。其余（体重、
-        # 抗体滴度这类该有范围而报告没印的）才是真的缺判据，那一条留给患者核对。
-        #
-        # 这一句放在**单位之前**：没有异常概念的项本来就没有「单位」这回事（比值是无量纲
-        # 的），拿缺单位去拦它会把一个不存在的问题推给患者。
-        if _has_no_own_interval(metric, effective):
-            return "no_reference_concept"
+        # 没有可解析的范围。真的缺判据那一类（体重、抗体滴度：该有范围而报告没印）
+        # 留给患者核对 —— 它可修，而「没有异常概念」那一类不可修（它在上面就答过了）。
         return "missing_reference_range"
     # 参考范围的上下界**不要求**出现在原文证据里（#205）。范围是化验项的属性、不是这一次
     # 测量的一部分，患者要核对的是他的数值；而要求它出现会让「报告上写着范围、抽取的原文
@@ -307,22 +355,63 @@ def infer_abnormal_flag(value: str | None, reference: str | None) -> str | None:
     return "N"
 
 
-# 「这一项本来就没有自己的区间」—— 比值型与描述型（#205 / #206）。
+# 「这一项没有「是否异常」这个概念」—— 比值型与描述型（#205 / #206）。
 #
 # 判据是**报告自己印出来的东西**，不是一份我们维护的指标名清单：一份清单会随每一份新报告
-# 过期，而「分子/分母」「区间名」这些标记就在页面上。
+# 过期，而「分子/分母」「比率」「区间名」这些标记就在页面上。
 #
-# 这条判据的上限写在明处：**它只认这几种形态**。别的「本来就没有区间」的项（例如某个只印
+# 两类信号各管一半，缺一不可：
+#   - **名称**（`比率` / `ratio`）：比值型的项没有自己的区间，而抽取有时把同一页 Target
+#     那一栏的值落进了 `reference_range`（报告 57 的 `T Chol/HDL ratio 3.7 2.8`）——
+#     只看「有没有范围」会把它当成有区间的正常项。
+#   - **原文片段里的表头**（`REF. RANGES` / `Target`）：一行来自一张列了多栏参考值的表。
+#
+# 这条判据的上限写在明处：**它只认这几种形态**。别的「本来就没有判据」的项（例如某个只印
 # 名称与数值的项）仍会落 `missing_reference_range`，患者会被问一次 —— 那比反过来（把该
 # 问的项静默吞掉）安全。
 _NO_OWN_INTERVAL_NAME_RE = re.compile(r"\b(?:ratio|index)\b|比率|比值", re.IGNORECASE)
 _NO_OWN_INTERVAL_TEXT_RE = re.compile(
     r"ref\.?\s*range|target\s|reference\s*(?:range|interval)", re.IGNORECASE
 )
+# 判据明明是**阈值**的项：报告印的是 `Normal (>=90)`、`Positive (Normal <0.6)` 这类。
+# `parse_reference_range` 能从中解析出**一个**边界，所以它今天已被判成 H/L/N —— 正确的
+# 处置，本函数不该把它捞走（那是 #205 的「单边界判据」那一半）。列在这里是为了让
+# 「阈值型已经不落 `missing_reference_range`」这件事在阅读本函数时**就在眼前**。
+_THRESHOLD_MARKERS = (">", "<", "≥", "≤")
+
+
+# 报告自己印出的取值域（`(Nil)`、`(Negative)`）—— 那是**判据**，不是「缺参考范围」。
+# `word_domain_verdict` 用它回答问题。
+
+# 「这一行是描述或记录，不是一次测量」—— 血型、尿液外观、透明度、检验日期这类。它们没有
+# 异常概念，因此也没有「该怎么判」这个问题（#206）。
+#
+# 判据是这一行**自己的形状**：值里一个数字都没有、参考范围也没有可解析的区间或词域。
+# 一条 `Nitrite Negative (Negative)` 因此**不**在列（它有词域，能判）；而一条
+# `Blood Group AB Rh(D) POSITIVE` 在列。
+_DESCRIPTION_NAME_RE = re.compile(
+    r"blood\s*group|\bgroup\b|appearance|colour|color|transparency|specimen|"
+    r"collected|collection\s*date|report\s*date|barcode|血型|外观|颜色|透明度|"
+    r"检验日期|报告日期|样本",
+    re.IGNORECASE,
+)
+
+
+def _is_description(metric: Any, effective: Any) -> bool:
+    """这一行是描述/记录项吗（没有异常概念，也不该问患者）。
+
+    **名称 + 形状**两条一起用：名称给出候选（`Group` / `Colour` / `Transparency` /
+    `Specimen`…），形状确认它确实不是一次测量（值里没有数字、没有可解析的区间或词域）。
+    只按名称会误伤（`Group` 也可能是一个真的测量项），只按形状会误伤（一条把单位抽进值的
+    坏行同样是「没有数字」）。
+    """
+    if not _DESCRIPTION_NAME_RE.search(str(getattr(metric, "metric_name", "") or "")):
+        return False
+    return word_domain_verdict(effective.value, effective.reference_range) is None
 
 
 def _has_no_own_interval(metric: Any, effective: Any) -> bool:
-    """这一项的判据不是一个区间，而是比值/阈值/描述 —— 见上面两个正则的说明。"""
+    """这一项的判据不是一个区间，而是比值或描述 —— 见上面两个正则的说明。"""
     name = str(getattr(metric, "metric_name", "") or "")
     if _NO_OWN_INTERVAL_NAME_RE.search(name):
         return True
