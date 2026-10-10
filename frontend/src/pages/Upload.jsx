@@ -214,20 +214,54 @@ export function displayFlag(metric) {
   return isAbnormal(raw) ? '待核对' : raw;
 }
 
-function initialDecision(metric) {
+/**
+ * 这一行在界面上**初始选中**哪一项 —— **不是**患者的表态。
+ *
+ * 名字里的 `suggested` 是全部要点：它的结果是让患者少点几下，而不是替患者作决定。它
+ * 从不进入提交载荷（见 `observationsFor`），患者对它的任何改动都会成为那个载荷里的
+ * `decision`。
+ *
+ * 它回答的两个问题，判据都来自服务端：
+ *   - 服务端说这一行没能进入解读（准入结论，或 #129 那条「值解析不出一个数」）→ 建议
+ *     「待核对」，逼一次显式选择。**不能**建议「确认」：后端会把它连行一起丢掉，而界面
+ *     却让它一路走到「已生成健康提示」（报告 44 的三个异常项就是这么消失的）。
+ *   - 判不出来但模型宣称异常 → 也建议「待核对」（这正是 #129 要保住的场景）。
+ *   - 其余（正常、模型没标异常）→ 建议「排除」，因为这些行患者不需要看。
+ *
+ * 最后一条曾经是患者可见缺陷的来源：它**同时**被当成患者的表态提交，于是「患者没看过
+ * 的正常行」被记成「患者已排除」。现在两者分开 —— 建议留在这里，表态只由患者给出。
+ */
+/**
+ * 服务端**已经就这一行**给出的决策，或 `null`（还没有）。
+ *
+ * 只取真正的决定（确认 / 修正 / 排除）—— `pending` 是「还没决定」，把它当成一个可提交的
+ * 表态会让界面替患者说「我还没决定」，而那句话在请求里没有意义。服务端的请求词表也不收
+ * 它（见 `confirmation_vocabulary.REQUEST_DECISIONS`）。
+ */
+function serverDecision(metric) {
+  const status = metric?.confirmation_status;
+  return status === 'confirmed' || status === 'corrected' || status === 'excluded' ? status : null;
+}
+
+/**
+ * 这一行在界面上**初始选中**哪一项 —— **不是**患者的表态。
+ *
+ * 名字里的 `suggested` 是全部要点：它的结果是让患者少点几下，而不是替患者作决定。它
+ * 从不进入提交载荷（见 `observationsFor`），患者对它的任何改动都会成为那个载荷里的
+ * `decision`。
+ *
+ * 它回答的两个问题，判据都来自服务端：
+ *   - 服务端说这一行没能进入解读（准入结论，或 #129 那条「值解析不出一个数」）→ 建议
+ *     「待核对」，逼一次显式选择。**不能**建议「确认」：后端会把它连行一起丢掉，而界面
+ *     却让它一路走到「已生成健康提示」（报告 44 的三个异常项就是这么消失的）。
+ *   - 判不出来但模型宣称异常 → 也建议「待核对」（这正是 #129 要保住的场景）。
+ *   - 其余（正常、模型没标异常）→ 建议「排除」，因为这些行患者不需要看。
+ *
+ * 最后一条曾经是患者可见缺陷的来源：它**同时**被当成患者的表态提交，于是「患者没看过
+ * 的正常行」被记成「患者已排除」。现在两者分开 —— 建议留在这里，表态只由患者给出。
+ */
+export function suggestedDecision(metric) {
   const flag = displayFlag(metric);
-  // 服务端说这一行**没能进入解读**（准入结论非空且不是「在参考区间内」）时，不能默认
-  // 「确认」：后端会把它连行一起丢掉，而界面却让它一路走到「已生成健康提示」——
-  // 用户从没被告知那个值没被采纳（报告 44 的三个异常项就是这么消失的）。默认
-  // 「待核对」，逼一次显式选择。
-  //
-  // 判据是服务端的结论，不是本地对 `inferred_abnormal_flag` 的解读：那两件事在
-  // 「参考范围缺失」上会分叉 —— 值完全正常，只是判不了，而去修正数值救不了它。
-  //
-  // 两条合起来覆盖两个时机：**评估之后**看服务端的准入结论（那时它才有值）；
-  // **评估之前**（确认页面对的就是这个状态）只能看「值解析不出一个数」这一条 ——
-  // 见 `valueNotParsed` 的说明，那是 #129 的守卫，它必须在这里、也必须只用同一个
-  // 问题的服务端名字。
   if (notableAdmission(metric?.admission_reason) || valueNotParsed(metric)) return 'pending';
   if ((flag === 'H' || flag === 'L') && metric?.evidence_text && metric?.page_number) return 'confirmed';
   if (flag === 'H' || flag === 'L') return 'pending';
@@ -251,7 +285,7 @@ function useNarrowViewport() {
 
 function MetricCard({ metric, draft, metricCatalog, disabled, onUpdateDraft, onOpenSource }) {
   const [expanded, setExpanded] = useState(false);
-  const decision = draft?.decision || initialDecision(metric);
+  const decision = draft?.decision || suggestedDecision(metric);
   return (
     <Card size="small" className="metric-card">
       <div className="metric-card-header">
@@ -716,7 +750,9 @@ function initialDrafts(metrics) {
   return Object.fromEntries((metrics || []).map((metric) => [
     metric.id,
     {
-      decision: initialDecision(metric),
+      // **不预填 `decision`**：它记录的是「患者动过这一行」，而预填会让每个草稿看起来
+      // 都像患者选过。界面要显示的初始值由 `suggestedDecision` 现算（见卡片与表格的
+      // `value`），提交载荷只认这里真正存在的值。
       metric_code: metric.metric_code || '',
       // 生效值：pending 指标就是模型值（临时生效值），已确认/已修正的指标是
       // 患者上次核对过的值 —— 重入时输入框预填它，不用从零重输二十项。
@@ -1091,7 +1127,7 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
       message.warning('请先确认所有文件属于同一主体');
       return;
     }
-    const decisionOf = (metric) => drafts[metric.id]?.decision || initialDecision(metric);
+    const decisionOf = (metric) => drafts[metric.id]?.decision || suggestedDecision(metric);
     const unresolved = (result.metrics || []).filter((metric) => decisionOf(metric) === 'pending');
     if (unresolved.length > 0) {
       message.warning(`还有 ${unresolved.length} 个异常候选项需要确认、修正或排除`);
@@ -1117,16 +1153,27 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
     }
     setConfirming(true);
     setError('');
+    // ── 提交载荷里**没有**客户端算出的默认 ──────────────────────────────────
+    //
+    // 这是本票的核心：`suggestedDecision` 的结果**从不**进这里。此前它替代患者作了表态，
+    // 于是「患者没看过的正常行」被记成「患者已排除」（报告单上消失、生效值四元组全空），
+    // 而服务端分不清那是患者定的还是界面定的。
+    //
+    // 现在每一条只能是这两种之一：
+    //   - 患者**动过**它（`draft.decision` 已设）→ 用他的选择；
+    //   - 服务端**已经给过**决策（`confirmation_status` 已落定，重入确认时）→ 沿用那个。
+    // 两者都没有时**不猜**：留 `undefined`，服务端按它自己的规则回一个明确的拒绝
+    // （缺行 → 422 点名），而不是收到一个冒充患者决定的默认值。
     const observations = (result.metrics || []).map((metric) => {
       const draft = drafts[metric.id] || {};
       const selectedCode = draft.metric_code || metric.metric_code;
-      const decision = draft.decision || initialDecision(metric);
+      const decided = draft.decision || serverDecision(metric);
       const item = {
         metric_id: metric.id,
-        decision,
+        decision: decided,
         metric_code: selectedCode || undefined,
       };
-      if (decision === 'corrected') {
+      if (decided === 'corrected') {
         item.value = draft.value;
         item.unit = draft.unit;
         item.reference_range = draft.reference_range || undefined;
@@ -1228,7 +1275,7 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
       render: (_, record) => (
         <Select
           aria-label={`${record.metric_name}处理方式`}
-          value={drafts[record.id]?.decision || initialDecision(record)}
+          value={drafts[record.id]?.decision || suggestedDecision(record)}
           options={DECISIONS}
           disabled={result.status !== 'pending_confirmation'}
           onChange={(value) => updateDraft(record.id, 'decision', value)}
