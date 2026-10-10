@@ -196,7 +196,10 @@ function needsReview(metric) {
 export function displayFlag(metric) {
   const admission = metric?.admission_reason;
   if (admission === 'excluded') return 'excluded';
-  if (admission === 'pending') return '待核对';
+  // 「可判、但患者还没核对」（`awaiting_confirmation`）在这里**没有分支**，是刻意的：
+  // 那一行判得出 H/L/N，所以下面那一步（读 `inferred_abnormal_flag`）正是它的答案。
+  // 这一条此前不存在 —— 那时「未核对」与「判不了」共用一个 `pending`，于是显示分支
+  // 在读到判定之前就先返回「待核对」，患者看到的是一整页待核对（#203）。
   const inferred = metric?.inferred_abnormal_flag;
   if (inferred !== undefined && inferred !== null) return inferred;
   const raw = metric?.abnormal_flag;
@@ -215,23 +218,6 @@ export function displayFlag(metric) {
 }
 
 /**
- * 这一行在界面上**初始选中**哪一项 —— **不是**患者的表态。
- *
- * 名字里的 `suggested` 是全部要点：它的结果是让患者少点几下，而不是替患者作决定。它
- * 从不进入提交载荷（见 `observationsFor`），患者对它的任何改动都会成为那个载荷里的
- * `decision`。
- *
- * 它回答的两个问题，判据都来自服务端：
- *   - 服务端说这一行没能进入解读（准入结论，或 #129 那条「值解析不出一个数」）→ 建议
- *     「待核对」，逼一次显式选择。**不能**建议「确认」：后端会把它连行一起丢掉，而界面
- *     却让它一路走到「已生成健康提示」（报告 44 的三个异常项就是这么消失的）。
- *   - 判不出来但模型宣称异常 → 也建议「待核对」（这正是 #129 要保住的场景）。
- *   - 其余（正常、模型没标异常）→ 建议「排除」，因为这些行患者不需要看。
- *
- * 最后一条曾经是患者可见缺陷的来源：它**同时**被当成患者的表态提交，于是「患者没看过
- * 的正常行」被记成「患者已排除」。现在两者分开 —— 建议留在这里，表态只由患者给出。
- */
-/**
  * 服务端**已经就这一行**给出的决策，或 `null`（还没有）。
  *
  * 只取真正的决定（确认 / 修正 / 排除）—— `pending` 是「还没决定」，把它当成一个可提交的
@@ -246,9 +232,16 @@ function serverDecision(metric) {
 /**
  * 这一行在界面上**初始选中**哪一项 —— **不是**患者的表态。
  *
- * 名字里的 `suggested` 是全部要点：它的结果是让患者少点几下，而不是替患者作决定。它
- * 从不进入提交载荷（见 `observationsFor`），患者对它的任何改动都会成为那个载荷里的
- * `decision`。
+ * 名字里的 `suggested` 是全部要点：它的结果是让患者少点几下，而不是替患者作决定。
+ * 它只在一种情况下进提交载荷（见 `observationsFor`）：**这一行确实显示给患者看过**
+ * （`needsReview`），而他没改 —— 那就是他的答案。**隐藏**的正常行拿不到这个初选，
+ * 它们如实说「我没动过这一行」。那条分界线才是「把初选当答案」与「客户端替患者表态」
+ * 的区别所在。
+ *
+ * 那两种情况今天对**每一种行形态**给出同一个答案（判成 H/L 或待核对的行 `needsReview`
+ * 必然为真，正常行又必然拿到「排除」而 `needsReview` 为假），所以这个条件在行为上是**冗余**
+ * 的。留着它是因为它写的是那条规则本身 —— 判据一旦新增一条返回 `pending` 的分支，载荷就
+ * 会跟着去替一个页面上没有的行表态，而那时唯一的信号是患者发现多出几个他答不上来的问题。
  *
  * 它回答的两个问题，判据都来自服务端：
  *   - 服务端说这一行没能进入解读（准入结论，或 #129 那条「值解析不出一个数」）→ 建议
@@ -257,11 +250,15 @@ function serverDecision(metric) {
  *   - 判不出来但模型宣称异常 → 也建议「待核对」（这正是 #129 要保住的场景）。
  *   - 其余（正常、模型没标异常）→ 建议「排除」，因为这些行患者不需要看。
  *
- * 最后一条曾经是患者可见缺陷的来源：它**同时**被当成患者的表态提交，于是「患者没看过
- * 的正常行」被记成「患者已排除」。现在两者分开 —— 建议留在这里，表态只由患者给出。
+ * 最后一条曾经是患者可见缺陷的来源：它在**没显示给患者看**的那些行上被当成患者的表态
+ * 提交，于是「患者没看过的正常行」被记成「患者已排除」。现在两者分开 —— 建议只对患者
+ * 看到过的行生效，其余的行服务端听到的是一句诚实的「还没动」。
  */
 export function suggestedDecision(metric) {
   const flag = displayFlag(metric);
+  // 「可判、待核对」不算一条值得一提的结论：值、单位、参考范围、原文证据都齐，判得出
+  // H/L/N —— 缺的只是患者那一次核对，而确认页正是他在核对（#203）。把它算进去会让每一份
+  // 刚评估完的报告满页「待核对」，而患者要处理的其实只有下面两类。
   if (notableAdmission(metric?.admission_reason) || valueNotParsed(metric)) return 'pending';
   if ((flag === 'H' || flag === 'L') && metric?.evidence_text && metric?.page_number) return 'confirmed';
   if (flag === 'H' || flag === 'L') return 'pending';
@@ -1127,8 +1124,21 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
       message.warning('请先确认所有文件属于同一主体');
       return;
     }
-    const decisionOf = (metric) => drafts[metric.id]?.decision || suggestedDecision(metric);
-    const unresolved = (result.metrics || []).filter((metric) => decisionOf(metric) === 'pending');
+    // 闸门问的是「**显示给他看过的**行里，还有没有他没处理的」。
+    //
+    // 取值规则与载荷**同一条**（含 `serverDecision`）：患者上次已经排除过的行（重入确认）
+    // 不该被要求再表态一次 —— #203 的实测现场里，报告 54 的 19 行就是这么被拦下的。
+    //
+    // `needsReview` 这个条件今天是**冗余**的（`suggestedDecision` 只在判成 H/L 或待核对时
+    // 返回 `pending`，而那些行 `needsReview` 必然为真），但它把「闸门只问显示过的行」这句
+    // 话写进了代码：以后有人给 `suggestedDecision` 加一条返回 `pending` 的判据时，闸门不会
+    // 跟着去拦一个页面上根本没有的行。
+    const decisionOf = (metric) => drafts[metric.id]?.decision
+      || serverDecision(metric)
+      || (needsReview(metric) ? suggestedDecision(metric) : 'pending');
+    const unresolved = (result.metrics || []).filter(
+      (metric) => needsReview(metric) && decisionOf(metric) === 'pending',
+    );
     if (unresolved.length > 0) {
       message.warning(`还有 ${unresolved.length} 个异常候选项需要确认、修正或排除`);
       return;
@@ -1153,28 +1163,33 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
     }
     setConfirming(true);
     setError('');
-    // ── 提交载荷里**没有**客户端算出的默认 ──────────────────────────────────
+    // ── 提交载荷：**只看患者看到过的行** ────────────────────────────────────
     //
-    // 这是本票的核心：`suggestedDecision` 的结果**从不**进这里。此前它替代患者作了表态，
-    // 于是「患者没看过的正常行」被记成「患者已排除」（报告单上消失、生效值四元组全空），
-    // 而服务端分不清那是患者定的还是界面定的。
-    //
-    // 现在每一条只能是这两种之一：
+    // 三条来源，优先级从高到低：
     //   - 患者**动过**它（`draft.decision` 已设）→ 用他的选择；
-    //   - 服务端**已经给过**决策（`confirmation_status` 已落定，重入确认时）→ 沿用那个。
-    // 两者都没有时**不猜**：留 `undefined`，服务端按它自己的规则回一个明确的拒绝
-    // （缺行 → 422 点名），而不是收到一个冒充患者决定的默认值。
+    //   - 服务端**已经给过**决策（`confirmation_status` 已落定，重入确认时）→ 沿用那个；
+    //   - 以上都没有，但这一行**界面上显示给他看过**（`needsReview`：红色 H/L、待核对）→
+    //     用界面上那个初选。他没改，就是他的答案 —— 那一条**确实被呈现过**。
+    //
+    // 最后一条与「客户端替患者猜一个默认」的差别全在 `needsReview` 上：**隐藏**的正常行
+    // 拿不到那个初选，它们如实说「我没动过这一行」。默认值曾经冒充患者表态的那次事故
+    // （#195）正是把**没显示过的**行也算成了他的表态 —— 报告 54/55 的 LDL-C / Non-HDL /
+    // Total Chol 就是这么从解读里消失的。
+    //
+    // `needsReview` 今天是**冗余**的：`suggestedDecision` 只在判成 H/L 或待核对时返回
+    // `pending`，而那些行 `needsReview` 必然为真，所以两条路对今天每一种行形态给出同一
+    // 个答案。留着它是因为它写的正是那条规则（只有显示过的行才用初选）—— 以后有人给
+    // `suggestedDecision` 加一条返回 `pending` 的判据时，载荷不会跟着去替一个页面上没有的
+    // 行表态。这一条由 `tests/test_frontend_suggested_decision.py` 的守卫钉住。
+    //
+    // 兜底是 `pending`（「这条我还没动」），由服务端解：已落定过的沿用上次的决定，没落定
+    // 过的仍是未决（见 `confirmation_decision.request_decision`）。
     const observations = (result.metrics || []).map((metric) => {
       const draft = drafts[metric.id] || {};
       const selectedCode = draft.metric_code || metric.metric_code;
-      // 患者**动过**它 → 用他的选择；**服务端已经给过**决策（重入确认）→ 沿用那个；
-      // 两者都没有 → `pending`（「这条我还没动」）。
-      //
-      // `pending` 是客户端**唯一**允许说的第三种话：它不替患者作决定，只是如实说「他没动
-      // 这一行」。**解出来是什么由服务端决定** —— 该行已落定过的沿用，没落定的仍是未决
-      // （见 `confirmation_decision.request_decision`）。此前那句 `pending` 是服务端拒收
-      // 的（请求词表当时没有它），所以「什么都没动就点确认」会直接撞一个校验错。
-      const decided = draft.decision || serverDecision(metric) || 'pending';
+      const decided = draft.decision
+        || serverDecision(metric)
+        || (needsReview(metric) ? suggestedDecision(metric) : 'pending');
       const item = {
         metric_id: metric.id,
         decision: decided,

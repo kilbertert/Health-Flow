@@ -31,9 +31,15 @@ from app.service.confirmation_vocabulary import ADMITTED_DECISIONS_ORDERED
 # 新增一种准入判定时，名字只加在这里 —— 三个消费点（门禁 / 判定守卫 / 出域契约）
 # 都从这里取，不会再有第三个文件声明自己的一套。
 AdmissionReason = Literal[
-    # 尚未核对与患者已排除：两种显式的准入结论，不是「没有原因」。
-    "pending",
+    # 患者已排除：一个表态，也是结论本身。
     "excluded",
+    # **可判、但患者还没核对**：值、单位、参考范围、原文证据都齐，这一行判得出 H/L/N，
+    # 缺的只是患者那一次核对。它此前叫 `pending` —— 与「指标确认决策」词表里那个
+    # `pending`（患者的表态：还没决定）同名，于是两个正交的概念在数据上不可分辨：
+    # **患者从来没打开过的正常行**与**判不了的行**拿到同一个词，而两者的处置相反
+    # （前者不用他做任何事，后者必须他处理）。改名之后，准入说的这句「可判、待核对」
+    # 与决策说的「尚未决定」不再互相冒充 —— 见 `NOT_EVALUATED_ORDERED` 的说明。
+    "awaiting_confirmation",
     # 值本身不可用。「还没解析出来」与「不是一个数」是两句不同的话：前者让人去等
     # 解析，后者让人去修正。
     "missing_value",
@@ -74,15 +80,17 @@ UNMATCHED_REASONS_ORDERED: tuple[str, ...] = ("unknown_metric_code", "no_publish
 SKIPPED_REASONS: frozenset[str] = frozenset(SKIPPED_REASONS_ORDERED)
 UNMATCHED_REASONS: frozenset[str] = frozenset(UNMATCHED_REASONS_ORDERED)
 
-# 三桶都看不到的那两类（尚未决定 / 患者已排除）现在有名字了；它们不出现在
-# `skipped` / `unmatched` 里，而是随指标行逐条出域（见 PRD #176 的第二张票）。
+# 三桶都看不到的那两类（**可判、但患者还没核对** / 患者已排除）现在有名字了；它们不
+# 出现在 `skipped` / `unmatched` 里，而是随指标行逐条出域（见 PRD #176 的第二张票）。
 #
-# **这是对确认决策的一个读出，不是第三份抄写**：这两句话由决策词表派生 ——
-# 准入说「没进解读」的两个理由，正是决策说「患者没表态」与「患者排除了」的那两个决定。
-NOT_EVALUATED_ORDERED: tuple[str, ...] = (
-    *confirmation_decisions.UNDECIDED_ORDERED,
-    *confirmation_decisions.EXCLUDED_ORDERED,
-)
+# **这是对确认决策的一个读出，不是第三份抄写** —— 但两处名字不同名，且**刻意**不同名：
+# 准入说的 `awaiting_confirmation` 是「这一行判得出，缺的只是患者那一次核对」，决策说的
+# `pending` 是「患者还没就它表态」。它们是同一件事的两个视角（一个讲这一行的可判性，一个
+# 讲患者的动作），而不是同一个问题在两处判定。此前两者共用一个字符串 `pending`，于是
+# 「没看过的正常行」与「判不了的行」在数据上不可分辨 —— 本票把那个同名拆开。
+#
+# 「患者已排除」没有这个问题：它是一个表态，`excluded` 在两处说的是同一件事。
+NOT_EVALUATED_ORDERED: tuple[str, ...] = (*confirmation_decisions.EXCLUDED_ORDERED, "awaiting_confirmation")
 NOT_EVALUATED_REASONS: frozenset[str] = frozenset(NOT_EVALUATED_ORDERED)
 
 
@@ -101,11 +109,24 @@ ADMITTED_STATUSES: frozenset[str] = frozenset(ADMITTED_DECISIONS_ORDERED)
 # `Literal[*X]` 是 Python 3.11+ 的写法；CI 与部署都钉在 3.13。
 AdmissionReasonLiteral = Literal[*SKIPPED_REASONS_ORDERED, *UNMATCHED_REASONS_ORDERED, *NOT_EVALUATED_ORDERED]
 
-# 这些原因是「判定过，在参考区间内」—— **正常**，不是「没能进入解读」。它们必须从
-# 「未进入解读」那类说法里排除，否则每一份报告都会说「有 N 项未进入解读」而 N 里
-# 大半是正常指标，与同一张卡片上方的摘要直接矛盾。
+# 「判定过、在参考区间内」—— **正常**，不是「没能进入解读」。它必须从「未进入解读」那类
+# 说法里排除，否则每一份报告都会说「有 N 项未进入解读」而 N 里大半是正常指标，与同一张
+# 卡片上方的摘要直接矛盾。
+#
+# `awaiting_confirmation` **不**在这一桶：它判得出正常，但**患者还没核对过**，所以它确实
+# 没有参与解读（台账的 `not_evaluated` 收它）。两者在报告单上是两句不同的话：一句是「都
+# 在参考区间内」（结论已给，无需动作），一句是「尚未核对，未参与解读」（等他核对）。
 NORMAL_REASONS_ORDERED: tuple[str, ...] = ("within_reference_range",)
 NORMAL_REASONS: frozenset[str] = frozenset(NORMAL_REASONS_ORDERED)
+
+# 判定过、且**患者不必为它做任何事**的两条结论。它们与 `skipped` 的差别是：那一条说的是
+# 「这一行没能进入解读」，而这两条说的是「这一行没问题」（正常 / 可判到只差他核对一次）。
+# 逐行的橙色提示与「待处理」集合都按这一桶排除，否则报告单上每一行都挂着一条结论。
+#
+# 与前端 `NO_ACTION_REASONS` 同一份口径（由 `test_admission` 的守卫钉住两者相等）：
+# 分叉会让同一行在两处得到不同的说法，那正是本 PRD 要消灭的形状。
+NO_ACTION_REASONS_ORDERED: tuple[str, ...] = (*NORMAL_REASONS_ORDERED, "awaiting_confirmation")
+NO_ACTION_REASONS: frozenset[str] = frozenset(NO_ACTION_REASONS_ORDERED)
 
 
 def vocabulary() -> frozenset[str]:
