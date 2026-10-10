@@ -173,6 +173,8 @@ def admission_reason(
     reason = value_reason(value_text)
     if reason is not None:
         return reason
+    if _has_no_own_interval(metric, effective) and parse_reference_range(effective.reference_range) == (None, None):
+        return "no_reference_concept"
     if not effective.unit:
         return "missing_unit"
     evidence = effective.evidence_text
@@ -190,6 +192,9 @@ def admission_reason(
         # 区间**（它的意义由分子分母决定），描述型的项**本来就没有异常概念**（血型、
         # 外观、透明度）—— 这两类都不该问患者，也不该说成「系统缺了判据」。其余（体重、
         # 抗体滴度这类该有范围而报告没印的）才是真的缺判据，那一条留给患者核对。
+        #
+        # 这一句放在**单位之前**：没有异常概念的项本来就没有「单位」这回事（比值是无量纲
+        # 的），拿缺单位去拦它会把一个不存在的问题推给患者。
         if _has_no_own_interval(metric, effective):
             return "no_reference_concept"
         return "missing_reference_range"

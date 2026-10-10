@@ -552,3 +552,19 @@ def test_a_row_without_an_abnormality_concept_is_not_asked_of_the_patient():
     plain = _row(metric_name="Weight", metric_value="76.1", reference_range=None,
                  evidence_text="Weight 76.1kg")
     assert admission_reason(plain, code=None) == "missing_reference_range"
+
+
+def test_a_row_without_an_abnormality_concept_is_not_blocked_by_its_missing_unit():
+    """「没有异常概念」比缺单位**更根本**：比值行无量纲，缺单位不是它的问题（#205）。
+
+    这一条是一个真实的错序：比值型的行（`T Chol/HDL ratio`）没有单位是正常的 —— 比值是
+    无量纲的 —— 而判定先看单位，于是它们全部落 `missing_unit`，「没有异常概念」那一条
+    永远走不到。错序与缺判据在页面上长得一样（都要患者处理），所以只有按原因断言才看得见。
+    """
+    ratio = _row(metric_name="T Chol/HDL ratio", metric_value="3.7", unit=None,
+                 reference_range=None, evidence_text="T Chol/HDL ratio 总胆固醇与高脂胆固醇 3.7 2.8")
+    assert admission_reason(ratio, code=None) == "no_reference_concept"
+    # 反过来：**有**自己区间的行缺单位，仍然是缺单位 —— 不能跟着放宽。
+    measured = _row(metric_value="6.5", unit=None, reference_range="3.9-6.1",
+                    evidence_text="空腹血糖 6.5 mmol/L 3.9-6.1")
+    assert admission_reason(measured, code="fasting_glucose") == "missing_unit"
