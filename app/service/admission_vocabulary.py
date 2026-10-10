@@ -44,6 +44,12 @@ AdmissionReason = Literal[
     # 解析，后者让人去修正。
     "missing_value",
     "invalid_value",
+    # 同一行里出现了**两个来源不同的数值**（页面上印了一行、患者又手写一行，OCR 如实
+    # 转录了两个）。它不是「数值读不出来」：两个数都在，系统缺的是「哪个才是这一项的
+    # 当前值」这个判断，而那个判断只有患者有（#204）。名字分开的理由与 `awaiting_
+    # confirmation` 一样 —— 压进 `invalid_value` 会让页面问一个他已经答过的问题
+    # （「这条的数值是多少」），而他真正要做的选择是「用哪个」。
+    "two_values",
     # 证据不完备（跨不过证据边界）。
     "missing_unit",
     "missing_source_evidence",
@@ -68,6 +74,7 @@ AdmissionReason = Literal[
 SKIPPED_REASONS_ORDERED: tuple[str, ...] = (
     "missing_value",
     "invalid_value",
+    "two_values",
     "missing_unit",
     "missing_source_evidence",
     "missing_source_page",

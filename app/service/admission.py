@@ -53,6 +53,14 @@ _range_re = re.compile(r"(?P<low>-?\d+(?:\.\d+)?)\s*(?:-|~|至|到)\s*(?P<high>-
 _upper_re = re.compile(r"(?:<|<=|≤)\s*(?P<high>-?\d+(?:\.\d+)?)")
 _lower_re = re.compile(r"(?:>|>=|≥)\s*(?P<low>-?\d+(?:\.\d+)?)")
 _SIGN_MARKERS = ("<", ">", "≤", "≥")
+# 出现它们时，「两个数」不是「用哪个」的问题：`0 x 10^6/L`（单位被抽进值）与 `10:00`
+# （时间）都会抽成恰好两个数字，但患者在那两个数之间没有可做的选择。
+_TWO_VALUE_BLOCKERS = (":", "^")
+
+
+def _numbers(value_text: str | None) -> list[float]:
+    """文本里出现的**全部**数值，按出现顺序。"""
+    return [float(match) for match in _number_re.findall(value_text or "")]
 
 
 def single_number(value: str | None) -> float | None:
@@ -67,20 +75,36 @@ def single_number(value: str | None) -> float | None:
 
 
 def value_reason(value_text: str | None) -> str | None:
-    """值本身能不能用：``missing_value`` / ``invalid_value`` / ``None``。
+    """值本身能不能用：``missing_value`` / ``two_values`` / ``invalid_value`` / ``None``。
 
-    「值还没解析出来」与「值不是一个数」是**两句不同的话**：前者患者去等解析，后者
-    患者去修正。把它们合成一句会把人引向错误的动作 —— 而参考范围缺失（见
-    `reference_reason`）又是第三件事，值本身完全正常。
+    四句话对应四件不同的事，其中第三句是本票（#204）新拆出来的：
+
+    - ``missing_value`` —— 值还没解析出来，患者去等；
+    - ``invalid_value`` —— 值不是一个数（混进了文字、被截断），患者去修正；
+    - ``two_values`` —— **两个数都在**（页面印一行、患者手写一行），缺的是「哪个才是
+      这一项的当前值」。患者要做的不是重输一遍数字（他本来就写着），而是**选一个**。
+      把它压进 ``invalid_value`` 会让页面问一个他已经答过的问题。
+    - 参考范围缺失（见 `reference_reason`）又是另一件事：值本身完全正常。
     """
     text = (value_text or "").strip()
     if not text:
         return "missing_value"
-    # 带符号的值（`<20`、`≥3.9`）先于单值判定：`single_number('<20')` 会解析出 20，
+    # 带符号的值（`<20`、`≥3.9`）先于数值计数：`single_number('<20')` 会解析出 20，
     # 但那是「小于 20」的上界，不是一个测量值。这一条与异常判定的拒绝一致。
+    # 它**先于** `two_values`：`<3 x 10^6/L` 里那个 3 与 10 不是两个测量值，是一个
+    # 带单位的界 —— 判成「两个值」会问患者一个不存在的问题。
     if any(marker in text for marker in _SIGN_MARKERS):
         return "invalid_value"
-    if single_number(text) is None:
+    numbers = _numbers(text)
+    # 两个候选要**恰好两个**，而且文本里不能有 `:` / `^` —— 那两个符号说明这些数字不是
+    # 一组并排的测量值：`0 x 10^6/L`（单位被抽进了值）与 `10:00`（时间）都不是「用哪个」
+    # 的问题。真实报告里被抽成两个值的形态是 `3.39 / 3.63`、`1.53 1.50`、`76.1kg 83.6kg`。
+    #
+    # 这条判据的上限写在明处：一个**恰好两个数字、又含冒号**的值会被判成 `invalid_value`
+    # 而不是两个值（观测到的样本里没有这种形态）。那时患者要重新给一个值，不是选一个。
+    if len(numbers) == 2 and not any(marker in text for marker in _TWO_VALUE_BLOCKERS):
+        return "two_values"
+    if len(numbers) == 0 or len(numbers) >= 2:
         return "invalid_value"
     return None
 

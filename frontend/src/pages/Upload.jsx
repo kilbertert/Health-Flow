@@ -2,6 +2,7 @@ import {
   admissionBeforeAssessment,
   admissionGroups,
   admissionText,
+  dualValues,
   notableAdmission,
   valueNotParsed,
   valueReasonOrNull,
@@ -20,6 +21,7 @@ import {
   List,
   message,
   Modal,
+  Radio,
   Select,
   Space,
   Switch,
@@ -256,6 +258,11 @@ function serverDecision(metric) {
  */
 export function suggestedDecision(metric) {
   const flag = displayFlag(metric);
+  // 两个值都在的行（#204）：患者要做的是**选一个**，不是「确认 / 排除」——所以在
+  // 这里如实说「还没决定」，页面把两个候选列出来给他点（见 `dualValueChoice`）。
+  // 没有它的话，一行 `3.39 / 3.63`（判成 H、证据齐）会拿到初选「确认」，而患者对
+  // 「用哪个数」根本没表过态。
+  if (dualValueChoice(metric)) return 'pending';
   // 「可判、待核对」不算一条值得一提的结论：值、单位、参考范围、原文证据都齐，判得出
   // H/L/N —— 缺的只是患者那一次核对，而确认页正是他在核对（#203）。把它算进去会让每一份
   // 刚评估完的报告满页「待核对」，而患者要处理的其实只有下面两类。
@@ -263,6 +270,23 @@ export function suggestedDecision(metric) {
   if ((flag === 'H' || flag === 'L') && metric?.evidence_text && metric?.page_number) return 'confirmed';
   if (flag === 'H' || flag === 'L') return 'pending';
   return flag === '待核对' ? 'pending' : 'excluded';
+}
+
+/**
+ * 这一行页面上出现了**两个来源不同的数值**时，那两个候选；否则 `null`。
+ *
+ * 抽取如实转录了页面上出现的东西（化验单常是两行：实验室印的一行、患者手写的一行），
+ * 而下游要求恰好一个数 —— 于是整行被丢掉，页面却问患者「这条的数值是多少」，而那两个
+ * 数**本来就是他写的**（#204）。
+ *
+ * **不预设哪个是「当前值」**：谁是手写、谁是印刷需要模型去猜，而猜错的方向不对称
+ * （把患者手写值当成实验室值，或反过来）。能确定的事实只有「页面上有两个来源不同的
+ * 数值」——所以这里把它们如实列出来，让患者做他本来就在做的那个选择。
+ */
+export function dualValueChoice(metric) {
+  if (valueReasonOrNull(metric) !== 'two_values') return null;
+  const values = dualValues(metric);
+  return values.length === 2 ? values : null;
 }
 
 function useNarrowViewport() {
@@ -278,6 +302,54 @@ function useNarrowViewport() {
     return () => media.removeEventListener('change', handleChange);
   }, []);
   return isNarrow;
+}
+
+/**
+ * 一行出现两个来源不同的数值时，让患者**选一个**（#204）。
+ *
+ * 这是本票的患者侧落点：不问「数值是多少」（那两个数本来就是他写的），而是把页面上出现
+ * 的两个数并列出来 —— 他选的那个成为修正值。选项文案不猜来源（不说「印刷/手写」）：
+ * 谁是手写需要模型去猜，而猜错的方向不对称；能确定的事实只有「页面上有两个数」。
+ *
+ * 只在**恰好两个**数值时出现。三个以上的形态（抽取把整段文字混进来）没有「选一个」这个
+ * 问题，落 `invalid_value` 那条路 —— 那时患者确实需要重新给一个值。
+ */
+function DualValueChoice({ metric, draft, disabled, onUpdateDraft }) {
+  const candidates = dualValueChoice(metric);
+  if (!candidates) return null;
+  return (
+    <div className="metric-card-field">
+      <Typography.Text type="secondary">这一项有两个值，用哪个</Typography.Text>
+      <Radio.Group
+        aria-label={`${metric.metric_name}取值`}
+        value={draft?.decision === 'corrected' ? String(draft?.value ?? '') : undefined}
+        disabled={disabled}
+        onChange={(event) => {
+          const chosen = event.target.value;
+          // 选一个 = 一次修正：值就是选中的那个，其余字段沿用这一行已有的。
+          onUpdateDraft(metric.id, 'decision', 'corrected');
+          onUpdateDraft(metric.id, 'value', chosen);
+          onUpdateDraft(metric.id, 'unit', draft?.unit || metric.effective_unit || metric.unit || '');
+          onUpdateDraft(
+            metric.id,
+            'reference_range',
+            draft?.reference_range || metric.effective_reference_range || metric.reference_range || '',
+          );
+          onUpdateDraft(
+            metric.id,
+            'evidence_text',
+            draft?.evidence_text || metric.effective_evidence_text || metric.evidence_text || '',
+          );
+        }}
+      >
+        {candidates.map((candidate) => (
+          <Radio.Button key={candidate} value={candidate} aria-label={`${metric.metric_name}用 ${candidate}`}>
+            {candidate}
+          </Radio.Button>
+        ))}
+      </Radio.Group>
+    </div>
+  );
 }
 
 function MetricCard({ metric, draft, metricCatalog, disabled, onUpdateDraft, onOpenSource }) {
@@ -318,6 +390,7 @@ function MetricCard({ metric, draft, metricCatalog, disabled, onUpdateDraft, onO
       </div>
       {expanded ? (
         <div className="metric-card-details">
+          <DualValueChoice metric={metric} draft={draft} disabled={disabled} onUpdateDraft={onUpdateDraft} />
           <div className="metric-card-field">
             <Typography.Text type="secondary">标准指标</Typography.Text>
             <Select
@@ -1140,6 +1213,13 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
       (metric) => needsReview(metric) && decisionOf(metric) === 'pending',
     );
     if (unresolved.length > 0) {
+      // 两个值的行有它自己的一句：闸门拦下它是因为「用哪个数还没选」，而那句泛泛的
+      // 「需要确认、修正或排除」说不清他要做什么（#204）。
+      const dual = unresolved.filter((metric) => dualValueChoice(metric)).length;
+      if (dual > 0) {
+        message.warning(`还有 ${dual} 项页面上有两个值，请选择用哪一个`);
+        return;
+      }
       message.warning(`还有 ${unresolved.length} 个异常候选项需要确认、修正或排除`);
       return;
     }
@@ -1304,6 +1384,44 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
           style={{ width: 88 }}
         />
       ),
+    },
+    {
+      // 两个来源不同的数值（#204）：桌面端与卡片端同一件事 —— 患者**选一个**，
+      // 而不是重输一遍数字。只在页面上恰好两个数时出现。
+      title: '两个值', key: 'dual_value', width: 130,
+      render: (_, record) => {
+        const candidates = dualValueChoice(record);
+        if (!candidates) return null;
+        return (
+          <Radio.Group
+            aria-label={`${record.metric_name}取值`}
+            value={drafts[record.id]?.decision === 'corrected' ? String(drafts[record.id]?.value ?? '') : undefined}
+            disabled={result.status !== 'pending_confirmation'}
+            onChange={(event) => {
+              const chosen = event.target.value;
+              updateDraft(record.id, 'decision', 'corrected');
+              updateDraft(record.id, 'value', chosen);
+              updateDraft(record.id, 'unit', drafts[record.id]?.unit || record.effective_unit || record.unit || '');
+              updateDraft(
+                record.id,
+                'reference_range',
+                drafts[record.id]?.reference_range || record.effective_reference_range || record.reference_range || '',
+              );
+              updateDraft(
+                record.id,
+                'evidence_text',
+                drafts[record.id]?.evidence_text || record.effective_evidence_text || record.evidence_text || '',
+              );
+            }}
+          >
+            {candidates.map((candidate) => (
+              <Radio.Button key={candidate} value={candidate} aria-label={`${record.metric_name}用 ${candidate}`}>
+                {candidate}
+              </Radio.Button>
+            ))}
+          </Radio.Group>
+        );
+      },
     },
     {
       title: '修正值', key: 'corrected_value', width: 105,

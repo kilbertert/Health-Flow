@@ -263,3 +263,22 @@ def test_server_decision_only_accepts_a_real_decision():
     for decision in ("confirmed", "corrected", "excluded"):
         assert f"'{decision}'" in body, decision
     assert "'pending'" not in body, "`pending` 不是服务端给过的决策"
+
+
+def test_a_dual_value_row_suggests_undecided_and_offers_both_numbers():
+    """两个值的行：初选是「还没决定」，而两个候选都摆出来（#204）。
+
+    它**不能**初选「确认」——一行 `3.39 / 3.63`（判成 H、证据齐）在旧实现里拿到的正是
+    「确认」，而患者对「用哪个数」根本没表过态，提交后后端会连行丢掉（#129 的老病根）。
+
+    候选**保留原文写法**（`4.00` 而不是 `4`）：它会被当成修正值提交，而报告上写的是哪个
+    是有意义的 —— 系统改写患者的数字看起来像另一回事。
+    """
+    dual = {**_NORMAL, "metric_value": "3.39 / 3.63", "abnormal_flag": "H",
+            "inferred_abnormal_flag": None, "reference_range": "<2.60",
+            "evidence_text": "LDL-C 3.39 3.63 mmol/L (<2.60)"}
+    assert _suggestions([dual]) == ["pending"]
+    assert _drive([dual])["decided"] == ["pending"]
+    # 带符号的多数字值不是「两个值」——它问不出「用哪个」。
+    signed = {**dual, "metric_value": "<3 x 10^6/L"}
+    assert _drive([signed])["decided"] == ["pending"]

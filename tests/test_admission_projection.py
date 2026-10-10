@@ -441,7 +441,7 @@ def test_a_row_whose_value_cannot_be_parsed_cannot_default_to_confirmed():
         "missing_value",
         None,
         None,
-        "invalid_value",
+        "two_values",  # `3.87 4.00` —— 两个数都在（#204），患者要选一个而不是重输
         None,
         None,
     ], result["valueReasons"]
