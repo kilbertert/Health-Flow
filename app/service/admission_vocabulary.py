@@ -23,6 +23,9 @@ from __future__ import annotations
 
 from typing import Literal, get_args
 
+from app.service import confirmation_vocabulary as confirmation_decisions
+from app.service.confirmation_vocabulary import ADMITTED_DECISIONS_ORDERED
+
 # ── 唯一词表 ────────────────────────────────────────────────────────────────
 #
 # 新增一种准入判定时，名字只加在这里 —— 三个消费点（门禁 / 判定守卫 / 出域契约）
@@ -71,14 +74,23 @@ UNMATCHED_REASONS_ORDERED: tuple[str, ...] = ("unknown_metric_code", "no_publish
 SKIPPED_REASONS: frozenset[str] = frozenset(SKIPPED_REASONS_ORDERED)
 UNMATCHED_REASONS: frozenset[str] = frozenset(UNMATCHED_REASONS_ORDERED)
 
-# 三桶都看不到的那两类（`pending` / `excluded`）现在有名字了；它们不出现在
+# 三桶都看不到的那两类（尚未决定 / 患者已排除）现在有名字了；它们不出现在
 # `skipped` / `unmatched` 里，而是随指标行逐条出域（见 PRD #176 的第二张票）。
-NOT_EVALUATED_ORDERED: tuple[str, ...] = ("pending", "excluded")
+#
+# **这是对确认决策的一个读出，不是第三份抄写**：这两句话由决策词表派生 ——
+# 准入说「没进解读」的两个理由，正是决策说「患者没表态」与「患者排除了」的那两个决定。
+NOT_EVALUATED_ORDERED: tuple[str, ...] = (
+    *confirmation_decisions.UNDECIDED_ORDERED,
+    *confirmation_decisions.EXCLUDED_ORDERED,
+)
 NOT_EVALUATED_REASONS: frozenset[str] = frozenset(NOT_EVALUATED_ORDERED)
 
 
-# 参与解读的确认状态：证据门禁的入口守卫与判定守卫必须同为这两个。
-ADMITTED_STATUSES: frozenset[str] = frozenset({"confirmed", "corrected"})
+# 参与解读的确认状态 —— **派生自「指标确认决策」的那一份声明**，不是手写的第二处。
+# 它此前是一个手写集合，而同一个判定在 `evidence_bridge._decidable` 里又写了一遍反向
+# 表述（「不等于 excluded」）。正面枚举与反向排除的差别在新增一种决策时才显形：反向那个
+# 会默默放行新值。现在两处都读 `confirmation_decision.is_admitted`。
+ADMITTED_STATUSES: frozenset[str] = frozenset(ADMITTED_DECISIONS_ORDERED)
 
 
 # 出域契约用的 `Literal`。`MedicalReportResponse` 的逐行准入结论与报告级台账都从
