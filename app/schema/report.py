@@ -230,7 +230,9 @@ class MedicalReportResponse(BaseModel):
 
 class MetricConfirmation(BaseModel):
     metric_id: int = Field(..., ge=1)
-    # 派生自同一份词表，**去掉 `pending`**：「还没决定」不是一个可以提交的决定。
+    # 派生自同一份词表。**包含** `pending` —— 它的含义是「这条我还没动」，是一个诚实的
+    # 表态（客户端必须提交全部已解析指标），由服务端解成该行已落定的状态。见
+    # `app/service/confirmation_decision.py` 的 `request_decision`。
     decision: Literal[*REQUEST_DECISIONS_ORDERED]
     metric_code: str | None = None
     value: str | None = None
