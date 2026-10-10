@@ -1373,19 +1373,6 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
       ),
     },
     {
-      title: '处理', key: 'decision', width: 100, fixed: 'right',
-      render: (_, record) => (
-        <Select
-          aria-label={`${record.metric_name}处理方式`}
-          value={drafts[record.id]?.decision || suggestedDecision(record)}
-          options={DECISIONS}
-          disabled={result.status !== 'pending_confirmation'}
-          onChange={(value) => updateDraft(record.id, 'decision', value)}
-          style={{ width: 88 }}
-        />
-      ),
-    },
-    {
       // 两个来源不同的数值（#204）：桌面端与卡片端同一件事 —— 患者**选一个**，
       // 而不是重输一遍数字。只在页面上恰好两个数时出现。
       title: '两个值', key: 'dual_value', width: 130,
@@ -1422,6 +1409,19 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
           </Radio.Group>
         );
       },
+    },
+    {
+      title: '处理', key: 'decision', width: 100, fixed: 'right',
+      render: (_, record) => (
+        <Select
+          aria-label={`${record.metric_name}处理方式`}
+          value={drafts[record.id]?.decision || suggestedDecision(record)}
+          options={DECISIONS}
+          disabled={result.status !== 'pending_confirmation'}
+          onChange={(value) => updateDraft(record.id, 'decision', value)}
+          style={{ width: 88 }}
+        />
+      ),
     },
     {
       title: '修正值', key: 'corrected_value', width: 105,
@@ -1636,7 +1636,9 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
               dataSource={visibleMetrics}
               pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 项` }}
               size="small"
-              scroll={{ x: 1500 }}
+              // 列宽之和（含 #204 新增的「两个值」130）—— 表头滚动区要容得下，
+              // 否则最右几列会挤在一起。改列宽时一并改这里。
+              scroll={{ x: 2200 }}
               locale={{ emptyText: result.status === 'processing' ? '正在解析' : '未解析出指标' }}
             />
           )}
