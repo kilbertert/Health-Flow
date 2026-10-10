@@ -24,13 +24,13 @@ from fastapi import HTTPException
 from app.service.confirmation_decision import (
     effective_source,
     is_admitted,
-    is_decided,
     is_excluded,
     require_full_coverage,
 )
 from app.service.confirmation_vocabulary import (
     ADMITTED_DECISIONS,
     DECISIONS,
+    EXCLUDED_DECISIONS,
     REQUEST_DECISIONS,
     UNDECIDED_DECISIONS,
 )
@@ -65,6 +65,51 @@ def test_an_unknown_decision_is_rejected_instead_of_silently_becoming_pending():
     """词表外的状态必须当场报错，不能被静默当成「还没处理」。"""
     with pytest.raises(ValueError):
         effective_source("something-from-the-future")
+
+
+def test_a_row_with_no_status_at_all_is_undecided_not_an_error():
+    """**没有状态**的行是「尚未决定」，不是异常。
+
+    这条边界有两个真实来源：确认页在评估之前发送的指标（`confirmation_status: null`）与
+    更旧的响应/行。DB 列是 `NOT NULL DEFAULT 'pending'`，但读路径不该因为收到 `None` 就
+    崩 —— 词表外的**字面量**要报错（见下一条），而「没给」是「还没决定」的合法写法。
+    """
+    from app.data.models import MetricRecord
+    from app.service.metric_effective_value import effective_value
+
+    metric = MetricRecord(metric_name="x", metric_value="1", confirmation_status=None)
+    assert effective_value(metric).source == "pending"
+    assert not is_excluded(None)
+    assert not is_admitted(None)
+
+
+def test_the_predicates_fail_closed_on_an_unknown_value():
+    """词表外的值在**三个判定入口**上一律报错，不 fail open。
+
+    fail open 的代价不对称：`is_admitted("Confrimed")` 若返回 True，一条**患者从未确认过**
+    的行会被当成已确认参与解读；`is_excluded("excluuded")` 若返回 False，一条患者明确排除的
+    行会重新进入解读。两个方向都是「静默地按错误的一方行事」，而报错是可查的：读路径会
+    「报告打不开」，而不是「报告里多了几行」。
+    """
+    for unknown in ("Confrimed", "excluuded", "bogus"):
+        for call in (is_admitted, is_excluded, effective_source):
+            with pytest.raises(ValueError):
+                call(unknown)
+
+
+def test_an_unknown_literal_status_is_rejected_not_silently_treated_as_undecided():
+    """词表外的**值**要当场报错 —— 不静默降级。
+
+    DB 列是 `VARCHAR(16)` 且**没有 CHECK 约束**，所以一个拼错的字面量能落库。此前它会被
+    静默当成 `extracted`（= 患者还没处理）—— 一条「已确认」的行因为拼错而被当成未确认，
+    而没有任何东西会因此报错。现在它在读路径当场失败。
+    """
+    from app.data.models import MetricRecord
+    from app.service.metric_effective_value import effective_value
+
+    metric = MetricRecord(metric_name="x", metric_value="1", confirmation_status="confrimed")
+    with pytest.raises(ValueError):
+        effective_value(metric)
 
 
 # ── 2. 一份词表：请求是它的子集，不是另写一份 ────────────────────────────────
@@ -118,9 +163,7 @@ def test_the_gate_reads_one_declaration():
 
 def test_admitted_and_excluded_partition_the_decisions():
     """「进入解读」与「不进入解读」恰好把词表分完，没有第三种去向。"""
-    assert ADMITTED_DECISIONS | UNDECIDED_DECISIONS | {d for d in DECISIONS if is_excluded(d)} == DECISIONS
-    assert is_decided("confirmed") and is_decided("excluded")
-    assert not is_decided("pending")
+    assert ADMITTED_DECISIONS | UNDECIDED_DECISIONS | EXCLUDED_DECISIONS == DECISIONS
 
 
 # ── 4. 请求全量性：未提供不再等于排除 ───────────────────────────────────────

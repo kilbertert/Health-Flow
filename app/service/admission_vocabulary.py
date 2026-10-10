@@ -87,9 +87,12 @@ NOT_EVALUATED_REASONS: frozenset[str] = frozenset(NOT_EVALUATED_ORDERED)
 
 
 # 参与解读的确认状态 —— **派生自「指标确认决策」的那一份声明**，不是手写的第二处。
-# 它此前是一个手写集合，而同一个判定在 `evidence_bridge._decidable` 里又写了一遍反向
-# 表述（「不等于 excluded」）。正面枚举与反向排除的差别在新增一种决策时才显形：反向那个
-# 会默默放行新值。现在两处都读 `confirmation_decision.is_admitted`。
+# 它此前是一个手写集合；同一个判定在 `evidence_bridge._decidable` 里另有一份反向表述
+# （「不等于 excluded」），两者在**新增一种决策**时才给出不同答案：反向那个会默默放行。
+# 现在两份表述都从决策词表取（`ADMITTED_DECISIONS_ORDERED` 与
+# `confirmation_decision.is_excluded`）—— 注意它们**不是**同一个判定：`_decidable` 还要为
+# `pending` 作答（确认页要患者看到异常候选），所以那是两个问题、两份真值，但**没有第二份
+# 词表**。
 ADMITTED_STATUSES: frozenset[str] = frozenset(ADMITTED_DECISIONS_ORDERED)
 
 

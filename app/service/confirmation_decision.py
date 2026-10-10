@@ -3,12 +3,26 @@
 词表在 `app/service/confirmation_vocabulary.py` —— 那里只有声明、不 import 任何项目
 模块。本模块在词表之上放三个判定，它们此前散在三个地方、各写一遍：
 
-1. `is_admitted` —— 这个决定会让一行进入解读吗（此前 `ADMITTED_STATUSES` 与
-   `_decidable` 是同一条判定的两份写法）。
+1. `is_admitted` / `is_excluded` —— 这个决定会让一行进入解读吗（此前
+   `ADMITTED_STATUSES` 与 `_decidable` 各写一遍，而它们其实是**两个问题**：门禁只认
+   已核对过的行，判定守卫还要对 `pending` 作答）。
 2. `effective_source` —— 生效值从哪来（此前把 `pending` **改叫 `extracted`**，于是
    同一条事实有了两个名字）。
 3. `require_full_coverage` —— 一次确认是否覆盖了全部已解析指标（此前「没提供」被静默
    当成「排除」，而患者与客户端都无从知道）。
+
+## 未知取值一律当场失败，不 fail open
+
+三个判定的输入都可能来自**数据库列**（`VARCHAR(16)`，**没有 CHECK 约束**）—— 一个拼错的
+字面量能落库。所以它们对词表外的值一律 `raise`，而不是猜一个方向：
+
+- fail open 的代价不对称：`is_admitted("Confrimed")` 若返回 True，一条**患者从未确认过**的
+  行会被当成已确认参与解读；`is_excluded("excluuded")` 若返回 False，一条患者明确排除的
+  行会重新进入解读。两个方向都是「静默地按错误的一方行事」。
+- 报错则相反：一条坏数据让**这一处**失败，而那是可查的（读路径是「报告打不开」而不是
+  「报告里少了/多了几行」，后者没人会发现）。
+
+这条与 `metric_effective_value.effective_source` 的取向一致 —— 它已经在读路径上这样做了。
 """
 
 from __future__ import annotations
@@ -20,23 +34,23 @@ from app.service.confirmation_vocabulary import (
     ADMITTED_DECISIONS,
     DECISIONS,
     EXCLUDED_DECISIONS,
-    UNDECIDED_DECISIONS,
 )
 
-# 生效值的来源，与决策词汇**同名**。
-#
-# 这里刻意不再叫 `extracted`：那是 `pending` 的别称，而「同一条事实两个名字」正是本
-# 概念此前无家可归的物证。取 `pending` 的另一个理由是它已经是数据库列上写着的值。
-EffectiveSource = str  # 取值即 `DECISIONS` —— 别名保留给读代码的人，不引入第二套字面量
 
+def _checked(decision: str | None) -> str:
+    """把输入规整成一个词表内的取值，词表外**当场报错**。
 
-def is_decided(decision: str | None) -> bool:
-    """患者就这条表过态吗（`pending` 不算）。"""
-    return (decision or "pending") not in UNDECIDED_DECISIONS
+    `None` 是「没给」的合法写法，按「尚未决定」处理（DB 列的默认值就是它）；而一个
+    **不认识的字符串**是数据坏了，不是一种决定 —— 见模块 docstring 里 fail-open 的那一节。
+    """
+    value = decision or "pending"
+    if value not in DECISIONS:
+        raise ValueError(f"未知的确认决策：{decision!r}")
+    return value
 
 
 def is_excluded(decision: str | None) -> bool:
-    return (decision or "pending") in EXCLUDED_DECISIONS
+    return _checked(decision) in EXCLUDED_DECISIONS
 
 
 def is_admitted(decision: str | None) -> bool:
@@ -46,7 +60,7 @@ def is_admitted(decision: str | None) -> bool:
     反向排除会默默放行这个新值，而正面枚举要求有人在这里显式表态。此前这两份写法同时存在，
     删一处另一处仍在。
     """
-    return (decision or "pending") in ADMITTED_DECISIONS
+    return _checked(decision) in ADMITTED_DECISIONS
 
 
 def effective_source(decision: str | None) -> str:
@@ -56,10 +70,7 @@ def effective_source(decision: str | None) -> str:
     与「按 `status` 分支」的消费者写出同一份逻辑的两份实现。现在这个函数存在只为了让那个
     事实**有一个名字**，而不是为了让两套词汇互译。
     """
-    value = decision or "pending"
-    if value not in DECISIONS:
-        raise ValueError(f"未知的确认决策：{decision!r}")
-    return value
+    return _checked(decision)
 
 
 @dataclass(frozen=True)
