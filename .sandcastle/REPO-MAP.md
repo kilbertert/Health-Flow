@@ -27,7 +27,7 @@ accurate at the moment it is generated and at the moment the commit lands.
 
 ## Tests
 
-- tests/ — 48 test file(s, recursive)
+- tests/ — 49 test file(s, recursive)
 - frontend/e2e/ — 14 test file(s, recursive)
 - pytest (pyproject.toml / pytest.ini present)
 
@@ -37,8 +37,8 @@ accurate at the moment it is generated and at the moment the commit lands.
 - AGENTS.md
 - CLAUDE.md
 - README.md
-- docs/ — 8 markdown file(s)
-- docs/adr/ — 4 markdown file(s)
+- docs/ — 9 markdown file(s)
+- docs/adr/ — 5 markdown file(s)
 - docs/agents/ — 3 markdown file(s)
 
 ## Tree (depth 2, first 80 lines; dependencies, build
@@ -93,9 +93,10 @@ app/
     evidence_bridge.py
     ... (19 more)
   __init__.py
+  config_freshness.py
   config.py
   main.py
-  migrate_evidence_payloads.py
+  ... (1 more)
 artifacts/
   qa/
     20261006-frontend-deploy.md
@@ -109,6 +110,7 @@ docs/
     0002-trusted-pr-control-plane.md
     0003-goods-are-not-evidence-output.md
     0005-mall-goods-are-read-server-side.md
+    0006-long-running-readers-and-config-freshness.md
   agents/
     domain.md
     issue-tracker.md
@@ -124,37 +126,5 @@ docs/
     05-chat.png
     06-kg.png
   afk-workflow.md
-frontend/
-  e2e/
-    abnormality.spec.js
-    fixtures.js
-    metric-unusable-value.spec.js
-    mobile-layout.spec.js
-    mobile-nav.spec.js
-    paste.spec.js
-    python.mjs
-    README.md
-    recommendations-from-entry.spec.js
-    recommendations.spec.js
-    ... (10 more)
-  public/
-    products/
-    hst-club-logo.png
-  src/
-    components/
-    pages/
-    admissionText.js
-    api.js
-    App.jsx
-    main.jsx
-    pasteImage.js
-    reportStatus.js
-    styles.css
-    uploadPolicy.js
-  index.html
-  package-lock.json
-  package.json
-  playwright.config.js
-  vite.config.js
 ... (truncated — list the rest with `ls`/`find`)
 ```
