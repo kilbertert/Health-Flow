@@ -328,6 +328,7 @@ def test_the_tally_covers_every_row_exactly_once():
         _row(id=9, metric_code=None),  # unknown_metric_code
         _row(id=10, confirmation_status="pending"),  # awaiting_confirmation
         _row(id=11, confirmation_status="excluded"),  # excluded
+        _row(id=12, metric_name="T Chol/HDL ratio", metric_value="3.7", reference_range=None),  # no_reference_concept
     ]
     reasons = [admission_reason(metric, code=metric.metric_code) for metric in rows]
     counts = tally(reasons)
@@ -337,11 +338,12 @@ def test_the_tally_covers_every_row_exactly_once():
 
     assert counts.total == len(rows)
     # 进入解读 1 / normal 1（在参考区间内，单列 —— 它是「正常」，不是「未进入解读」）/
-    # skipped 6 / unmatched 1 / 未评估 2（可判待核对 1 + 已排除 1）。
+    # skipped 7（含 no_reference_concept —— 它也不该被说成「正常」）/
+    # unmatched 1 / 未评估 2（可判待核对 1 + 已排除 1）。
     assert (counts.included, counts.normal, counts.skipped, counts.unmatched, counts.not_evaluated) == (
         1,
         1,
-        6,
+        7,
         1,
         2,
     )

@@ -149,11 +149,18 @@ def admission_reason(
         return "missing_source_evidence"
     low, high = parse_reference_range(effective.reference_range)
     if low is None and high is None:
+        # 没有可解析的范围。两种情形分开（#205 / #206）：比值型的项**本来就没有自己的
+        # 区间**（它的意义由分子分母决定），描述型的项**本来就没有异常概念**（血型、
+        # 外观、透明度）—— 这两类都不该问患者，也不该说成「系统缺了判据」。其余（体重、
+        # 抗体滴度这类该有范围而报告没印的）才是真的缺判据，那一条留给患者核对。
+        if _has_no_own_interval(metric, effective):
+            return "no_reference_concept"
         return "missing_reference_range"
-    if low is not None and not _evidence_contains_value(evidence, low):
-        return "missing_source_evidence"
-    if high is not None and not _evidence_contains_value(evidence, high):
-        return "missing_source_evidence"
+    # 参考范围的上下界**不要求**出现在原文证据里（#205）。范围是化验项的属性、不是这一次
+    # 测量的一部分，患者要核对的是他的数值；而要求它出现会让「报告上写着范围、抽取的原文
+    # 片段没带它」的行得到一句关于数据的错误理由（eGFR 报告上写着 `Normal (>=90)`，却因为
+    # 片段里没带范围被判成「缺少原文证据」）。值仍然必须出现在证据里 —— 那一条说的是
+    # 「这个数确实来自报告」，与本条不同。
     flag = infer_abnormal_flag(str(value), effective.reference_range)
     # 还没核对的行到这里已经是「可判」的了（值/单位/参考范围/证据/页码都齐）。它**不是**
     # 「未能进入解读」，那个结论要等患者核对过才成立 —— 所以这里如实说「可判、待核对」，
@@ -256,6 +263,31 @@ def infer_abnormal_flag(value: str | None, reference: str | None) -> str | None:
     if high is not None and number > high:
         return "H"
     return "N"
+
+
+# 「这一项本来就没有自己的区间」—— 比值型与描述型（#205 / #206）。
+#
+# 判据是**报告自己印出来的东西**，不是一份我们维护的指标名清单：一份清单会随每一份新报告
+# 过期，而「分子/分母」「区间名」这些标记就在页面上。
+#
+# 这条判据的上限写在明处：**它只认这几种形态**。别的「本来就没有区间」的项（例如某个只印
+# 名称与数值的项）仍会落 `missing_reference_range`，患者会被问一次 —— 那比反过来（把该
+# 问的项静默吞掉）安全。
+_NO_OWN_INTERVAL_NAME_RE = re.compile(r"\b(?:ratio|index)\b|比率|比值", re.IGNORECASE)
+_NO_OWN_INTERVAL_TEXT_RE = re.compile(
+    r"ref\.?\s*range|target\s|reference\s*(?:range|interval)", re.IGNORECASE
+)
+
+
+def _has_no_own_interval(metric: Any, effective: Any) -> bool:
+    """这一项的判据不是一个区间，而是比值/阈值/描述 —— 见上面两个正则的说明。"""
+    name = str(getattr(metric, "metric_name", "") or "")
+    if _NO_OWN_INTERVAL_NAME_RE.search(name):
+        return True
+    # 原文证据里出现「REF. RANGES」/「Target」这类**表头**时，说明这一行来自一张列了多栏
+    # 参考值的表 —— 那几栏不是「这一项自己的区间」。实测来源：报告 57 的
+    # `T Chol/HDL ratio 总胆固醇与高脂胆固醇 3.7 2.8`（那个 2.8 是同一页 Target 那一栏的）。
+    return bool(_NO_OWN_INTERVAL_TEXT_RE.search(str(effective.evidence_text or "")))
 
 
 def _evidence_contains_value(evidence: str, value: float) -> bool:
