@@ -100,6 +100,7 @@ app/
 artifacts/
   qa/
     20261006-frontend-deploy.md
+    20261010-config-freshness-rollout.md
 data/
   sft/
 deploy/
