@@ -68,6 +68,9 @@ export const ADMISSION_TEXT = Object.freeze({
   missing_source_page: '缺少原文页码，未进入解读',
   // 判定过、在区间内 —— 这一条是「正常」，**不是**「没进解读」。
   within_reference_range: '在参考区间内',
+  // 这一项没有「是否异常」这个概念（血型、外观、透明度、比值型）：不是「判不了」，
+  // 也不是「值坏了」——这个判断对它所问的问题不存在（#206）。患者不用为它表态。
+  no_reference_concept: '这一项没有异常概念，未参与判定',
   // 找不到对应的知识卡。
   unknown_metric_code: '没有可对应的标准指标编码',
   no_published_knowledge_card: '暂无已审核的关联知识卡',
@@ -83,7 +86,11 @@ export const ADMISSION_TEXT = Object.freeze({
  *
  * 与后端 `admission_vocabulary.NO_ACTION_REASONS` 同一份口径，由 `test_admission` 的守卫
  * 钉住两者相等 —— 分叉会让同一行在两处得到不同的说法。 */
-export const NO_ACTION_REASONS = Object.freeze(['within_reference_range', 'awaiting_confirmation']);
+export const NO_ACTION_REASONS = Object.freeze([
+  'within_reference_range',
+  'no_reference_concept',
+  'awaiting_confirmation',
+]);
 
 /**
  * 值这一类原因的**子集**：它们说「这个值还没被解析成一个数」。

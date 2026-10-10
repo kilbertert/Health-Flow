@@ -58,6 +58,13 @@ AdmissionReason = Literal[
     "missing_reference_range",
     # 判定过了，在参考区间内。这一条是「正常」，**不是**「未能解读」。
     "within_reference_range",
+    # 这一项**没有「是否异常」这个概念**（血型、尿液外观与透明度、检验日期这类描述或
+    # 记录项）：它不是「判不了」，也不是「值坏了」，而是这个判断对它所问的问题不存在
+    # （#206）。患者既不用为它表态，它也不进解读。
+    #
+    # 与 `missing_reference_range` 的分别：那一条说的是「本该有判据而系统没有」，这一条
+    # 说的是「这一项本来就没有判据这回事」—— 前者是可修的，后者不是。
+    "no_reference_concept",
     # 没进解读，但原因是「没有对应的知识卡」而不是「证据不足」。
     "unknown_metric_code",
     "no_published_knowledge_card",
@@ -80,6 +87,7 @@ SKIPPED_REASONS_ORDERED: tuple[str, ...] = (
     "missing_source_page",
     "missing_reference_range",
     "within_reference_range",
+    "no_reference_concept",
 )
 UNMATCHED_REASONS_ORDERED: tuple[str, ...] = ("unknown_metric_code", "no_published_knowledge_card")
 
@@ -123,8 +131,16 @@ AdmissionReasonLiteral = Literal[*SKIPPED_REASONS_ORDERED, *UNMATCHED_REASONS_OR
 # `awaiting_confirmation` **不**在这一桶：它判得出正常，但**患者还没核对过**，所以它确实
 # 没有参与解读（台账的 `not_evaluated` 收它）。两者在报告单上是两句不同的话：一句是「都
 # 在参考区间内」（结论已给，无需动作），一句是「尚未核对，未参与解读」（等他核对）。
+# 「这一项没有异常概念」与「判定过、在区间内」是**两句不同的话**，所以分两桶（报告单上
+# 一句是「均在参考区间内」，另一句是「N 项没有异常概念，未参与解读」）。它们同属
+# `NO_ACTION_REASONS` —— 都不需要患者做任何事。
 NORMAL_REASONS_ORDERED: tuple[str, ...] = ("within_reference_range",)
 NORMAL_REASONS: frozenset[str] = frozenset(NORMAL_REASONS_ORDERED)
+
+# 没有异常概念的项：同样不必患者做任何事，但它**不是**「正常」—— 说「正常」是在一项
+# 根本没测的东西上下了结论。它单列，供报告单说明用。
+NO_CONCEPT_REASONS_ORDERED: tuple[str, ...] = ("no_reference_concept",)
+NO_CONCEPT_REASONS: frozenset[str] = frozenset(NO_CONCEPT_REASONS_ORDERED)
 
 # 判定过、且**患者不必为它做任何事**的两条结论。它们与 `skipped` 的差别是：那一条说的是
 # 「这一行没能进入解读」，而这两条说的是「这一行没问题」（正常 / 可判到只差他核对一次）。
@@ -132,7 +148,11 @@ NORMAL_REASONS: frozenset[str] = frozenset(NORMAL_REASONS_ORDERED)
 #
 # 与前端 `NO_ACTION_REASONS` 同一份口径（由 `test_admission` 的守卫钉住两者相等）：
 # 分叉会让同一行在两处得到不同的说法，那正是本 PRD 要消灭的形状。
-NO_ACTION_REASONS_ORDERED: tuple[str, ...] = (*NORMAL_REASONS_ORDERED, "awaiting_confirmation")
+NO_ACTION_REASONS_ORDERED: tuple[str, ...] = (
+    *NORMAL_REASONS_ORDERED,
+    *NO_CONCEPT_REASONS_ORDERED,
+    "awaiting_confirmation",
+)
 NO_ACTION_REASONS: frozenset[str] = frozenset(NO_ACTION_REASONS_ORDERED)
 
 

@@ -330,6 +330,7 @@ def test_the_tally_covers_every_row_exactly_once():
         _row(id=9, metric_code=None),  # unknown_metric_code
         _row(id=10, confirmation_status="pending"),  # awaiting_confirmation
         _row(id=11, confirmation_status="excluded"),  # excluded
+        _row(id=13, metric_name="T Chol/HDL ratio", metric_value="3.7", reference_range=None),  # no_reference_concept
     ]
     reasons = [admission_reason(metric, code=metric.metric_code) for metric in rows]
     counts = tally(reasons)
@@ -339,11 +340,12 @@ def test_the_tally_covers_every_row_exactly_once():
 
     assert counts.total == len(rows)
     # 进入解读 1 / normal 1（在参考区间内，单列 —— 它是「正常」，不是「未进入解读」）/
-    # skipped 7 / unmatched 1 / 未评估 2（可判待核对 1 + 已排除 1）。
+    # skipped 8（含 no_reference_concept —— 它也不该被说成「正常」）/
+    # unmatched 1 / 未评估 2（可判待核对 1 + 已排除 1）。
     assert (counts.included, counts.normal, counts.skipped, counts.unmatched, counts.not_evaluated) == (
         1,
         1,
-        7,
+        8,
         1,
         2,
     )
@@ -508,3 +510,61 @@ def test_two_values_is_a_distinct_reason_not_a_synonym_for_invalid_value():
     assert value_reason("Nil") == "invalid_value"
     assert value_reason("Negative") == "invalid_value"
     assert value_reason("3.63") is None
+
+
+def test_a_reference_range_need_not_appear_in_the_quoted_evidence():
+    """参考范围的上下界**不要求**出现在原文片段里（#205）。
+
+    值仍然必须出现 —— 那一条说的是「这个数确实来自报告」。而范围是化验项的属性、不是这
+    一次测量的一部分，抽取的原文片段经常不带它：报告 54 的 eGFR 在报告上写着
+    `Normal (>=90)`，却因为片段里没带范围被判成「缺少原文证据」—— 一句关于数据的、实际
+    是「片段没带范围」的错误理由。
+
+    这一条把两半都钉住：值不在片段里 → 仍然是 `missing_source_evidence`；只有范围不在
+    → 不再拦它。
+    """
+    # 值在片段里、范围不在：放行（判成 H，跨过边界）。
+    range_absent = _row(metric_value="6.5", reference_range="3.9-6.1",
+                        evidence_text="空腹血糖 6.5 mmol/L")
+    assert admission_reason(range_absent, code="fasting_glucose") is None
+    # 值自己不在片段里：仍然拦下 —— 那是另一件事，不能跟着放宽。
+    value_absent = _row(metric_value="6.5", reference_range="3.9-6.1",
+                        evidence_text="空腹血糖 mmol/L 3.9-6.1")
+    assert admission_reason(value_absent, code="fasting_glucose") == "missing_source_evidence"
+
+
+def test_a_row_without_an_abnormality_concept_is_not_asked_of_the_patient():
+    """没有异常概念的项**不被问**，也不被说成「正常」（#205）。
+
+    三类各自不同，判据是**报告自己印出来的东西**：
+    - 比值型（名称里有 `比率`/`ratio`）—— 意义由分子分母决定，本来就没有自己的区间；
+    - 原文片段里出现 `REF. RANGES` / `Target` 这类**表头**（同一页列了多栏参考值）；
+    - 其余「该有范围而报告没印」的项（体重、抗体滴度）仍然要患者核对 —— 那一条不能跟着
+      放宽，否则「系统缺了判据」这一类会被静默吞掉。
+    """
+    ratio = _row(metric_name="T Chol/HDL ratio", metric_value="3.7", reference_range=None,
+                 evidence_text="T Chol/HDL ratio 总胆固醇与高脂胆固醇 3.7 2.8")
+    assert admission_reason(ratio, code=None) == "no_reference_concept"
+    header = _row(metric_name="Specimen Weight", metric_value="76.1", reference_range=None,
+                  evidence_text="Weight 76.1kg REF. RANGES Target")
+    assert admission_reason(header, code=None) == "no_reference_concept"
+    # 该有范围而报告没印：仍然问患者。
+    plain = _row(metric_name="Weight", metric_value="76.1", reference_range=None,
+                 evidence_text="Weight 76.1kg")
+    assert admission_reason(plain, code=None) == "missing_reference_range"
+
+
+def test_a_row_without_an_abnormality_concept_is_not_blocked_by_its_missing_unit():
+    """「没有异常概念」比缺单位**更根本**：比值行无量纲，缺单位不是它的问题（#205）。
+
+    这一条是一个真实的错序：比值型的行（`T Chol/HDL ratio`）没有单位是正常的 —— 比值是
+    无量纲的 —— 而判定先看单位，于是它们全部落 `missing_unit`，「没有异常概念」那一条
+    永远走不到。错序与缺判据在页面上长得一样（都要患者处理），所以只有按原因断言才看得见。
+    """
+    ratio = _row(metric_name="T Chol/HDL ratio", metric_value="3.7", unit=None,
+                 reference_range=None, evidence_text="T Chol/HDL ratio 总胆固醇与高脂胆固醇 3.7 2.8")
+    assert admission_reason(ratio, code=None) == "no_reference_concept"
+    # 反过来：**有**自己区间的行缺单位，仍然是缺单位 —— 不能跟着放宽。
+    measured = _row(metric_value="6.5", unit=None, reference_range="3.9-6.1",
+                    evidence_text="空腹血糖 6.5 mmol/L 3.9-6.1")
+    assert admission_reason(measured, code="fasting_glucose") == "missing_unit"
