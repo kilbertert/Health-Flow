@@ -164,7 +164,9 @@ function ReportPage({ account, reportId, onBack, onReportSaved }) {
 
 function abnormalSummary(item) {
   const count = item.abnormal_count ?? 0;
-  return count === 0 ? ' · 未见异常' : ` · ${count} 项偏高/偏低`;
+  // 「N 项偏高/偏低」会把一个**无方向**的阳性（`Detected`，判定为 `A`）说成偏高或偏低 ——
+  // 分类结果没有方向，那句话在阳性/阴性检验上是假话（评审在 #239 指出）。中性说「异常」。
+  return count === 0 ? ' · 未见异常' : ` · ${count} 项异常`;
 }
 
 function ProfilePage({ account, onBack, onLogout, onOpenReport }) {

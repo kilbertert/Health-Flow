@@ -30,6 +30,7 @@ from app.service.admission import (
     admission_reason,
     infer_abnormal_flag,
     parse_reference_range,
+    qualitative_result_reason,
     reference_reason,
     single_number,
     tally,
@@ -43,7 +44,11 @@ from app.service.admission_vocabulary import (
     UNMATCHED_REASONS_ORDERED,
     vocabulary,
 )
-from app.service.evidence_bridge import abnormal_flag_reason, build_observations_with_unmatched
+from app.service.evidence_bridge import (
+    abnormal_flag_reason,
+    build_observations_with_unmatched,
+    infer_abnormal_flag_for_metric,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -321,9 +326,10 @@ def test_the_tally_covers_every_row_exactly_once():
     rows = [
         _row(id=1),  # None：进入解读
         _row(id=2, metric_value="5.0"),  # within_reference_range
+        _row(id=14, metric_value="Not Detected", reference_range=None),  # qualitative_negative（正常）
         _row(id=3, metric_value=""),  # missing_value
         _row(id=4, metric_value="6.5/7.2"),  # two_values
-        _row(id=12, metric_value="Nil"),  # invalid_value（定性项，不是两个数）
+        _row(id=12, metric_value="0 x 10^6/L"),  # invalid_value（三个数字，不是两个值）
         _row(id=5, unit=None, evidence_text=None),  # missing_unit
         _row(id=6, evidence_text=None),  # missing_source_evidence（值可解析）
         _row(id=7, page_number=None),  # missing_source_page
@@ -332,6 +338,7 @@ def test_the_tally_covers_every_row_exactly_once():
         _row(id=10, confirmation_status="pending"),  # awaiting_confirmation
         _row(id=11, confirmation_status="excluded"),  # excluded
         _row(id=13, metric_name="T Chol/HDL ratio", metric_value="3.7", reference_range=None),  # no_reference_concept
+        _row(id=15, metric_value="Detected", reference_range=None),  # qualitative_positive
     ]
     reasons = [admission_reason(metric, code=metric.metric_code) for metric in rows]
     counts = tally(reasons)
@@ -340,13 +347,13 @@ def test_the_tally_covers_every_row_exactly_once():
     )
 
     assert counts.total == len(rows)
-    # 进入解读 1 / normal 1（在参考区间内，单列 —— 它是「正常」，不是「未进入解读」）/
-    # skipped 8（含 no_reference_concept —— 它也不该被说成「正常」）/
+    # 进入解读 1 / normal 2（在参考区间内 + 分类结果阴性 —— 两条都是「正常」）/
+    # skipped 9（含 no_reference_concept 与 qualitative_positive —— 都不该被说成「正常」）/
     # unmatched 1 / 未评估 2（可判待核对 1 + 已排除 1）。
     assert (counts.included, counts.normal, counts.skipped, counts.unmatched, counts.not_evaluated) == (
         1,
-        1,
-        8,
+        2,
+        9,
         1,
         2,
     )
@@ -686,8 +693,12 @@ def test_a_qualitative_row_with_a_word_domain_is_judged_by_it():
     `Nitrite: 亚硝酸盐 Negative (Negative)` 的 `(Negative)` 不是「缺参考范围」——报告
     说清楚了什么算正常。相符落 `within_reference_range`（正常），患者不用为它表态。
 
-    两条限制也钉住：词形不符、或值根本不是词域里的一个词（`Not Detected` 而报告没印
-    取值域）时，**不给结论** —— 那仍然要患者核对报告。而 ≥/≤ 那类数值阈值不受影响。
+    词形不符、值不是词域里的一个词、以及 ≥/≤ 那类数值阈值不受影响，也都钉住。
+
+    **报告没印取值域的情形后来由 #236 接手**：一条 `HBsAg: Not Detected` 的原文里没有
+    任何区间，但值本身就是一个规范分类结果词 —— 判据是那个词自己。这条断言因此从
+    `invalid_value` 改成了 `qualitative_negative`（见下一条测试）。本测试只保留 #206
+    真正的那一半：**报告印了取值域时以印出来的为准**。
     """
     nitrite = _row(metric_name="Nitrite 亚硝酸盐", metric_value="Negative", unit=None,
                    reference_range="(Negative)",
@@ -699,10 +710,66 @@ def test_a_qualitative_row_with_a_word_domain_is_judged_by_it():
                                  evidence_text="Nitrite NEGATIVE (Negative)"), code=None) == (
         "within_reference_range"
     )
-    # 报告没印取值域：仍然要患者核对 —— 本票只认报告印出来的。
-    assert admission_reason(_row(metric_name="HBsAg", metric_value="Not Detected", unit=None,
-                                 reference_range=None,
-                                 evidence_text="HBsAg Not Detected"), code=None) == "invalid_value"
+    # 词域**不符**时不给结论（报告印的是一个词、值却是别的东西）—— 仍然要患者核对。
+    mismatch = _row(metric_name="Nitrite", metric_value="Pale Yellow", unit=None,
+                    reference_range="(Negative)", evidence_text="Nitrite Pale Yellow (Negative)")
+    assert admission_reason(mismatch, code=None) not in {"within_reference_range", "qualitative_negative"}
+
+
+def test_a_categorical_result_is_judged_by_its_own_word():
+    """值本身是**规范分类结果词**时，判据是那个词自己（#236）。
+
+    `HBsAg: Not Detected` 的原文里没有任何区间 —— #206 修的「报告印了取值域」这条路
+    走不到它。但报告已经给出结论了：`Not Detected` 就是一个分类结果，依据是 HL7 v2 的
+    OBX-8（Interpretation Codes 承载 categorical assessment），而 OBX-7（References
+    Range）的定义写在**定量**观测上。所以「报告没印取值域」≠「这一项没有判据」。
+
+    - 阴性（`Not Detected` / `Negative` / `Nil`）→ `qualitative_negative`（正常，患者不必动手）；
+    - 阳性（`Detected` / `Positive` / `Reactive`）→ `qualitative_positive`（异常）。
+
+    **只认词表里的词、且必须整值命中** —— 这是本判据的证伪条件，见下一条断言。
+    """
+    for word in ("Not Detected", "negative", "NIL", "Absent", "non-reactive"):
+        row = _row(metric_name="HBsAg", metric_value=word, unit=None, reference_range=None,
+                   evidence_text=f"HBsAg {word}")
+        assert admission_reason(row, code=None) == "qualitative_negative", word
+    for word in ("Detected", "POSITIVE", "Reactive", "Present"):
+        row = _row(metric_name="HBsAg", metric_value=word, unit=None, reference_range=None,
+                   evidence_text=f"HBsAg {word}")
+        assert admission_reason(row, code=None) == "qualitative_positive", word
+    # 阳性是**异常**，阴性是**正常**：异常判定与准入必须同向，否则页面一边说正常、
+    # 一边把它列进异常候选（#235 的评审教训）。分类结果没有方向，所以阳性是 `A`。
+    assert infer_abnormal_flag("Detected", None) == "A"
+    assert infer_abnormal_flag("Not Detected", None) == "N"
+    # **判据自带时参考范围缺不缺都不影响** —— 少了这一步，`HBsAg: Not Detected`（原文没有
+    # 取值域）会先被判成「值没坏」、又被 `reference_reason(None)` 补上
+    # `missing_reference_range`，判定守卫说它判不了而准入说它正常（#236 回放实测）。
+    # `abnormal_flag_reason` 是判定守卫那个消费点，它必须与准入同向。
+    for word, expected in (("Not Detected", "N"), ("Detected", "A")):
+        metric = _row(metric_name="HBsAg", metric_value=word, unit=None, reference_range=None,
+                      evidence_text=f"HBsAg {word}")
+        metric.metric_code = None
+        assert admission_reason(metric, code=None) == (
+            "qualitative_negative" if expected == "N" else "qualitative_positive"
+        ), word
+        assert abnormal_flag_reason(metric) is None, word
+        assert infer_abnormal_flag_for_metric(metric) == expected, word
+
+    # **证伪条件一：整值匹配，不是子串。** 真语料里的假朋友 `AB Rh(D) POSITIVE` 是**血型**
+    # （描述项），含 "POSITIVE" 却不是阳性检验结果 —— 子串匹配会把它误判成阳性异常。
+    assert qualitative_result_reason("AB Rh(D) POSITIVE") is None
+    blood_group = _row(metric_name="Blood Group", metric_value="AB Rh(D) POSITIVE", unit=None,
+                       reference_range=None, evidence_text="Blood Group: AB Rh(D) POSITIVE")
+    assert admission_reason(blood_group, code=None) == "no_reference_concept"
+
+    # **证伪条件二：词表外的词一律不判** —— 「值读不出来」不许被当成阴性（那正是本 PRD
+    # 一直在消灭的错法）。`Nil` 在表里，`Pale Yellow` / `Fasting` 不在。
+    assert qualitative_result_reason("Pale Yellow") is None
+    assert qualitative_result_reason("Fasting") is None
+    assert qualitative_result_reason("") is None
+    assert qualitative_result_reason(None) is None
+    # 含数字的不是分类结果词。
+    assert qualitative_result_reason("0 x 10^6/L") is None
 
 
 def test_a_description_row_is_not_a_qualitative_test():

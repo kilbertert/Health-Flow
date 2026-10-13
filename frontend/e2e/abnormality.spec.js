@@ -172,7 +172,7 @@ test.describe('异常判定口径 vs 抽取模型标记', () => {
     await page.getByRole('button', { name: '个人中心', exact: true }).click();
     const historyItem = page.locator('.history-section .ant-list-item').first();
     await expect(historyItem).toContainText('5 项指标');
-    await expect(historyItem).toContainText('3 项偏高/偏低');
+    await expect(historyItem).toContainText('3 项异常');
 
     // 报告页:两条分歧样本各自的标记。
     await page.goto(`/#/report/${reportId}`);

@@ -251,21 +251,101 @@ def _as_word(text: str | None) -> str | None:
     return " ".join(stripped.split()).casefold()
 
 
+def _has_word_domain(reference: str | None) -> bool:
+    """参考范围里印着一个**词**（`(Negative)`、`(Nil)`）—— 报告自己给出了判据（#206）。"""
+    return _as_word(reference) is not None
+
+
+# **规范分类结果词** —— 报告给出的定性结果，判据是结果词本身（#236）。
+#
+# 为什么这份词表可以存在，而本仓库别处刻意不维护「指标名清单」：指标名随每一份新报告
+# 变长，而**分类结果词是一个封闭的规范集合** —— 检验报告判阳/阴就是这几个词，它们是
+# 判据本身而不是对某个指标的硬编码（不掺任何指标名，只认结果词）。
+#
+# 依据是标准而不是我们的习惯：HL7 v2 的 **OBX-8（Interpretation Codes）**
+# `One or more codes specifying a categorical assessment of the observation value`，
+# 取值即 Normal / Abnormal / Positive / Negative 这一类；相对的 **OBX-7（References
+# Range）** 的定义写在**定量**观测上（"When the observation quantifies the amount of a
+# toxic substance…"）。所以定性结果的判据在「结果词」，不在「参考范围」—— 报告没印取值域
+# ≠ 这一项没有判据。
+#
+# 两侧都要**整值**匹配（`_as_word` 之后相等），因为子串匹配会咬到真语料里的假朋友：
+# `AB Rh(D) POSITIVE` 是**血型**（描述项），含 "POSITIVE" 却不是阳性检验结果。
+_QUALITATIVE_WORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("negative", ("not detected", "undetected", "negative", "nil", "absent", "non-reactive", "nonreactive")),
+    ("positive", ("detected", "positive", "reactive", "present")),
+)
+_QUALITATIVE_BY_WORD = {
+    word: verdict for verdict, words in _QUALITATIVE_WORDS for word in words
+}
+
+
+def qualitative_result_reason(value_text: str | None) -> str | None:
+    """值的**整值**是一个规范分类结果词时给出结论，否则 ``None``（不是这一类）。
+
+    `Not Detected` → `qualitative_negative`（正常、患者不必动手）；
+    `Detected` / `Positive` → `qualitative_positive`（异常，由异常判定给出说明）。
+
+    只认这份词表里的词，**不猜**：集合外的词一律返回 `None`，交回调用方按别的原因处置。
+    把任意非数值词都当成阴性会把「值读不出来」也判成正常 —— 那正是本 PRD 一直在消灭的
+    错法（#236 的约束 1）。
+    """
+    word = _as_word(value_text)
+    if word is None:
+        return None
+    verdict = _QUALITATIVE_BY_WORD.get(word)
+    if verdict is None:
+        return None
+    return "qualitative_negative" if verdict == "negative" else "qualitative_positive"
+
+
+def _value_carries_its_own_criterion(value_text: str | None, reference: str | None, unit: str | None) -> bool:
+    """值**自带判据**吗 —— 报告给的界（`<20 IU/ml (<20)`，#235）、报告印出的取值域
+    （`Negative (Negative)`，#206）或规范分类结果词（`Not Detected` / `Detected`，#236）。
+
+    这三类的判据不是「一个测量值相对一个区间」，所以参考范围**缺不缺都不影响**它们判得出，
+    两个消费者（`value_only_reason` / `value_level_reason`）都必须在这里短路 —— 否则
+    准入说「正常」而判定守卫说「判不了」，同一行两个结论打架（#239 评审 + #236 回放）。
+
+    **报告印了取值域时，内置分类词表让位**（评审在 #239 指出）：`Negative (Positive)` 里
+    报告印出的判据是 `Positive`，值 `Negative` 与它不符 —— 那属于「报告印了判据而值不符」，
+    #206 的结论是不给结论（交回 `invalid_value`），**不许**拿内置词表把它覆盖成阴性正常。
+    """
+    if signed_value_reason(value_text, reference, unit) is not None:
+        return True
+    if _has_word_domain(reference):
+        return word_domain_verdict(value_text, reference) is True
+    return qualitative_result_reason(value_text) is not None
+
+
+def value_only_reason(value_text: str | None, reference: str | None, unit: str | None = None) -> str | None:
+    """**只看值**的那一类原因：`missing_value` / `invalid_value` / `two_values` / `None`。
+
+    它是 `value_level_reason` 的前一半，单独有名字是因为**确认页的反推只到这一层**
+    （`frontend/src/admissionText.js` 的 `valueReasonOrNull`）—— 那时还没有参考范围这一类
+    判定，而两侧必须逐字相同（`tests/test_two_value_agreement.py` 拿它当基准）。
+    """
+    if _value_carries_its_own_criterion(value_text, reference, unit):
+        return None
+    return value_reason(value_text)
+
+
 def value_level_reason(value_text: str | None, reference: str | None, unit: str | None = None) -> str | None:
     """「值能不能判」这一类原因的**唯一**判定：值原因优先，其次参考范围。
 
     准入结论与异常判定的守卫都消费本函数，所以同一行在这两个问题上不可能再得到两个
     名字（此前空值一行分别得到 `invalid_value` 与 `missing_value`）。
 
-    **报告自己把判据印成同一个界**（`<20 IU/ml (<20)`）时先答：这一行**判得出**，值
-    并没有坏（#235）。判定的顺序也在这一个函数里，不留给两侧各自摆一遍 —— 这正是上一句
-    「同一处实现」的意思，而 `abnormal_flag_reason` 起初漏了这一步、被守卫立刻逮住。
+    **自带判据的值不看参考范围**（见 `_value_carries_its_own_criterion`）：少了那一步短路，
+    一个 `HBsAg: Not Detected`（原文没有取值域）会先被判成「值没坏」、又因为
+    `reference_reason(None)` 补上 `missing_reference_range`，于是判定守卫说它判不了而准入
+    说它正常 —— 两个结论打架，患者仍被请去核对一个已经判成正常的行（#236 回放实测）。
 
     **两侧调的是同一个函数，不是两份「碰巧一致」的抄写** —— 这是本票的验收线之一，而
     它是靠这条调用关系成立的，不是靠断言。测试能钉住的是「结论逐字相同」；「同一处
     实现」只有这一条路径本身在守。
     """
-    if signed_value_reason(value_text, reference, unit) is not None:
+    if _value_carries_its_own_criterion(value_text, reference, unit):
         return None
     return value_reason(value_text) or reference_reason(reference)
 
@@ -303,6 +383,18 @@ def admission_reason(
         verdict = word_domain_verdict(value_text, effective.reference_range)
         if verdict is True:
             return "within_reference_range"
+        # **报告印了取值域、而值与之不符**（`Negative (Positive)`）：报告给出的判据是那个
+        # 词，值不是它 —— 那正是 #206 说的「不给结论，交回值这一类处置」。内置分类词表
+        # **不许**把它覆盖成阴性正常（评审在 #239 指出：那会在报告自己的判据上越权，把
+        # 一个「值对不上判据」的行说成正常）。
+        if not _has_word_domain(effective.reference_range):
+            # 报告**没有**印取值域，但值本身就是一个规范分类结果词（`HBsAg: Not Detected`
+            # ——原文里没有任何区间）时，判据同样是它自己（#236）：阴性 = 正常，阳性 = 异常。
+            # 它排在「没有异常概念 / 值坏了」之前，因为这三句说的是三件不同的事，而这一件
+            # 是唯一**有结论**的：报告明确给出了结果，不是「读不出来」也不是「没有这回事」。
+            qualitative = qualitative_result_reason(value_text)
+            if qualitative is not None:
+                return qualitative
         # 报告把判据印成了**同一个界**（`Rheumatoid Factor <20 IU/ml (<20)`）：这一行有
         # 结论，而且它是「正常」—— 报告说的是「低于这个界」，那个界就是它自己的参考上界。
         # 与上面同一句：不是「值坏了」，患者没有可修正的东西（#235）。
@@ -457,6 +549,19 @@ def infer_abnormal_flag(value: str | None, reference: str | None, unit: str | No
         # 那一侧**同一份判据**（`signed_value_reason`）—— 两处各判一次会让同一行一边说
         # 「没有异常概念」、一边报 H（评审在 #237 指出）。
         return "N" if signed_value_reason(text, reference, unit) is not None else None
+    # 报告印了**取值域**（`Negative (Negative)`）时，判据是报告自己印的那个词：相符 → 正常，
+    # 不符 → 判不了（`None`，交回患者核对）。这一条与准入那一侧的 `word_domain_verdict`
+    # **同一份判据** —— 报告自己的判据优先于内置分类词表（评审在 #239 指出）。
+    if _has_word_domain(reference):
+        return "N" if word_domain_verdict(text, reference) else None
+    # 规范分类结果词：报告给出的是**阴性** → 正常（N）；**阳性** → 异常（A）。分类结果
+    # 没有方向可言，所以阳性说「异常」而不是「偏高」——`H 偏高` 会在一个阳性/阴性检验上
+    # 说假话（#236）。这一条与准入那一侧**同一份判据**（`qualitative_result_reason`）。
+    qualitative = qualitative_result_reason(text)
+    if qualitative == "qualitative_negative":
+        return "N"
+    if qualitative == "qualitative_positive":
+        return "A"
     number = single_number(text)
     if number is None:
         return None

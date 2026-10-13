@@ -246,14 +246,31 @@ def build_patient_notices(
     patient_findings = result.patient_reply.findings
     finding_count = len(patient_findings)
 
-    # `skipped` 只说明「这次没能判定」。但它有两种成因，说法要分开：
-    #   - `within_reference_range`：**判定过**，在参考区间内 —— 那正是「正常」，
-    #     把它说成「未能完成解读」是误报（评审在 #161 指出）；
+    # `skipped` 只说明「这次没能判定」。但它的成因要分开，说法不同：
+    #   - `within_reference_range` / `qualitative_negative`：**判定过** —— 正常；
+    #   - `qualitative_positive`：**判定过**，而且是**异常（阳性）** —— 它不是「未能判定」，
+    #     把它并进 `inconclusive` 会让摘要说「1 项未能完成解读，其余未见问题」，而患者面前
+    #     正挂着一个阳性（评审在 #239 指出）；
     #   - 其余（证据不足 / 值不可解析 / 缺参考范围）：确实没能判定。
-    inconclusive = [item for item in final_skipped if item.reason != "within_reference_range"]
+    normal_skips = ("within_reference_range", "qualitative_negative")
+    inconclusive = [item for item in final_skipped if item.reason not in normal_skips]
+    qualitative_positives = [item for item in final_skipped if item.reason == "qualitative_positive"]
+    positive_count = len(qualitative_positives)
     unmatched_count = len(final_unmatched)
 
-    if finding_count and unmatched_count:
+    # 阳性（`Detected` 一类）**先于**任何「正常 / 未能判定」的措辞：它是报告给出的一个
+    # 确定的异常，绝不能被一句「其余指标未见需要关注的问题」盖过去（评审在 #239 指出）。
+    if positive_count:
+        tail = ""
+        if finding_count:
+            tail = f"另有 {finding_count} 个可能相关健康问题。"
+        elif unmatched_count:
+            tail = f"另有 {unmatched_count} 条指标与健康问题关联暂无已审核知识卡。"
+        summary = (
+            f"本次报告有 {positive_count} 项定性结果为阳性（如 HBsAg 检测到）；"
+            f"定性结果不参与知识卡匹配，请咨询医生。{tail}"
+        )
+    elif finding_count and unmatched_count:
         summary = (
             f"发现 {finding_count} 个可能相关健康问题；"
             f"另有 {unmatched_count} 条指标与健康问题关联暂无已审核知识卡。"

@@ -176,10 +176,10 @@ export function isAbnormal(flag) {
 }
 
 function needsReview(metric) {
-  // 「这条指标值不值得患者看一眼」= 它显示的标记是偏高/偏低/待核对。
+  // 「这条指标值不值得患者看一眼」= 它显示的标记是异常（偏高/偏低/阳性）或待核对。
   // 直接复用 displayFlag，避免「显示的标记」与「计入异常候选」再次分叉。
   const flag = displayFlag(metric);
-  return flag === 'H' || flag === 'L' || flag === '待核对';
+  return flag === 'H' || flag === 'L' || flag === 'A' || flag === '待核对';
 }
 
 // 一条指标在界面上应显示的异常标记。
@@ -268,8 +268,12 @@ export function suggestedDecision(metric) {
   // H/L/N —— 缺的只是患者那一次核对，而确认页正是他在核对（#203）。把它算进去会让每一份
   // 刚评估完的报告满页「待核对」，而患者要处理的其实只有下面两类。
   if (notableAdmission(metric?.admission_reason) || valueNotParsed(metric)) return 'pending';
-  if ((flag === 'H' || flag === 'L') && metric?.evidence_text && metric?.page_number) return 'confirmed';
-  if (flag === 'H' || flag === 'L') return 'pending';
+  // 阳性（`A`）与偏高/偏低一样是**异常**：患者要么确认它、要么排除它，初选按有无原文
+  // 证据定 —— 与 H/L 同一条规则（#236）。
+  if ((flag === 'H' || flag === 'L' || flag === 'A') && metric?.evidence_text && metric?.page_number) {
+    return 'confirmed';
+  }
+  if (flag === 'H' || flag === 'L' || flag === 'A') return 'pending';
   return flag === '待核对' ? 'pending' : 'excluded';
 }
 

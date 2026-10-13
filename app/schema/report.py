@@ -29,7 +29,11 @@ class MetricRecord(BaseModel):
     # 服务端计算的「当前生效判定」（异常判定）：确认值/确认参考范围优先，否则模型值/
     # 模型参考范围；无法判定为 None，不猜测。它是患者侧异常标记与历史摘要的唯一口径，
     # 覆盖抽取模型写下的原始 abnormal_flag。定义见 GLOSSARY.md 的「异常判定」。
-    inferred_abnormal_flag: Literal["H", "L", "N"] | None = None
+    #
+    # `A` 是**分类结果的阳性**（`Detected` / `Positive`，#236）：它不是偏高也不是偏低
+    # ——分类结果没有方向，说「H 偏高」会在一个阳性/阴性检验上说假话。它与 `H`/`L` 一样
+    # 是「异常」，患者侧显示「异常」并由摘要计数。
+    inferred_abnormal_flag: Literal["H", "L", "N", "A"] | None = None
     # 服务端给出的「解读准入」结论（GLOSSARY.md 的「解读准入」）：`None` 表示这一行
     # **进入了解读**，否则是它没进去的**唯一**原因。值集与词表同源（词表在
     # `app/service/admission_vocabulary.py`），所以患者侧不需要、也不允许自己推导 ——
