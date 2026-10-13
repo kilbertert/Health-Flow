@@ -1,5 +1,8 @@
 # Long-running readers and configuration freshness
 
+Status: Accepted
+
+
 A `systemd` `EnvironmentFile=` is read **once, at start**. Every process on the
 service host that reads `var/health-flow.env` therefore holds a snapshot from its
 own start time, and nothing notices when the file moves on. The application
