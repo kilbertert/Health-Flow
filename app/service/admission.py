@@ -41,6 +41,7 @@ __all__ = [
     "infer_abnormal_flag",
     "parse_reference_range",
     "reference_reason",
+    "signed_value_reason",
     "single_number",
     "tally",
     "value_level_reason",
@@ -133,6 +134,89 @@ def reference_reason(reference: str | None) -> str | None:
     return "missing_reference_range" if low is None and high is None else None
 
 
+# 「报告把判据印成了同一个界」—— 值 `<20` 配上参考范围 `(<20)`（#235）。
+#
+# 这一类不是「值读不出来」：报告给的就是**一个界**（低于检出限、或低于参考上限），
+# 而且它把同一句话**同时**印在了值与参考范围两栏。系统原本一见 `<`/`>` 就判
+# `invalid_value`，于是患者面对一个他无法修正的东西 —— 报告上根本没有精确值可填。
+_SIGNED_BOUND_RE = re.compile(r"(?P<sign><=|>=|≤|≥|<|>)\s*(?P<number>-?\d+(?:\.\d+)?)")
+
+
+def _bound_key(text: str) -> str | None:
+    """文本里那个「界」的规范写法（方向 + 数值），没有界时返回 ``None``。
+
+    `≤`/`>=` 这类同一个关系的不同写法归一成一种（`<=` / `>=`），空白不参与比较 ——
+    报告与抽取器对同一件事的排版不必逐字相同，而**方向与数值**必须。
+    """
+    match = _SIGNED_BOUND_RE.search(text or "")
+    if match is None:
+        return None
+    sign = {"≤": "<=", "≥": ">="}.get(match["sign"], match["sign"])
+    return f"{sign}{match['number']}"
+
+
+def _is_exactly_one_bound(value_text: str | None, unit: str | None) -> bool:
+    """这个格子**只有一个界**，且它在**开头** —— 之前之后都没有别的东西（除了单位）。
+
+    这是本判据的**证伪**一步，两侧都要（评审在 #237 指出它一开始只查了后面）：
+
+    - **前面**：`40 >20` 里那个 40 是一个测量值，`>20` 只是它旁边的一句话 —— `search`
+      会把尾巴当成界，于是把「40 相对 >20」判成正常。所以界必须**匹配在开头**。
+    - **后面**：`<20 IU/ml` 之后是它的单位，`<1.0` 之后什么都没有 —— 都算「这一格是一个
+      界」；而 `<20 5.2` 后面还有东西，就不是了。
+
+    **不预先折叠空白**：`<20 5.2` 折叠之后成了 `<205.2`，那第二个数就被吃进了界里、尾巴
+    看起来是空的（本函数第一版就是这么错的，被跨语言那条断言逮住）。空白只在比较单位时
+    不参与。
+    """
+    text = (value_text or "").strip()
+    match = _SIGNED_BOUND_RE.match(text)
+    if match is None:
+        return False
+    tail = text[match.end() :].strip()
+    if not tail:
+        return True
+    return unit is not None and "".join(tail.split()).casefold() == "".join(unit.split()).casefold()
+
+
+def _reference_is_exactly_this_bound(reference: str | None, key: str) -> bool:
+    """参考范围里**只有这一个界**，没有第二个界或另一个数。
+
+    `(<20)`、`< 20` 都算；而 `>20, <30` 不是 —— 那说明这一行有上下两个判据，光看其中
+    一个就下「正常」会在另一个上错（评审在 #237 指出）。判据是数值字面量的个数：参考
+    范围里恰好一个数，且它就是这个界。
+    """
+    text = reference or ""
+    return len(_numbers(text)) == 1 and _bound_key(text) == key
+
+
+def signed_value_reason(value_text: str | None, reference: str | None, unit: str | None) -> str | None:
+    """带符号的值里，**报告自己把判据印成了同一个界**时给出准入结论，否则 ``None``。
+
+    判据是「报告把同一句话印在了两栏」。三个条件**全部**成立才算，缺一即是「不适用」
+    —— 本函数只加一个结论，从不撤销别的：
+
+    1. **值就是一个界**（`_is_exactly_one_bound`）：界在开头，之后只剩它自己的单位。
+       `<20 IU/ml` 与 `<1.0` 都算；`40 >20`（界之前有测量值）、`<20 5.2`（界之后还有东西）
+       不算。
+    2. **参考范围里也只有这一个界**（`_reference_is_exactly_this_bound`）：方向与数值都
+       相同，且没有第二个判据。LDL-C 那一类风险目标印的是另一个数（`<2.6` 对 `<=1.8`），
+       `>20, <30` 那种双界也不够 —— 都不是「报告把同一句话印在两处」。
+    3. 由 1+2 蕴含：`AIP < 0.01` 的参考范围是空的，影射到哪一个阈值是医学判断、不是
+       文本问题 —— 不猜（#235 的「不做」），于是它继续落 `invalid_value`。
+
+    为什么这里敢下「正常」这个结论：报告说「低于这个界」，而那个界就是**它自己印的
+    参考上界/下界**，所以「低于上界」与「在上界之内」是同一句话。放宽一步的代价是
+    把一个真异常说成正常，所以本判据只认报告**自己**把同一句话印在两处的情形。
+    """
+    if not _is_exactly_one_bound(value_text, unit):
+        return None
+    key = _bound_key(value_text or "")
+    if key is None or not _reference_is_exactly_this_bound(reference, key):
+        return None
+    return "within_reference_range"
+
+
 def word_domain_verdict(value_text: str | None, reference: str | None) -> bool | None:
     """参考范围是一个**词**时，值与它是否相符 —— ``True`` 相符、``False`` 不符、``None``
     这个判据不适用（没有词、或值不是这个词域里的一个词）。
@@ -167,16 +251,22 @@ def _as_word(text: str | None) -> str | None:
     return " ".join(stripped.split()).casefold()
 
 
-def value_level_reason(value_text: str | None, reference: str | None) -> str | None:
+def value_level_reason(value_text: str | None, reference: str | None, unit: str | None = None) -> str | None:
     """「值能不能判」这一类原因的**唯一**判定：值原因优先，其次参考范围。
 
     准入结论与异常判定的守卫都消费本函数，所以同一行在这两个问题上不可能再得到两个
     名字（此前空值一行分别得到 `invalid_value` 与 `missing_value`）。
 
+    **报告自己把判据印成同一个界**（`<20 IU/ml (<20)`）时先答：这一行**判得出**，值
+    并没有坏（#235）。判定的顺序也在这一个函数里，不留给两侧各自摆一遍 —— 这正是上一句
+    「同一处实现」的意思，而 `abnormal_flag_reason` 起初漏了这一步、被守卫立刻逮住。
+
     **两侧调的是同一个函数，不是两份「碰巧一致」的抄写** —— 这是本票的验收线之一，而
     它是靠这条调用关系成立的，不是靠断言。测试能钉住的是「结论逐字相同」；「同一处
     实现」只有这一条路径本身在守。
     """
+    if signed_value_reason(value_text, reference, unit) is not None:
+        return None
     return value_reason(value_text) or reference_reason(reference)
 
 
@@ -213,6 +303,12 @@ def admission_reason(
         verdict = word_domain_verdict(value_text, effective.reference_range)
         if verdict is True:
             return "within_reference_range"
+        # 报告把判据印成了**同一个界**（`Rheumatoid Factor <20 IU/ml (<20)`）：这一行有
+        # 结论，而且它是「正常」—— 报告说的是「低于这个界」，那个界就是它自己的参考上界。
+        # 与上面同一句：不是「值坏了」，患者没有可修正的东西（#235）。
+        signed = signed_value_reason(value_text, effective.reference_range, effective.unit)
+        if signed is not None:
+            return signed
         # 描述/记录项（血型、尿液外观、检验日期）本来就没有「是否异常」这回事 ——
         # 它们不是在等患者核对，而是这个判断对它不存在。
         if _has_no_own_interval(metric, effective) or _is_description(metric, effective):
@@ -230,7 +326,18 @@ def admission_reason(
         None,
     ):
         return "no_reference_concept"
-    if not effective.unit:
+    # 比值与标度值（pH、尿比重、`N:L Ratio`）的名字**就是**它的量纲：缺的不是抽取漏了
+    # 单位，而是这一项本来没有单位。它们因此不该被 `missing_unit` 拦下 —— 患者没有
+    # 任何东西可补（#235）。
+    #
+    # **但不能直接落到 `no_reference_concept`。** 那是「这一项没有异常概念」—— 一句
+    # **关于这一项的断言**，而报告印了参考范围时它明明有判据（评审在 #237 指出）。说一句
+    # 不成立的话还会与异常判定打架：`pH 8.0 (4.8-7.4)` 判得出 H。
+    #
+    # 正确的处置是**继续往下走、只是跳过单位那一关**：单位是「跨证据边界」的完备性要求
+    # （`SourceObservation.unit` 是一个必填字符串），而无量纲项的「单位」就是「没有单位」
+    # 这件事本身，如实送出去 `unit=""` 比编一个或据一个不存在的缺陷拦下它都诚实。
+    if not effective.unit and not _unit_is_its_own_name(metric, effective):
         return "missing_unit"
     evidence = effective.evidence_text
     if not evidence:
@@ -251,7 +358,7 @@ def admission_reason(
     # 片段没带它」的行得到一句关于数据的错误理由（eGFR 报告上写着 `Normal (>=90)`，却因为
     # 片段里没带范围被判成「缺少原文证据」）。值仍然必须出现在证据里 —— 那一条说的是
     # 「这个数确实来自报告」，与本条不同。
-    flag = infer_abnormal_flag(str(value), effective.reference_range)
+    flag = infer_abnormal_flag(str(value), effective.reference_range, effective.unit)
     # 还没核对的行到这里已经是「可判」的了（值/单位/参考范围/证据/页码都齐）。它**不是**
     # 「未能进入解读」，那个结论要等患者核对过才成立 —— 所以这里如实说「可判、待核对」，
     # 由**前端**按异常判定决定要不要请他处理（判成 H/L 要，判成 N 不要）。
@@ -332,16 +439,24 @@ def parse_reference_range(value: str | None) -> tuple[float | None, float | None
     return None, None
 
 
-def infer_abnormal_flag(value: str | None, reference: str | None) -> str | None:
+def infer_abnormal_flag(value: str | None, reference: str | None, unit: str | None = None) -> str | None:
     """纯函数形式的异常判定：``"H" | "L" | "N"``，输入不足返回 ``None``。
 
-    定义见 GLOSSARY.md 的「异常判定」。它**只**看值与参考范围 —— 不看单位、不看原文
-    证据、不看页码，那是刻意的：异常判定回答「这个值相对这个范围偏高吗」，与「这条
-    指标能不能跨过证据边界」是两个问题。
+    定义见 GLOSSARY.md 的「异常判定」。它**只**看值与参考范围 —— 不看原文证据、不看
+    页码，那是刻意的：异常判定回答「这个值相对这个范围偏高吗」，与「这条指标能不能跨过
+    证据边界」是两个问题。``unit`` 唯一的用处是判「带符号的值是不是报告自己印的界」那
+    一条（`<20 IU/ml` 的界后面跟着它的单位），它不是判定的一部分。
     """
     text = (value or "").strip()
-    if not text or any(marker in text for marker in _SIGN_MARKERS):
+    if not text:
         return None
+    if any(marker in text for marker in _SIGN_MARKERS):
+        # 带符号的值通常判不出来（`single_number('<20')` 给的是上界、不是一个测量值）。
+        # 但报告把判据印成**同一个界**时它判得出、而且是正常：`Rheumatoid Factor <20
+        # (<20)` 说的是「低于这个界」，那个界就是它印的参考上界（#235）。这一条与准入
+        # 那一侧**同一份判据**（`signed_value_reason`）—— 两处各判一次会让同一行一边说
+        # 「没有异常概念」、一边报 H（评审在 #237 指出）。
+        return "N" if signed_value_reason(text, reference, unit) is not None else None
     number = single_number(text)
     if number is None:
         return None
@@ -377,6 +492,34 @@ _NO_OWN_INTERVAL_TEXT_RE = re.compile(
 # 这一条里：`parse_reference_range` 能从中解析出**一个**边界，所以它已被判成 H/L/N ——
 # 那是正确的处置，本函数不把它捞走（#205 的「单边界判据」那一半）。
 
+# 「这一项的单位是**它自己名字的一部分**」—— pH、尿比重（`SG`）、中性粒/淋巴比（`N:L`）
+# 这类标度值与比值。它们的无量纲不是「抽取漏了」：`pH 7.0` 在报告上不带单位，因为 pH
+# 就是个标度（定义即 −log[H⁺]）；`N:L Ratio` 是两个计数之比；`SG` 是相对水的密度比。
+#
+# **为什么单列一条、而不并进 `_NO_OWN_INTERVAL_*`**：那两个不看值，而大意是「这一项
+# 没有异常概念」—— 那是**另一个结论**（`no_reference_concept`）。更重要的是，它们还要求
+# 「范围里解析不出任何边界」，于是 `T Chol/HDL ratio` 反倒要走「缺参考范围」那条去问
+# 患者：它的范围被抽取器塞了同一页 Target 栏的 `2.8`。本条的语义是「缺单位不是它的
+# 缺陷」，范围照常可用 —— 比比值行更宽，所以对既有行**只增不减**。
+#
+# 判据分两半，因为两类信号的性质不同：
+#
+# - **比值**（`ratio` / `比率` / `比值`）：名字自己说了它是两个量之比，不需外部知识。
+# - **标度值**（`pH` / `SG`）：这是**物理事实**，报告上没有任何文字能证明它 —— 一条
+#   `Glucose: 葡萄糖 6.5` 与一条 `pH: 酸碱值 7.0` 在文本上完全同形（都是「ASCII 标签 +
+#   冒号 + 中文全称 + 数字 + 区间」），差别只在「葡萄糖有量纲、pH 没有」。所以这里
+#   必须有一份**有界**的词表，而它与本模块别处刻意不要的「指标名清单」不是一回事：
+#   那份清单会随每一份新报告过期（所以我们不维护它），而「尿常规里哪些格子是标度/密度」
+#   是**封闭**的 —— 常规尿分析的标度栏永远只有这两个，新报告不会让这张表变长。
+#
+# 上限写在明处：表外的无量纲项（例如某个只印名字的衍生比值指标）仍会落 `missing_unit`，
+# 患者被问一次 —— 那比反过来（把该问的测量静默吞掉）安全。
+#
+# 比值那一半复用 `_NO_OWN_INTERVAL_NAME_RE` —— 两处问的是同一个「这是比值吗」，各写一份
+# 就会分叉（一处认中文、一处不认）。
+# 词间边界而不是子串：`SGOT`（谷草转氨酶的旧称）与 `pH` 里那个 `h` 都不该被误当成这两个。
+_UNITLESS_SCALE_RE = re.compile(r"(?<![A-Za-z])(?:pH|SG)(?![A-Za-z])")
+
 # 「这一行是描述或记录，不是一次测量」—— 血型、尿液外观、透明度、检验日期这类。它们没有
 # 异常概念，因此也没有「该怎么判」这个问题（#206）。
 #
@@ -402,6 +545,12 @@ def _is_description(metric: Any, effective: Any) -> bool:
     if not _DESCRIPTION_NAME_RE.search(str(getattr(metric, "metric_name", "") or "")):
         return False
     return word_domain_verdict(effective.value, effective.reference_range) is None
+
+
+def _unit_is_its_own_name(metric: Any, effective: Any) -> bool:
+    """缺单位是不是**这一项本来就没有单位**（比值、标度值）—— 见上面两条判据的说明。"""
+    name = str(getattr(metric, "metric_name", "") or "")
+    return bool(_NO_OWN_INTERVAL_NAME_RE.search(name) or _UNITLESS_SCALE_RE.search(name))
 
 
 def _has_no_own_interval(metric: Any, effective: Any) -> bool:

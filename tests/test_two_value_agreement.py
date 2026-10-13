@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from app.service.admission import value_reason
+from app.service.admission import value_level_reason, value_reason
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MODULE = REPO_ROOT / "frontend" / "src" / "admissionText.js"
@@ -105,8 +105,41 @@ for (const value of cases) {
   });
   out[`${value}\\u0000names`] = mod.dualValues({ metric_value: value });
 }
+// 「报告把判据印成同一个界」那一类（#235）：值与参考范围两栏都给，两侧各判一次。
+for (const [key, row] of Object.entries(JSON.parse(process.env.BOUND_CASES))) {
+  out[`bound:${key}`] = mod.valueReasonOrNull({
+    metric_value: row.value,
+    reference_range: row.reference,
+    unit: row.unit,
+    admission_reason: null,
+    inferred_abnormal_flag: null,
+    abnormal_flag: 'H',
+  });
+}
 fs.writeFileSync(process.env.RESULT, JSON.stringify(out));
 """
+
+# 「报告把判据印成同一个界」（#235）—— 每一行同时喂给 `value_level_reason`（服务端）与
+# `valueReasonOrNull`（确认页）。`expected` 是**其中一侧**的答案，另一侧必须相同：
+# 断言的是两侧相等，所以往任何一侧加一条出口或换个顺序都会红。
+_BOUND_CASES = {
+    # 同一个界 → 判得出（None），患者不必修正一个报告上根本没有的精确值。
+    "same_bound": {"value": "<20", "reference": "(<20)", "unit": "IU/ml"},
+    "space_and_full_width": {"value": "≤ 20", "reference": "(<=20)", "unit": "IU/ml"},
+    # 界之后还有别的东西 —— 不是「这一格是一个界」这回事。
+    "tail_number": {"value": "<20 5.2", "reference": "(<20)", "unit": "IU/ml"},
+    "tail_other_unit": {"value": "<20 mmol/L", "reference": "(<20)", "unit": "IU/ml"},
+    # 方向不同、数值不同 —— 报告没有把同一句话印在两处。
+    "other_direction": {"value": "<20", "reference": "(>20)", "unit": "IU/ml"},
+    "other_number": {"value": "<2.6", "reference": "<=1.8", "unit": "mmol/L"},
+    # 参考范围里没有界（AIP）—— 影射到哪个阈值是医学判断，不猜。
+    "no_bound_in_reference": {"value": "<0.01", "reference": None, "unit": None},
+    # 界**之前**还有一个测量值 —— `>20` 只是它旁边的一句话，不是「这一格是一个界」。
+    # 评审在 #237 指出 `search` 会把尾巴当成界（`40 >20` 配 `>20` 被判成正常）。
+    "prefix_measurement": {"value": "40 >20", "reference": "(>20)", "unit": None},
+    # 参考范围里有**两个**判据（`>20, <30`）—— 光看一个就下「正常」会在另一个上错。
+    "two_reference_bounds": {"value": "<20", "reference": "(>20, <30)", "unit": None},
+}
 
 needs_node = [
     pytest.mark.skipif(NODE is None, reason="需要 node 才能驱动前端模块"),
@@ -117,7 +150,10 @@ needs_node = [
 ]
 
 
-def _frontend_reasons(cases: list[str]) -> dict[str, str | None]:
+def _frontend_reasons(
+    cases: list[str],
+    bound_cases: dict[str, dict[str, str | None]] | None = None,
+) -> dict[str, str | None]:
     frontend = REPO_ROOT / "frontend"
     work = frontend / "node_modules" / f".tmp-agree-{os.getpid()}"
     shutil.rmtree(work, ignore_errors=True)
@@ -135,6 +171,7 @@ def _frontend_reasons(cases: list[str]) -> dict[str, str | None]:
                 "MODULE": str(MODULE),
                 "OUTFILE": str(work / "admission.mjs"),
                 "CASES": json.dumps(cases),
+                "BOUND_CASES": json.dumps(bound_cases or {}),
                 "RESULT": str(result),
             },
             cwd=frontend,
@@ -182,6 +219,29 @@ def test_both_sides_offer_the_same_candidates_for_a_two_value_row():
         # 原文字面量（`4.00` 不是 `4`）—— 这正是「保留原文写法」那一条要钉的东西：
         # 归一化成数字再格式化会让 `76.1kg` 变成 `76.1`、`３.６３` 变成 `3.63`。
         assert server == [part for part in server], value
+
+
+@needs_node[0]
+@needs_node[1]
+def test_both_sides_agree_on_a_signed_value_whose_bound_is_the_reports_criterion():
+    """`<20` 配 `(<20)` 这一类，两侧给同一个答案（#235）。
+
+    与上面那条同一个道理：准入结论要等评估之后才有，所以确认页必须**在患者提交之前**
+    就说明白这一行判不判得出。两侧的判据住在一处（`signed_value_reason` /
+    `signedBoundIsTheCriterion`），这条断言两侧相等 —— 任何一侧漏掉「界之后只剩单位」
+    或「方向/数值必须相同」这些出口，它都会红。
+    """
+    front = _frontend_reasons([], _BOUND_CASES)
+    mismatched = {}
+    for key, row in _BOUND_CASES.items():
+        server = value_level_reason(row["value"], row["reference"], row["unit"])
+        if server != front[f"bound:{key}"]:
+            mismatched[key] = {"server": server, "frontend": front[f"bound:{key}"]}
+    assert mismatched == {}, f"带符号值的判定两侧分叉：{json.dumps(mismatched, ensure_ascii=False)}"
+
+    # 守卫要能红：同一个界那一侧必须真的给出 None（判得出），否则上面那条是空断言。
+    assert front["bound:same_bound"] is None
+    assert front["bound:no_bound_in_reference"] == "invalid_value"
 
 
 @needs_node[0]

@@ -372,14 +372,16 @@ class VisionEncoderService:
         reference_range = data.get("reference_range")
         reference_range = str(reference_range).strip() if reference_range else None
         raw_flag = str(data.get("abnormal_flag") or "").strip()
-        abnormal_flag = infer_abnormal_flag(value, reference_range)
+        unit = data.get("unit")
+        unit = str(unit).strip() if unit else None
+        # 单位也传进去：判「带符号的值是不是报告自己印的界」要它（`<20 IU/ml` 的界后面
+        # 跟着单位）。只影响那一条 —— 其余判定不看单位（#235）。
+        abnormal_flag = infer_abnormal_flag(value, reference_range, unit)
         if abnormal_flag is None:
             abnormal_flag = "A" if raw_flag == "*" else raw_flag or None
 
         evidence_text = data.get("evidence_text")
         evidence_text = str(evidence_text).strip() if evidence_text else None
-        unit = data.get("unit")
-        unit = str(unit).strip() if unit else None
 
         return MetricRecord(
             metric_name=name,

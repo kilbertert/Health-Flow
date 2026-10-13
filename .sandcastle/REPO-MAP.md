@@ -42,7 +42,7 @@ no project argument. Both answer *where* something is; neither replaces reading 
 ## Tests
 
 - tests/ — 54 test file(s, recursive)
-- frontend/e2e/ — 14 test file(s, recursive)
+- frontend/e2e/ — 15 test file(s, recursive)
 - pytest (pyproject.toml / pytest.ini present)
 
 ## Docs
@@ -51,8 +51,8 @@ no project argument. Both answer *where* something is; neither replaces reading 
 - AGENTS.md
 - CLAUDE.md
 - README.md
-- docs/ — 17 markdown file(s)
-- docs/adr/ — 11 markdown file(s)
+- docs/ — 18 markdown file(s)
+- docs/adr/ — 12 markdown file(s)
 - docs/agents/ — 5 markdown file(s)
 
 ## Tree (depth 2, first 80 lines; dependencies, build
@@ -131,7 +131,7 @@ docs/
     0009-adr-check-scope-and-self-application.md
     0010-required-checks-on-self-hosted.md
     0011-interpretation-failure-is-a-named-conclusion.md
-    ... (1 more)
+    ... (2 more)
   agents/
     architecture-decisions.md
     domain.md
