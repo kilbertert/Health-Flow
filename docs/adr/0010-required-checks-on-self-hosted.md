@@ -1,4 +1,9 @@
-# 10. 必需检查改到 self-hosted：一次被计费事故逼出来的主机边界扩张
+# 10. 必需检查的两次迁移：被计费事故逼到 self-hosted，恢复后又搬回来
+
+> **状态更新（2026-10-13）**：本记录原本只记「改到 self-hosted」。当天账号订阅修复
+> 并升级 Pro 之后**已回迁 `ubuntu-latest`**，回迁的理由与实测证据见文末「回迁」一节。
+> 下面「背景」与「决定」保留原样，因为它们是那次迁移的理由，且回迁的判据正是它们
+> 不再成立。
 
 日期：2026-10-13
 状态：已采纳
@@ -134,3 +139,27 @@ this commit touches 2 path(s) that decide how the system is put together
    是 runner label 与「不许回到会被计费锁整批打死的 hosted」；fork 门的存在由本记录
    与仓库设置承担。改后的断言把这件事写在它自己的 docstring 里，并**点名**
    `all_external_contributors`，让下一个改 runner 的人先去找那道门。
+
+
+## 回迁（2026-10-13）
+
+账号订阅修好并升到 Pro 之后，**两个必需检查都回到 `ubuntu-latest`**。
+
+**判据是实测的**：在 `ubuntu-latest` 上跑了一次 `Verify`，**1m20s / success，且没有
+计费注解**。不是推断「Pro 应该能用了」。
+
+**回迁关掉的是一个真实敞口，不是回到原状。** 上面「这道门挡不住什么」一节写得很清楚：
+self-hosted 上跑必需检查 = 外部 PR 的代码在 `claude` 账号下执行，而那个账号手里有主机
+密钥、`dev-host`、以及能读到 36 的部署环境。fork 门只管「谁可以跑」，管不了「跑的东西
+能碰到什么」。hosted 上执行没有这个问题，所以回迁是**减少**一处边界扩张。
+
+因此 fork 门**不再是必需检查的前提**了。它仍然开着（`all_external_contributors`），
+因为对任何会在 PR 上执行代码的路径它都是一道有价值的门 —— 但本记录不再依赖它来
+justify self-hosted 必需检查。
+
+`cd.yml` 的部署**保持 `[self-hosted, health-flow]`**：部署需要宿主上的镜像与凭据，
+与「必需检查跑在哪」是两件事，本次没有动它。
+
+**这一条在 `tests/test_ci_workflow.py` 里有守卫**，且守卫一并改了方向 —— 它原来是
+「断言 assert 'ubuntu-latest' not in body」的反向断言，现在是断言 `ubuntu-latest`
+并且**不允许 self-hosted 出现在这个文件里**。

@@ -82,27 +82,36 @@ def test_required_check_context_and_triggers_are_stable() -> None:
     assert re.search(r"^  contents: read$", body, re.MULTILINE), "权限应只要 contents: read"
 
 
-def test_runs_on_the_repository_runner_with_the_fork_gate_recorded() -> None:
-    """检查跑在本仓专属的 self-hosted runner 上，**且这是有条件的**。
+def test_runs_on_a_hosted_runner_with_the_billing_lock_recorded() -> None:
+    """检查跑在 `ubuntu-latest` 上，**且这次回迁是有条件的**。
 
-    这一条在 ADR-0010 里改过一次方向，改的理由是实测的：GitHub 账号被计费锁住时
-    `ubuntu-latest` 的 job **起不来**（注解原文 "The job was not started because your
-    account is locked due to a billing issue"），而 Ruleset 要求 `Tests` 与
-    `Workflow policy` 有结论 —— 于是本仓每个 PR 都合不了，`--admin` 也绕不过。
+    这一条在 ADR-0010 里被改成了 self-hosted，现在改回来，两次的方向都由实测决定：
 
-    **持久 runner 不得执行不可信 PR 代码**，所以换 runner 的前提是一道 fork 门。
-    那道门是**仓库设置**（`actions/permissions/fork-pr-contributor-approval` =
-    `all_external_contributors`），不在这个文件里，因此本静态测试**读不到它** ——
-    它能断言的是 runner 标签，以及「label 必须是本仓专属的那一个」。
+    1. **改过去**：2026-10-12 账号被计费锁住，`ubuntu-latest` 的 job 起不来
+       （注解原文 "The job was not started because your account is locked due to a
+       billing issue"），而规则集要求 `Tests` 与 `Workflow policy` 有结论 —— 本仓
+       每个 PR 都合不了，`--admin` 也绕不过。
+    2. **改回来**：2026-10-13 账号恢复（订阅已修 + 升 Pro）。实测证据是一次
+       `ubuntu-latest` 上的 `Verify` 跑完 **1m20s / success**，且**没有计费注解** ——
+       实测，不是推断它能用。
 
-    裸 `self-hosted` 的语义是「任何一台 self-hosted runner」，那会让这个仓库的
-    检查落到别的项目的 runner 上；本仓（与 AI-Ops）的做法都是带上项目 label。
+    **回迁关掉的是一个真实敞口，而不是回到原状。** self-hosted 上跑必需检查意味着
+    外部 PR 的代码在 `claude` 账号下执行；同一条 runner 上还跑 `cd.yml` 的部署，
+    而那个账号手上有主机密钥与 36 的部署环境。ADR-0010 用一道 fork 门
+    （`all_external_contributors`）当补偿控制，并在记录里写明**那只是把「谁可以跑」
+    变成人工批准，答不了「跑的东西能碰到什么」**。hosted 上执行没有这个问题。
+
+    所以这道门本身**不是**回迁的前提了；但它仍然是一道有价值的门，保持开启。
+
+    裸 `self-hosted` 的语义是「任何一台 self-hosted runner」，那是 `cd.yml` 的原话，
+    在这里仍然适用 —— 本仓不再有 self-hosted 的必需检查，但部署仍是。
     """
     body = _stripped()
-    assert re.search(r"^\s*name: Tests\n\s+runs-on: \[self-hosted, health-flow\]$", body, re.MULTILINE), (
-        "verify job 应跑在 [self-hosted, health-flow]；改 runner 前先确认 fork 门"
-        "（all_external_contributors）仍生效，并更新 docs/adr/0010"
+    assert re.search(r"^\s*name: Tests\n\s+runs-on: ubuntu-latest$", body, re.MULTILINE), (
+        "Tests 应回到 ubuntu-latest：必需检查跑在本机 runner 上会让外部 PR 的代码"
+        "在 claude 账号下执行（ADR-0010 记的敞口）。改回 self-hosted 前先确认账号"
+        "再次不可付费，并更新 docs/adr/0010"
     )
-    assert "ubuntu-latest" not in body, (
-        "上游 runner 已被证明会因计费锁整批起不来（ADR-0010）；改回去要先确认账号可付费"
+    assert "self-hosted" not in body, (
+        "本文件里的必要检查不应再引用 self-hosted"
     )
