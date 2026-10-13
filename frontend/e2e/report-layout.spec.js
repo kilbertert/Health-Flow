@@ -17,6 +17,33 @@ function horizontalExcess(page) {
   );
 }
 
+// 弹窗**入场动画结束后**的渲染盒。
+//
+// 为什么必须等：antd 的 Modal 有入场动画（`antZoomIn`，`scale(0.2)→scale(1)`，约 360ms），
+// 而 `boundingBox()`/`getBoundingClientRect()` 返回的是**渲染盒** —— 动画期间被 transform
+// 缩放。所以一打开就量宽度，取到的可能是 `960 × 0.2 = 192`，而不是 960（#234：全量并发下
+// 断言偶尔读到 192；根因是断言与入场动画抢跑，**不是**响应式切换的缺陷 —— 产品的 layout
+// 宽度始终是 960，`offsetWidth` 在动画的每一帧都一样）。
+//
+// 判据是**动画类名 + 动画状态**，不是 `waitForTimeout`：
+//   - 打开后的第一帧带 `ant-zoom-appear-start`（此刻还没开始跑，`getAnimations()` 是空的
+//     —— 只等「没有动画」会当场通过，读到那个瞬时的 960）；
+//   - 动画期间带 `ant-zoom-appear-active`；
+//   - 结束时两个类都被摘掉。
+// 所以「已静止」= 类名里没有 `ant-zoom-appear` **且**没有在跑的动画。轮询到它就返回，
+// 不靠猜 360ms 够不够，也不为保险白等。
+async function settledBox(locator) {
+  await expect
+    .poll(() =>
+      locator.evaluate((el) => {
+        const appearing = el.className.includes('ant-zoom-appear');
+        return appearing || el.getAnimations().length > 0;
+      }),
+    )
+    .toBe(false);
+  return locator.boundingBox();
+}
+
 [375, 414].forEach((width) => {
   test.describe(`报告解读流 ${width}px`, () => {
     test.use({ viewport: { width, height: 667 } });
@@ -50,20 +77,10 @@ function horizontalExcess(page) {
       const modal = page.locator('.source-modal-wrap .ant-modal');
       await expect(modal).toBeVisible();
       await expect(page.getByAltText(/报告原文第 1 页/)).toBeVisible();
-      await expect
-        .poll(async () => {
-          const box = await modal.boundingBox();
-          return Boolean(
-            box &&
-            box.x <= 0 &&
-            box.y <= 0 &&
-            box.x + box.width >= width - 1 &&
-            box.y + box.height >= 667 - 1,
-          );
-        })
-        .toBe(true);
 
-      const box = await modal.boundingBox();
+      // 移动端：弹窗铺满视口。**等入场动画结束后**再量 —— 动画期间量到的是缩放中的盒子
+      // （`375 × 0.2 = 75`），不是它最终的几何量（#234）。
+      const box = await settledBox(modal);
       expect(box).not.toBeNull();
       expect(box.x).toBeLessThanOrEqual(0);
       expect(box.y).toBeLessThanOrEqual(0);
@@ -95,13 +112,12 @@ test.describe('桌面端报告解读流', () => {
     const modal = page.locator('.source-modal-wrap .ant-modal');
     await expect(modal).toBeVisible();
     await expect(page.getByAltText(/报告原文第 1 页/)).toBeVisible();
-    await expect
-      .poll(async () => {
-        const box = await modal.boundingBox();
-        return Boolean(box && box.width >= 955 && box.width <= 961);
-      })
-      .toBe(true);
-    const box = await modal.boundingBox();
+
+    // 桌面端：960px（antd `width={960}`）。**等入场动画结束后**再量 —— 动画第一帧的渲染盒
+    // 是 `960 × 0.2 = 192`，正是本票那条间歇性失败的读数（#234）。这里不用 `expect.poll`
+    // 去「碰」它：poll 会在动画跑起来之前的那个瞬时帧读到 960 而当场通过，紧接着的断言又
+    // 在动画中间读到 192 —— 那个窗口只在负载下才够宽，所以它是一条只在并发下红一次的竞态。
+    const box = await settledBox(modal);
     expect(box).not.toBeNull();
     expect(box.width).toBeLessThanOrEqual(961);
     expect(box.width).toBeGreaterThanOrEqual(955);

@@ -56,4 +56,12 @@ await page.getByRole('button', { name: '查看空腹血糖原文' }).click();
 - 打印行为用 `page.emulateMedia({ media: 'print' })` 驱动，不要靠截图肉眼判断。
 - 原文弹窗在桌面视口保留 960px 宽度；移动端全屏。视口不同断言不同，用
   `test.use({ viewport })` 明确声明。
+- **量弹窗几何量前必须等入场动画结束。** antd 的 Modal 有 `antZoomIn` 入场动画
+  （`scale(0.2)→scale(1)`，约 360ms），而 `boundingBox()` / `getBoundingClientRect()`
+  返回的是**渲染盒** —— 动画期间被 transform 缩放。一打开就量宽度会取到
+  `960 × 0.2 = 192`（移动端同理 `375 × 0.2 = 75`）。这不是布局缺陷：`offsetWidth`
+  在动画的每一帧都是 960。`report-layout.spec.js` 的 `settledBox()` 是正确写法
+  （等类名摘掉 `ant-zoom-appear` 且没有在跑的动画）；**不要**用 `expect.poll` 去「碰」
+  那个瞬时值 —— 它会在动画跑起来之前的一帧读到 960 而当场通过，紧接着的断言又读到动画
+  中间的 192，于是只在并发负载下才红（#234）。
 - 技术详情默认收起，需先点「技术详情」再断言内容。
