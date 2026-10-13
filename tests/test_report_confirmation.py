@@ -763,7 +763,7 @@ def test_report_parse_keeps_successful_files_when_one_file_fails():
             return_value=SimpleNamespace(REPORT_PARSE_WORKERS=2),
         ),
     ):
-        assert _parse_report(report_id, accepted_files, session_factory) is False
+        assert _parse_report(report_id, accepted_files, session_factory).succeeded is False
 
     session = session_factory()
     saved = session.get(ReportModel, report_id)
@@ -1018,7 +1018,8 @@ def test_parse_yields_the_same_row_count_for_text_and_scanned_input():
             patch("app.api.report.get_vision_encoder_service", return_value=_Vision()),
             patch("app.api.report.get_settings", return_value=SimpleNamespace(REPORT_PARSE_WORKERS=1)),
         ):
-            assert _parse_report(report_id, [(1, "a.pdf", "application/pdf", b"x")], session_factory) is True
+            outcome = _parse_report(report_id, [(1, "a.pdf", "application/pdf", b"x")], session_factory)
+            assert outcome.succeeded is True
 
         with session_factory() as check:
             return check.query(MetricModel).filter(MetricModel.report_id == report_id).count()

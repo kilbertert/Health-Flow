@@ -15,6 +15,11 @@ from app.config import get_settings
 from app.model.llm import get_llm_client, get_vlm_client
 from app.schema.report import MetricRecord
 from app.service.evidence_bridge import infer_abnormal_flag
+from app.service.interpretation_failure import (
+    InterpretationFailure,
+    classify,
+    report_failure,
+)
 from app.service.origin_location import (
     clean_bbox,
     denormalize_bbox,
@@ -33,12 +38,24 @@ from app.service.report_material import (
 
 @dataclass
 class ParsedReport:
+    """一份材料的解析结果。``failure`` 是失败时的**唯一成因**（GLOSSARY.md 的「解读失败」）。
+
+    ``error`` 仍然存在，但它只是**给人看的细节**（排障、日志），**不参与任何判定**：
+    此前重试与否由 ``f"{filename}: {error}"`` 里的子串决定 —— 文件名在被匹配的文本里，
+    改一个名字就翻转重试决策。现在判定只读 ``failure``，而它由分类入口
+    （``app/service/interpretation_failure.py``）从**结构化事实**得出。
+
+    ``failure`` 有值而 ``success`` 为真是不可能的：能产出指标就不是失败。反过来
+    ``success`` 为假而 ``failure`` 为空也是不可能的 —— 抽取侧的每一处失败都点名成因。
+    """
+
     report_type: str
     raw_text: str
     metrics: list[MetricRecord]
     page_count: int
     success: bool
     error: str | None = None
+    failure: InterpretationFailure | None = None
     provider: str = ""
     model: str = ""
     run_id: str = ""
@@ -123,6 +140,7 @@ class VisionEncoderService:
             workers = max(1, min(get_settings().REPORT_PARSE_WORKERS, len(indexed_pages)))
             page_results: list[tuple[list[MetricRecord], str]] = []
             errors: list[str] = []
+            failures: list[InterpretationFailure] = []
             with ThreadPoolExecutor(max_workers=workers) as executor:
                 futures = [
                     (
@@ -136,11 +154,18 @@ class VisionEncoderService:
                         page_results.append(future.result())
                     except Exception as exc:
                         errors.append(f"page {page_number}: {exc}")
+                        failures.append(classify("provider", exc, text=str(exc)))
             metrics = [metric for group, _ in page_results for metric in group]
             provider_run_ids = tuple(run_id for _, run_id in page_results if run_id)
             # 去重不在这里做：同一观测的判定只有一个执行点（报告级，
             # app/service/metric_rows.py），否则同一份内容在文本 PDF 与扫描件上
             # 会得到不同的行数。success 按**未去重**的 metrics 计算。
+            #
+            # 成因**不因别的页抽到了东西而消失**：一页超时、另一页正常时，那些指标
+            # 会被交出去，但超时那一页仍然需要一个答案 —— 队列据此决定要不要为它再
+            # 跑一轮。此前写成 `None if metrics else ...`，于是「有的页抽到了、有的页
+            # 报错」这种最常见的部分失败反而**没有成因**，重试判定拿不到输入。
+            failure = report_failure(failures) or (None if metrics else "content_unrecognized")
             parsed = self._with_trace(
                 ParsedReport(
                     report_type="text_pdf",
@@ -149,6 +174,7 @@ class VisionEncoderService:
                     page_count=page_count,
                     success=bool(metrics),
                     error=("; ".join(errors) if errors else None if metrics else "未提取到可确认的医学指标"),
+                    failure=failure,
                 ),
                 self.llm_client,
             )
@@ -158,11 +184,18 @@ class VisionEncoderService:
                 provider_run_ids=provider_run_ids,
             )
         except Exception as exc:
-            return self._with_trace(ParsedReport("text_pdf", "", [], 0, False, str(exc)), self.llm_client)
+            # PDF 文本层都读不出来 —— 这是我们没能从**这份材料**里读出东西，不是模型的问题。
+            return self._with_trace(
+                ParsedReport(
+                    "text_pdf", "", [], 0, False, str(exc), failure=classify("material", exc)
+                ),
+                self.llm_client,
+            )
 
     def parse_scanned_pdf(self, pdf_bytes: bytes) -> ParsedReport:
         images = self._render_pdf_to_images(pdf_bytes)
         if not images:
+            # 渲染失败 = 我们没能从**这份材料**里读出东西。它不是模型的问题。
             return self._with_trace(
                 ParsedReport(
                     "scanned_pdf",
@@ -171,6 +204,7 @@ class VisionEncoderService:
                     0,
                     False,
                     "无法渲染 PDF 页面，请安装 PyMuPDF 和 Pillow",
+                    failure=classify("material"),
                 ),
                 self.vlm_client,
             )
@@ -178,6 +212,7 @@ class VisionEncoderService:
         metrics: list[MetricRecord] = []
         texts: list[str] = []
         errors: list[str] = []
+        failures: list[InterpretationFailure] = []
         provider_run_ids: list[str] = []
         for page_number, image_bytes in enumerate(images, start=1):
             parsed = self._parse_image_with_vlm(image_bytes, RENDERED_PAGE_MEDIA_TYPE, page_number)
@@ -188,6 +223,8 @@ class VisionEncoderService:
                 provider_run_ids.append(run_id)
             if parsed[2]:
                 errors.append(f"page {page_number}: {parsed[2]}")
+            if parsed[3]:
+                failures.append(parsed[3])
 
         parsed = self._with_trace(
             ParsedReport(
@@ -197,6 +234,7 @@ class VisionEncoderService:
                 page_count=len(images),
                 success=bool(metrics),
                 error=("; ".join(errors) if errors else None if metrics else "未提取到可确认的医学指标"),
+                failure=report_failure(failures) or (None if metrics else "content_unrecognized"),
             ),
             self.vlm_client,
         )
@@ -207,7 +245,7 @@ class VisionEncoderService:
         )
 
     def parse_image_report(self, image_bytes: bytes, mime_type: str = "image/png") -> ParsedReport:
-        text, metrics, error = self._parse_image_with_vlm(image_bytes, mime_type, 1)
+        text, metrics, error, failure = self._parse_image_with_vlm(image_bytes, mime_type, 1)
         parsed = self._with_trace(
             ParsedReport(
                 "image",
@@ -216,6 +254,8 @@ class VisionEncoderService:
                 1,
                 error is None and bool(metrics),
                 error or (None if metrics else "未提取到可确认的医学指标"),
+                # 模型答上了、只是这一页没有可确认的指标 —— 那是内容事实。
+                failure=None if metrics else failure or "content_unrecognized",
             ),
             self.vlm_client,
         )
@@ -256,11 +296,19 @@ class VisionEncoderService:
             return self.parse_text_pdf(content) if pdf_type == "text_pdf" else self.parse_scanned_pdf(content)
         if route == "image":
             return self.parse_image_report(content, material.media_type)
-        return ParsedReport("unknown", "", [], 0, False, f"不支持的文件类型：{filename}")
+        return ParsedReport(
+            "unknown",
+            "",
+            [],
+            0,
+            False,
+            f"不支持的文件类型：{filename}",
+            failure=classify("material"),
+        )
 
     def _parse_image_with_vlm(
         self, image_bytes: bytes, mime_type: str, page_number: int
-    ) -> tuple[str, list[MetricRecord], str | None]:
+    ) -> tuple[str, list[MetricRecord], str | None, InterpretationFailure]:
         image_base64 = base64.b64encode(image_bytes).decode("ascii")
         width, height = self._image_size(image_bytes)
         prompt = IMAGE_EXTRACTION_PROMPT
@@ -291,9 +339,13 @@ class VisionEncoderService:
                 str(payload.get("text_summary", "")),
                 metrics,
                 None if metrics else "未提取到可确认的医学指标",
+                # 模型答上了（JSON 解析通过、结构合格），只是这一页没有指标。
+                None if metrics else "content_unrecognized",
             )
         except Exception as exc:
-            return "", [], str(exc)
+            # 文本要一起交出去：`Error code: 401 - ...` 这种只把状态码印在**消息**里的
+            # provider 错误，拿不到异常属性上的结构化事实，文本是唯一剩下的判据。
+            return "", [], str(exc), classify("provider", exc, text=str(exc))
 
     def _metric_from_payload(
         self,

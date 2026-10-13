@@ -9,6 +9,7 @@ import logging
 import math
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -59,6 +60,11 @@ from app.service.evidence_bridge import (
     match_published_evidence,
     resolve_metric_code,
 )
+from app.service.interpretation_failure import (
+    InterpretationFailure,
+    classify,
+    report_failure,
+)
 from app.service.mall_goods import fetch_goods, label_pairs_for, serialized
 from app.service.metric_effective_value import effective_value
 from app.service.metric_rows import deduplicate
@@ -90,21 +96,6 @@ COMPLETED_FOR_LINK = frozenset({"confirmed", "assessed"})
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-_TRANSIENT_ERROR_MARKERS = (
-    "timeout",
-    "timed out",
-    "temporarily",
-    "unavailable",
-    "connection",
-    "暂时",
-    "不可用",
-    "连接",
-    "429",
-    "502",
-    "503",
-    "504",
-    "json",
-)
 
 
 def _authorized_report(db: Session, report_id: int, *, owner_id: str) -> ReportModel:
@@ -258,10 +249,23 @@ def _processing_warnings(report: ReportModel) -> list[str]:
     return list((report.parsed_content or {}).get("warnings") or [])
 
 
-def _retryable_error(text: str | None) -> bool:
-    value = (text or "").casefold()
-    return any(marker.casefold() in value for marker in _TRANSIENT_ERROR_MARKERS)
+@dataclass(frozen=True)
+class ParseOutcome:
+    """一次报告解析的结果：**成没成，没成的话坏在哪一环**（GLOSSARY.md 的「解读失败」）。
 
+    它是解析路径与队列之间的唯一交接物。此前这里返回的只是一个 ``bool``，而重试与否
+    由 worker 从 ``parsed_content["retryable"]`` 读一个布尔 —— 那个布尔的来源是对
+    ``f"{filename}: {error}"`` 的子串嗅探。现在两者都在这里：``succeeded`` 说的是
+    「这一轮的每个文件都干净地解析完了吗」，``failure`` 说的是「没有的话坏在哪一环」。
+
+    ``succeeded`` 为假**不等于**这份报告就是失败：一部分文件解析成功、另一部分失败时，
+    成功的那些指标已经落库，报告停在 ``processing`` 等队列决定要不要再跑一轮。所以
+    两个字段是**各自独立**的 —— ``succeeded`` 是「这一轮的全部文件」，``failure`` 是
+    「没成的那些坏在哪」。
+    """
+
+    succeeded: bool
+    failure: InterpretationFailure | None = None
 
 @router.post("/report/upload", response_model=MedicalReportResponse, status_code=202)
 async def upload_report(
@@ -358,7 +362,14 @@ def _parse_report(
     report_id: int,
     accepted_files: list[tuple[int, str, str, bytes]],
     factory,
-) -> bool:
+) -> ParseOutcome:
+    """解析这份报告的全部文件，并把**结论**（成没成、没成的话坏在哪一环）交出去。
+
+    这里**不落终态**。队列才是「还有没有救、还要不要再跑一轮」的唯一判定者（它知道
+    还剩几次尝试），而报告状态是患者可见的 —— 一次还会被重试的失败不该先给患者看一眼
+    「解读失败」。所以本函数只写事实（成因、细节、抽取轨迹），由 ``report_worker``
+    决定这一轮之后报告落到哪里。
+    """
     try:
         vision = get_vision_encoder_service()
 
@@ -367,6 +378,9 @@ def _parse_report(
             try:
                 parsed = vision.parse(content, filename)
             except Exception as exc:
+                # 抽取器自己都没接住的异常：它没能告诉我们坏在哪一环。那是**我们这边**
+                # 的逻辑缺陷，不是这份材料的问题，更不是患者的输入的问题 —— 判成
+                # service 而不是 content，否则一个我方崩溃会变成一句「请重新上传」。
                 parsed = ParsedReport(
                     report_type="unknown",
                     raw_text="",
@@ -374,7 +388,13 @@ def _parse_report(
                     page_count=0,
                     success=False,
                     error=str(exc),
+                    failure=classify("service", exc),
                 )
+            if not parsed.success and parsed.failure is None:
+                # 抽取器说它失败了，却没点名成因。这不是一个可以让判定自己长回来的洞：
+                # 出口处补齐它，用**错误文本**（不是文件名 —— 文件名今天在被嗅探的
+                # 文本里，那正是要消灭的东西）。
+                parsed = replace(parsed, failure=classify("provider", text=parsed.error or ""))
             return (
                 file_index,
                 filename,
@@ -414,17 +434,19 @@ def _parse_report(
                 item.metric_value,
             ),
         )
-        if not parsed_metrics:
-            errors = "; ".join(f"{filename}: {error}" for _, filename, _, error in parsed_reports if error)
-            raise ValueError(errors or "未提取到可确认的指标")
+        # 报告级成因：所有失败文件里**最上游**的那一环。一个指标都没抽到、而每个文件
+        # 又都说自己没错（抽取器答上了、只是页面里没有可确认的指标）时，那是内容事实。
+        failure = report_failure(
+            parsed.failure for _, _, parsed, _ in parsed_reports if parsed.failure
+        ) or (None if parsed_metrics else "content_unrecognized")
 
         with factory() as db:
             report = db.get(ReportModel, report_id)
             if report is None:
-                return False
+                return ParseOutcome(succeeded=False, failure=failure)
             db.query(MetricModel).filter(MetricModel.report_id == report_id).delete(synchronize_session=False)
             report.parsed_content = {
-                "report_type": successful_reports[0][2].report_type,
+                "report_type": successful_reports[0][2].report_type if successful_reports else "unknown",
                 "raw_text": "\n".join(parsed.raw_text for _, _, parsed, _ in parsed_reports if parsed.raw_text),
                 "page_count": sum(parsed.page_count for _, _, parsed, _ in parsed_reports),
                 "metric_count": len(parsed_metrics),
@@ -438,10 +460,11 @@ def _parse_report(
                     for file_index, filename, _, error in parsed_reports
                 ],
             }
+            if failure is not None:
+                report.parsed_content["failure"] = failure
             warnings = [f"{filename}: {error}" for _, filename, _, error in parsed_reports if error]
             if warnings:
                 report.parsed_content["warnings"] = warnings
-                report.parsed_content["retryable"] = any(_retryable_error(warning) for warning in warnings)
             first_trace = next(
                 (parsed for _, _, parsed, _ in parsed_reports if parsed.run_id),
                 parsed_reports[0][2],
@@ -459,67 +482,74 @@ def _parse_report(
             ]
             report.provider_run_id = provider_runs[0] if provider_runs else None
             report.provider_run_ids = json.dumps(provider_runs, ensure_ascii=False)
-            transition(
-                report,
-                "processing" if warnings else "pending_confirmation",
-                db=db,
-                action="extraction_partial" if warnings else "extraction_completed",
-                actor="ai:report-extractor",
-                detail={
-                    "metric_count": len(parsed_metrics),
-                    "provider": report.extraction_provider,
-                    "model": report.extraction_model,
-                    "prompt_version": report.extraction_prompt_version,
-                    "prompt_hash": report.extraction_prompt_hash,
-                    "run_id": report.extraction_run_id,
-                    "provider_run_ids": provider_runs,
-                    "warnings": warnings,
-                },
-            )
-            for item in parsed_metrics:
-                db.add(
-                    MetricModel(
-                        report_id=report.id,
-                        source_file_index=item.source_file_index,
-                        metric_name=item.metric_name,
-                        metric_value=item.metric_value,
-                        unit=item.unit,
-                        reference_range=item.reference_range,
-                        trend=item.trend,
-                        abnormal_flag=item.abnormal_flag,
-                        bbox=item.bbox,
-                        bbox_normalized=item.bbox_normalized,
-                        page_number=item.page_number,
-                        evidence_text=item.evidence_text,
-                        source_id=item.source_id,
-                        metric_code=item.metric_code,
-                        confirmation_status="pending",
-                    )
+            if parsed_metrics:
+                # 抽到了东西就不是失败 —— 哪怕还有文件没解析完。剩下那部分由队列决定
+                # 要不要再跑一轮，报告本身停在 processing 等它。
+                transition(
+                    report,
+                    "processing" if warnings else "pending_confirmation",
+                    db=db,
+                    action="extraction_partial" if warnings else "extraction_completed",
+                    actor="ai:report-extractor",
+                    detail={
+                        "metric_count": len(parsed_metrics),
+                        "provider": report.extraction_provider,
+                        "model": report.extraction_model,
+                        "prompt_version": report.extraction_prompt_version,
+                        "prompt_hash": report.extraction_prompt_hash,
+                        "run_id": report.extraction_run_id,
+                        "provider_run_ids": provider_runs,
+                        "warnings": warnings,
+                        "failure": failure,
+                    },
                 )
+                for item in parsed_metrics:
+                    db.add(
+                        MetricModel(
+                            report_id=report.id,
+                            source_file_index=item.source_file_index,
+                            metric_name=item.metric_name,
+                            metric_value=item.metric_value,
+                            unit=item.unit,
+                            reference_range=item.reference_range,
+                            trend=item.trend,
+                            abnormal_flag=item.abnormal_flag,
+                            bbox=item.bbox,
+                            bbox_normalized=item.bbox_normalized,
+                            page_number=item.page_number,
+                            evidence_text=item.evidence_text,
+                            source_id=item.source_id,
+                            metric_code=item.metric_code,
+                            confirmation_status="pending",
+                        )
+                    )
             db.commit()
-        return not warnings
+        return ParseOutcome(succeeded=not warnings, failure=failure)
     except Exception as exc:
         logger.exception("report parsing failed", extra={"report_id": report_id})
-        with factory() as db:
-            report = db.get(ReportModel, report_id)
-            if report is None:
-                return False
-            transition(
-                report,
-                "failed",
-                db=db,
-                action="extraction_failed",
-                actor="ai:report-extractor",
-                detail={"error_type": type(exc).__name__},
-            )
-            report.parsed_content = {
-                **(report.parsed_content or {}),
-                "error": "报告智能解读失败，请重新上传或稍后重试。",
-                "error_class": type(exc).__name__,
-                "retryable": _retryable_error(str(exc)),
-            }
-            db.commit()
-        return False
+        # 走到这里说明失败发生在**我们这边**（数据库、目录、度量去重……）：抽取器
+        # 的异常在 parse_file 里就被接住了。一个瞬时的基础设施故障不该对患者表现为
+        # 「这份报告读不出来，请重新上传」—— 那正是 ADR-0006 那次事故的形状。
+        failure = classify("service", exc)
+        # 记事实这一步**自己也可能失败**：数据库都没了，`db.get` 会原样再抛一次。
+        # 让那个异常逃出去会从 `run_next_job` 里炸掉整个 worker 循环，后面每一份
+        # 报告都不再被处理 —— 一次数据库抖动变成一条永久停摆的队列。所以这里只记
+        # 日志：结论已经拿到了，落不落得下不影响队列该做什么。
+        try:
+            with factory() as db:
+                report = db.get(ReportModel, report_id)
+                if report is None:
+                    return ParseOutcome(succeeded=False, failure=failure)
+                report.parsed_content = {
+                    **(report.parsed_content or {}),
+                    "error": "报告智能解读失败，请重新上传或稍后重试。",
+                    "failure": failure,
+                }
+                db.commit()
+        except Exception:  # noqa: BLE001 —— 见上：这一层的失败不许逃出解析路径
+            logger.exception("could not record the parsing failure", extra={"report_id": report_id})
+        return ParseOutcome(succeeded=False, failure=failure)
+
 
 
 def _confirmed_condition_codes(report: ReportModel) -> list[str]:
