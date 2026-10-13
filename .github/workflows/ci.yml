@@ -51,7 +51,7 @@ jobs:
     # pending forever and blocks every pull request — so this file must land
     # first, and the Ruleset edit follows the first green run on main.
     name: Tests
-    runs-on: [self-hosted, health-flow]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - name: Check out repository
