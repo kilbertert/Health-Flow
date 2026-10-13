@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { interpretationFailureLine } from '../interpretationFailure.js';
+import { NO_CAUSE_TEXT, interpretationFailureText } from '../interpretationFailure.js';
 import { reportStatusColor, reportStatusLabel } from '../reportStatus.js';
 import {
   ArrowLeftOutlined,
@@ -226,15 +226,21 @@ function ReportStatus({ result, onContinueConfirm }) {
       : isProcessing
         ? '报告正在后台解析'
         : '报告当前状态不可查看完整报告单';
+  // 失败的话由**成因**给出（唯一之家 `frontend/src/interpretationFailure.js`）。
+  // 「这份报告没有成因可给」（历史行）时退回一句明说我们不知道的话 —— 那句话也住在
+  // 同一个模块里，这样「失败时患者看到什么」只有一处可改。
+  const failure = interpretationFailureText(result.interpretation_failure);
   const description = isPending
     ? '完成指标确认后即可生成完整报告单与健康风险提示。'
-    : interpretationFailureLine(result.interpretation_failure) || '请稍后重试。';
+    : isFailed
+      ? (failure ? `${failure.title}${failure.description}` : NO_CAUSE_TEXT)
+      : '请稍后重试。';
   return (
     <Card className="report-status-card">
       <Alert
-        type={isFailed ? 'error' : 'info'}
+        type={isFailed ? failure?.color || 'error' : 'info'}
         showIcon
-        title={title}
+        title={failure?.title || title}
         description={description}
       />
       <Space style={{ marginTop: 20 }} wrap>

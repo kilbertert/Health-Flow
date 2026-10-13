@@ -263,6 +263,8 @@ test.describe('状态呈现的一致性', () => {
     await expect(card).toContainText('读取');
     // 而「重新上传」**不出现** —— 这是我们这边的问题，重传没用。
     await expect(card).not.toContainText('重新上传');
+    // 也**不是红色**：红色说的是「你上传的东西有问题」，而这一份材料没问题。
+    await expect(card.locator('.ant-alert')).toHaveClass(/ant-alert-warning/);
   });
 });
 

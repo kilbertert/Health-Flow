@@ -163,3 +163,43 @@ def test_the_vocabulary_is_complete_and_the_unknown_case_says_so():
 
     for item in results[len(CAUSES):]:
         assert item["line"] is None, "没有成因时不许编一句话出来"
+
+
+@pytest.mark.skipif(NODE is None, reason="需要 node 才能驱动前端模块")
+@pytest.mark.skipif(
+    not (REPO_ROOT / "frontend" / "node_modules" / "esbuild").is_dir(),
+    reason="需要 frontend/node_modules（esbuild）才能转译；先在前端目录 npm install",
+)
+def test_our_own_failures_are_not_red():
+    """「我们这边出的问题」不许用红色。
+
+    红色说的是「你上传的东西有问题」，而这一整票要消灭的正是那个印象 —— 一份材料没
+    问题、是我们这边读不出来时，患者不该看到一个指责他输入的信号。三个「我们这边」的
+    成因因此是 `warning`；只有指向患者材料的两个才是 `error`。
+    """
+    blocks = [
+        {"cause": cause, "failed_files": []} for cause in CAUSES
+    ]
+    results = _drive(blocks)
+    colors = {cause: item["text"]["color"] for cause, item in zip(CAUSES, results, strict=True)}
+
+    assert colors["material_unreadable"] == "error"
+    assert colors["content_unrecognized"] == "error"
+    for cause in ("service_unavailable", "provider_rejected", "provider_unavailable"):
+        assert colors[cause] == "warning", f"{cause} 是我们这边的问题，不该是红色"
+
+
+@pytest.mark.skipif(NODE is None, reason="需要 node 才能驱动前端模块")
+@pytest.mark.skipif(
+    not (REPO_ROOT / "frontend" / "node_modules" / "esbuild").is_dir(),
+    reason="需要 frontend/node_modules（esbuild）才能转译；先在前端目录 npm install",
+)
+def test_the_no_cause_line_lives_in_the_module_not_in_the_callers():
+    """没有成因时的那句话住在模块里，调用点各写一句兜底正是本票要消灭的形状。
+
+    静态断言：页面不得自己再写一句「报告智能解读失败…」这类兜底。
+    """
+    for page in ("pages/Upload.jsx", "pages/ReportDetail.jsx"):
+        source = (REPO_ROOT / "frontend" / "src" / page).read_text(encoding="utf-8")
+        assert "报告智能解读失败" not in source, f"{page} 自己写了一句兜底文案"
+        assert "请稍后重试。" not in source or page == "pages/ReportDetail.jsx", page

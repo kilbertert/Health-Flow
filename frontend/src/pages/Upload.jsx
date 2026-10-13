@@ -8,7 +8,7 @@ import {
   valueReasonOrNull,
 } from '../admissionText';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { interpretationFailureLine } from '../interpretationFailure.js';
+import { NO_CAUSE_TEXT, interpretationFailureLine } from '../interpretationFailure.js';
 import { reportStatusColor, reportStatusLabel } from '../reportStatus.js';
 import {
   Alert,
@@ -1168,14 +1168,14 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
       for (let attempt = 0; data.status === 'processing' && attempt < MAX_ATTEMPTS; attempt += 1) {
         const job = data.extraction_job;
         if (job?.status === 'failed') {
-          throw new Error(interpretationFailureLine(data.interpretation_failure) || '报告智能解读失败，请重试');
+          throw new Error(interpretationFailureLine(data.interpretation_failure) || NO_CAUSE_TEXT);
         }
         await new Promise((resolve) => window.setTimeout(resolve, POLL_INTERVAL_MS));
         data = await getReport(data.id, accessToken);
         setResult(data);
       }
       if (data.status === 'failed') {
-        throw new Error(interpretationFailureLine(data.interpretation_failure) || '报告智能解读失败，请重试');
+        throw new Error(interpretationFailureLine(data.interpretation_failure) || NO_CAUSE_TEXT);
       }
       if (data.status === 'processing') {
         const attempts = data.extraction_job?.attempt_count;
