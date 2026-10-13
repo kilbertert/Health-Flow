@@ -32,6 +32,26 @@ The job was not started because your account is locked due to a billing issue.
 self-hosted 上，等于给陌生人一条在宿主机上以 `claude` 身份执行任意代码的路径。
 已在仓库设置改成 **`all_external_contributors`**。
 
+### 这道门挡不住什么（必须连着这条决定一起读）
+
+fork 门把「哪些 workflow 可以执行」变成一次**人工批准**，但**批准之后代码就在这台机器上
+跑了**，而同一条 runner 上也跑 `cd.yml` 的 `Deploy to 36`（`[self-hosted, health-flow]`）。
+所以批准一个外部 PR 等于允许它在**同一个 `claude` 账号**下执行 —— 那个账号手里有
+`~/.ssh/` 下的主机密钥、`dev-host`、以及能读到 36 的部署环境。
+
+这不是「门做错了」，而是这道门**能回答的问题只有「谁可以跑」，不能回答「跑的东西能碰到
+什么」**。隔离是另一件事，本决定没有做它。本仓的实际敞口因此是：
+
+- **`Workflow policy`** 步骤执行的是候选分支自己的 `.sandcastle/*.mjs` —— 批准之后，
+  这些脚本就在宿主机上跑。
+- **`Tests`** 跑候选分支自己的 `pytest`（收集期即执行 `conftest.py` 与模块级代码）。
+
+两处都不是「只读检查」，都是**候选代码的直接执行**。今天可接受的原因是**没有任何外部
+贡献者**，而且维护者是唯一的 PR 作者；一旦有一个真外部 PR，这条就必须重新决定。
+
+被记在这里而不是被消掉，因为消掉它要动的是 runner 隔离（一次性容器、或 `Tests` 留在
+hosted 但金丝雀式回退），那是独立一次改动、独立一条记录。
+
 ## 理由
 
 1. **AI-Ops 已经这么跑了，而且实测是绿的。** 它的 `Workflow policy` 与 `verify` 一直
