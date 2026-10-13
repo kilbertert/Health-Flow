@@ -8,13 +8,23 @@ name: CI
 # zero signal at the PR stage. `consensus-contract.json` lists
 # `deterministic-ci` as a non-exceptionable invariant; this is that check.
 #
-# Why GitHub-hosted and not the self-hosted runner the agent-*.yml workflows
-# use: the repository is PUBLIC, so hosted minutes cost nothing, and a
-# persistent runner must never execute untrusted pull-request code. The
-# alternative — a fork gate — is worse, not safer: GitHub counts a *skipped*
-# required job as a success, so one misjudged gate silently satisfies the
-# branch Ruleset for every fork PR. That reasoning is the same one AI-Ops
-# records in its own ci.yml.
+# Why this runs on the repository's own runner, and what that costs.
+#
+# The original reasoning here was "GitHub-hosted, because the repository is
+# PUBLIC so minutes cost nothing, and a persistent runner must never execute
+# untrusted pull-request code". That was right when it was written, and it is no
+# longer the shape of the decision — see ADR-0010 for the whole account. In
+# short: GitHub locked the account for billing, every `ubuntu-latest` job failed
+# to start, the Ruleset requires `Tests` and `Workflow policy` to reach a
+# conclusion, and so **every PR in this repository became unmergeable**.
+#
+# The runner is now `[self-hosted, health-flow]`. Read ADR-0010 before changing
+# it: the trade is real and it is recorded there rather than argued here. The
+# short version of the cost, because a reader of this file needs it: a
+# persistent runner is a machine with real credentials on it, so anything that
+# executes here must be treated as trusted code. The mitigation is the fork gate
+# in repository settings (`all_external_contributors`), not anything in this
+# file — a workflow cannot enforce its own preconditions.
 #
 # Job-level `concurrency` (not workflow-level), and the reason is a measured
 # failure mode rather than a preference — see .github/workflows/cd.yml for the
@@ -41,7 +51,7 @@ jobs:
     # pending forever and blocks every pull request — so this file must land
     # first, and the Ruleset edit follows the first green run on main.
     name: Tests
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, health-flow]
     timeout-minutes: 20
     steps:
       - name: Check out repository
