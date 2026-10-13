@@ -98,7 +98,7 @@ def test_parse_unknown_extension_uses_the_content_mime_type(mock_deps):
     from app.service.vision_encoder import VisionEncoderService
 
     service = VisionEncoderService()
-    service._parse_image_with_vlm = MagicMock(return_value=("", [], None))
+    service._parse_image_with_vlm = MagicMock(return_value=("", [], None, "content_unrecognized"))
     jpeg_data = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01"
 
     service.parse(jpeg_data, "报告.data")
@@ -272,6 +272,12 @@ def test_text_pdf_keeps_successful_pages_when_one_provider_call_fails(monkeypatc
     assert result.success is True
     assert [metric.page_number for metric in result.metrics] == [1]
     assert result.error == "page 2: page provider timeout"
+    # **部分失败也要有成因。** 一页超时、另一页正常是最常见的失败形状，而它此前拿不到
+    # 成因：写成 `None if metrics else ...` 时，只要**有**一页抽到东西，整份材料的成因
+    # 就是 `None` —— 队列据此判定「不可重试」，超时那一页永远不会被再试一次。
+    assert result.failure == "provider_unavailable", (
+        "有页面抽到了东西，不代表坏掉那一页就没有成因"
+    )
 
 
 def test_render_pdf_to_images_fallback():
@@ -342,3 +348,5 @@ def test_text_pdf_no_longer_deduplicates(monkeypatch):
     parsed = service.parse_text_pdf(b"pdf")
     assert len(parsed.metrics) == 2, "解析器不再去重 —— 那是报告级的职责"
     assert parsed.success is True
+
+

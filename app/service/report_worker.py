@@ -11,7 +11,7 @@ from pathlib import Path
 from sqlalchemy import update
 from sqlalchemy.orm import sessionmaker
 
-from app.api.report import _audit, _parse_report
+from app.api.report import ParseOutcome, _audit, _parse_report
 from app.config import get_settings
 from app.data.models import (
     MedicalReport,
@@ -19,6 +19,7 @@ from app.data.models import (
     ReportFile,
 )
 from app.data.mysql_client import get_mysql_client
+from app.service.interpretation_failure import InterpretationFailure, classify, is_retryable
 from app.service.report_status import transition
 
 
@@ -121,6 +122,10 @@ def run_next_job(factory) -> int | None:
     if job_id is None:
         return None
     report_id = 0
+    read_error: InterpretationFailure | None = None
+    # 报告是否还在 `processing`。取不到报告时按「不在」处理 —— 一个指向不存在报告的
+    # 任务没有可解析的材料。
+    still_processing = False
     try:
         with factory() as db:
             job = db.get(ReportExtractionJob, job_id)
@@ -131,44 +136,93 @@ def run_next_job(factory) -> int | None:
                 else []
             )
             report_id = int(job.report_id) if job else 0
-            accepted_files = [
-                (
-                    int(item.file_index),
-                    str(item.original_filename),
-                    str(item.media_type),
-                    Path(item.stored_path).read_bytes(),
-                )
-                for item in files
-            ]
-        succeeded = bool(report and accepted_files and _parse_report(report_id, accepted_files, factory))
-    except OSError:
-        succeeded = False
-        with factory() as db:
-            job = db.get(ReportExtractionJob, job_id)
-            report = db.get(MedicalReport, job.report_id) if job else None
-            if report is not None:
-                transition(
-                    report,
-                    "failed",
-                    db=db,
-                    action="extraction_failed",
-                    actor="system:report-worker",
-                    detail={"error_type": "ReportFileReadError"},
-                )
-                report.parsed_content = {
-                    **(report.parsed_content or {}),
-                    "error": "报告原文读取失败，请重新上传或稍后重试。",
-                }
-            db.commit()
+            # **报告是否还在 processing，必须在解析**之前**看。** `_parse_report` 的
+            # 第一件事就是把这份报告的全部指标行删掉重插为 `pending` —— 等它在后面
+            # 的重试守卫里才被拦下，患者核对过的行已经和它的表态一起没了。一个排队中
+            # 的任务指向一份已确认/评估的报告，是 `recover_stale_jobs` 之外的路径也能
+            # 造出来的状态，所以这里挡而不是在重试分支里挡。
+            still_processing = report is not None and report.status == "processing"
+            accepted_files = (
+                [
+                    (
+                        int(item.file_index),
+                        str(item.original_filename),
+                        str(item.media_type),
+                        Path(item.stored_path).read_bytes(),
+                    )
+                    for item in files
+                ]
+                if still_processing
+                else []
+            )
+    except OSError as exc:
+        # 读盘失败是**材料**那一环坏了：（我们存的那份）字节读不出来。它不可自动重试 ——
+        # 字节不在就是不在，再跑一遍还是不在 —— 但它对患者是「你给的那份我们没读到」，
+        # 也就是唯一该请患者重传的那种成因。
+        accepted_files = []
+        read_error = classify("material", exc)
+    if read_error is not None:
+        outcome = ParseOutcome(succeeded=False, failure=read_error)
+    elif not still_processing:
+        # 报告已经离开 `processing`（患者已确认或评估过），或者这个任务指向一份不存在的
+        # 报告。两种情形都**什么都没解析**，所以没有失败可报 —— 那两件事在下面各自处置。
+        outcome = ParseOutcome(succeeded=False, failure=None)
+    elif accepted_files:
+        outcome = _parse_report(report_id, accepted_files, factory)
+    else:
+        # 报告还在 processing，文件却一条都取不到：没有任何材料可解析。同「读不出来」一类。
+        read_error = "material_unreadable"
+        outcome = ParseOutcome(succeeded=False, failure=read_error)
     with factory() as db:
         job = db.get(ReportExtractionJob, job_id)
         report = db.get(MedicalReport, job.report_id) if job else None
         if job is None:
             return job_id
-        retryable = bool((report.parsed_content or {}).get("retryable")) if report else False
-        max_attempts = max(1, int(getattr(get_settings(), "REPORT_JOB_MAX_ATTEMPTS", 3)))
         now = _now()
-        if not succeeded and retryable and job.attempt_count < max_attempts:
+        if report is not None and not still_processing and not read_error:
+            # 报告在我们开始解析之前就已经离开 `processing`（患者已确认或评估过）。
+            # 这一轮**什么都没解析**（上面据此没读文件、没调 `_parse_report`），所以
+            # 没有失败可报，更不该往患者已经看到的东西里写一个字。任务直接 ack 掉：
+            # 同一形状在 `recover_stale_jobs` 里也是这么处置的。
+            job.status = "completed"
+            job.error_class = None
+            job.completed_at = now
+            job.updated_at = now
+            _audit(
+                db,
+                report,
+                "status_recovered",
+                {
+                    "job_id": job.id,
+                    "reason": "skipped_job_for_a_report_that_left_processing",
+                    "report_status": report.status,
+                    "job_outcome": "completed",
+                },
+                actor="system:report-worker",
+            )
+            db.commit()
+            return job_id
+        if read_error is not None and report is not None:
+            report.parsed_content = {
+                **(report.parsed_content or {}),
+                "error": "报告原文读取失败，请重新上传或稍后重试。",
+                "failure": read_error,
+            }
+        # 重试判定的**唯一输入**是这次解析交出来的成因。此前它读的是
+        # `parsed_content["retryable"]` —— 一个由「文件名 + 错误文本」的子串嗅探得出的
+        # 布尔，而文件名在被嗅探的文本里：一份「没抽出指标」的体检单改名成
+        # `timeout.jpg`，重试决策就翻转；真正的额度耗尽、限流反而永不重试。
+        failure = outcome.failure
+        max_attempts = max(1, int(getattr(get_settings(), "REPORT_JOB_MAX_ATTEMPTS", 3)))
+        # **重试只在确认之前有意义。** 一次重试会把已解析的指标行全部删掉重插为 `pending`
+        # —— 患者核对过的行会连同他的表态一起消失。报告一旦离开 `processing`（患者已经
+        # 确认或评估过），就再也不给重试：那一轮解析的失败只作为事实记下，报告留在患者的
+        # 那个状态上。
+        report_is_ours_to_judge = report is not None and report.status == "processing"
+        retryable_now = (
+            report_is_ours_to_judge and is_retryable(failure) and job.attempt_count < max_attempts
+        )
+        if not outcome.succeeded and retryable_now:
             job.status = "queued"
             job.error_class = "ReportExtractionRetryable"
             job.started_at = None
@@ -184,26 +238,35 @@ def run_next_job(factory) -> int | None:
                     detail={
                         "attempt_count": job.attempt_count,
                         "max_attempts": max_attempts,
+                        "failure": failure,
                     },
                 )
         else:
-            job.status = "completed" if succeeded else "failed"
-            job.error_class = None if succeeded else "ReportExtractionFailed"
+            job.status = "completed" if outcome.succeeded else "failed"
+            job.error_class = None if outcome.succeeded else "ReportExtractionFailed"
             job.completed_at = now
             job.updated_at = now
-            if not succeeded and report is not None:
-                transition(
-                    report,
-                    "failed",
-                    db=db,
-                    action="extraction_failed",
-                    actor="system:report-worker",
-                    detail={"attempt_count": job.attempt_count},
-                )
+            if not outcome.succeeded and report is not None:
+                # **同一份报告不给两次终态。** `pending_confirmation → failed` 在迁移表里
+                # 是合法的：一次已经解析成功、已在等患者核对的报告，在后拿到一个失败结论
+                # 时确实「解读失败」了。但患者已经**确认或评估过**的报告不是 —— 那说明
+                # 患者在解析期间完成了核对（报告开始时还在 `processing`，所以早返回那道
+                # 守卫没拦到）。状态已经由患者推动了，那就只记事实，不再改第二次。
+                already_settled = report.status in {"confirmed", "assessed", "failed"}
+                if not already_settled:
+                    transition(
+                        report,
+                        "failed",
+                        db=db,
+                        action="extraction_failed",
+                        actor="system:report-worker",
+                        detail={"attempt_count": job.attempt_count, "failure": failure},
+                    )
                 error = (report.parsed_content or {}).get("error")
                 report.parsed_content = {
                     **(report.parsed_content or {}),
                     "error": error or "报告智能解读失败，请重新上传或稍后重试。",
+                    "failure": failure,
                 }
         db.commit()
     return job_id
