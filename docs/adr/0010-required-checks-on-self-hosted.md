@@ -90,7 +90,10 @@ self-hosted 上，等于给陌生人一条在宿主机上以 `claude` 身份执�
 | `AFK_ADR_BASE=<base> adr.check.mjs --base <base>` | 通过 |
 | `profile-network.check.ts` / `mcp-config.check.ts` / `sandbox-prepare.check.ts` | 通过 |
 
-**第一次跑到这里时它是红的**，而原因正是这个仓库自己的决策记录门禁：
+**第一次跑到这里时它是红的** —— 而红的正是这个仓库自己的两条静态守卫，两条都是这次
+迁移必须一并改掉的：
+
+1. **决策记录门禁**，它说这次改动欠一条记录：
 
 ```
 adr: 80c5615c "ci: 必需检查改到 self-hosted runner" — a record looks owed:
@@ -100,3 +103,14 @@ this commit touches 2 path(s) that decide how the system is put together
 
 这条记录就是那次失败的产物。1.7.18 的门禁在它被部署的当天、在第一个提交上，
 拦住了它的作者。
+
+2. **`tests/test_ci_workflow.py` 里那条守卫**：它断言 `runs-on: ubuntu-latest`，还带着
+   一句「换成持久 runner 就必须补一道 fork 门」。那次迁移没有改这条断言，于是 workflow
+   已经换到 self-hosted、守卫还在盯着旧值 —— **改的是实现，守卫盯的还是实现**。
+
+   这一条不是风格问题，它说明那守卫**写错了对象**：它想守的是「持久 runner 不得执行
+   不可信 PR 代码」，而那个前提是一道**仓库设置**里的 fork 审批
+   （`all_external_contributors`），静态读 workflow 文本的测试根本读不到它。守卫能守的
+   是 runner label 与「不许回到会被计费锁整批打死的 hosted」；fork 门的存在由本记录
+   与仓库设置承担。改后的断言把这件事写在它自己的 docstring 里，并**点名**
+   `all_external_contributors`，让下一个改 runner 的人先去找那道门。

@@ -82,14 +82,27 @@ def test_required_check_context_and_triggers_are_stable() -> None:
     assert re.search(r"^  contents: read$", body, re.MULTILINE), "权限应只要 contents: read"
 
 
-def test_runs_on_a_hosted_runner() -> None:
-    """本仓 PUBLIC，检查跑在 GitHub-hosted。
+def test_runs_on_the_repository_runner_with_the_fork_gate_recorded() -> None:
+    """检查跑在本仓专属的 self-hosted runner 上，**且这是有条件的**。
 
-    换成持久 runner 就必须补一道 fork 门（持久 runner 不得执行不可信 PR 代码），
-    而 fork 门的失败方式更坏：GitHub 把 **skipped** 的必需 job 计为成功，门一旦
-    误判，Ruleset 对每个 fork PR 都静默满足。所以这条不是风格偏好。
+    这一条在 ADR-0010 里改过一次方向，改的理由是实测的：GitHub 账号被计费锁住时
+    `ubuntu-latest` 的 job **起不来**（注解原文 "The job was not started because your
+    account is locked due to a billing issue"），而 Ruleset 要求 `Tests` 与
+    `Workflow policy` 有结论 —— 于是本仓每个 PR 都合不了，`--admin` 也绕不过。
+
+    **持久 runner 不得执行不可信 PR 代码**，所以换 runner 的前提是一道 fork 门。
+    那道门是**仓库设置**（`actions/permissions/fork-pr-contributor-approval` =
+    `all_external_contributors`），不在这个文件里，因此本静态测试**读不到它** ——
+    它能断言的是 runner 标签，以及「label 必须是本仓专属的那一个」。
+
+    裸 `self-hosted` 的语义是「任何一台 self-hosted runner」，那会让这个仓库的
+    检查落到别的项目的 runner 上；本仓（与 AI-Ops）的做法都是带上项目 label。
     """
     body = _stripped()
-    assert re.search(r"^\s*name: Tests\n\s+runs-on: ubuntu-latest$", body, re.MULTILINE), (
-        "verify job 应跑在 ubuntu-latest；改持久 runner 必须同时补 fork 门"
+    assert re.search(r"^\s*name: Tests\n\s+runs-on: \[self-hosted, health-flow\]$", body, re.MULTILINE), (
+        "verify job 应跑在 [self-hosted, health-flow]；改 runner 前先确认 fork 门"
+        "（all_external_contributors）仍生效，并更新 docs/adr/0010"
+    )
+    assert "ubuntu-latest" not in body, (
+        "上游 runner 已被证明会因计费锁整批起不来（ADR-0010）；改回去要先确认账号可付费"
     )
