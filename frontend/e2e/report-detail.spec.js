@@ -221,6 +221,44 @@ test.describe('状态呈现的一致性', () => {
     await expect(statusTag).toHaveClass(/ant-tag-error/);
   });
 
+  // 一次**可重试**的失败会把报告留在 `processing`，而那时报告里已经带着一个成因。
+  // 用失败标题渲染它，会让患者以为已经结束了 —— 而队列还在跑。
+  test('仍在重试的报告不算失败，标题不由成因给', async ({ page, seed }) => {
+    const seeded = await seed({ reports: ['assessed'] });
+    const reportId = seeded.reports[0].id;
+    await page.route(`**/api/health/report/${reportId}`, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          id: reportId,
+          patient_id: seeded.subject.owner_id,
+          report_type: '体检报告',
+          created_at: new Date().toISOString(),
+          status: 'processing',
+          subject_consistency: 'same',
+          metrics: [],
+          files: [],
+          evidence_result: null,
+          interpretation_failure: {
+            cause: 'provider_unavailable',
+            retryable: true,
+            action: 'no_action',
+            failed_files: [],
+          },
+        }),
+      }),
+    );
+
+    await loginWithSeed(page, seeded);
+    await page.goto(`/#/report/${reportId}`);
+    await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible();
+
+    const card = page.locator('.report-status-card');
+    await expect(card).toContainText('正在后台解析');
+    await expect(card).not.toContainText('解读服务当时不可用');
+  });
+
   // 解读失败：详情页说的是**成因**，而不是一句通用话术（PRD #226）。
   //
   // 收敛前这里只能显示服务端塞在 `processing_error` 里的那句「报告智能解读失败，请重新
@@ -263,6 +301,12 @@ test.describe('状态呈现的一致性', () => {
     await expect(card).toContainText('读取');
     // 而「重新上传」**不出现** —— 这是我们这边的问题，重传没用。
     await expect(card).not.toContainText('重新上传');
+    // 也**不是红色**：红色说的是「你上传的东西有问题」，而这一份材料没问题。
+    await expect(card.locator('.ant-alert')).toHaveClass(/ant-alert-warning/);
+    // 成因只说一遍 —— 此前标题与说明各说一遍，患者看到同一句解释两次。
+    const alert = card.locator('.ant-alert');
+    const alertText = await alert.innerText();
+    expect(alertText.split('读取').length - 1).toBe(1);
   });
 });
 

@@ -40,16 +40,31 @@ const ACTIONS = {
 
 /** 不知道成因时（历史行、或服务端没给块）说的话。它**不是**一个成因的兜底 ——
  *  它明说我们不知道，而不是猜一个出来。 */
-const UNKNOWN = '报告解读未能完成，请稍后再试。';
+const NO_CAUSE = '报告解读未能完成，请稍后再试。';
 
-/** 失败块 → `{ title, description }`。没有块时返回 null（调用点用自己的空态）。 */
+/** 成因 → 标签颜色。**与状态色分开**：状态色说的是「这份报告在什么阶段」（`failed`
+ *  一律 error 红），成因色说的是「这件事有多值得他动手」。
+ *
+ *  「我们这边出的问题」用 `warning` 而不是 `error`：它是**我们**的故障，红色会让患者
+ *  以为是自己那份材料的问题 —— 而这一整票要消灭的正是那个印象。 */
+const COLORS = {
+  material_unreadable: 'error',
+  service_unavailable: 'warning',
+  provider_rejected: 'warning',
+  provider_unavailable: 'warning',
+  content_unrecognized: 'error',
+};
+
+/** 失败块 → `{ cause, title, description, color, failedFiles }`。没有块时返回 null
+ *  （调用点用自己的空态）。 */
 export function interpretationFailureText(block) {
   const cause = block?.cause;
   if (!cause) return null;
   return {
     cause,
-    title: SENTENCES[cause] || UNKNOWN,
+    title: SENTENCES[cause] || NO_CAUSE,
     description: ACTIONS[cause] || '请稍后再试。',
+    color: COLORS[cause] || 'error',
     // 可重试且重试次数还没用完时，服务端会留在 `processing`；这里拿到的块是**终态**
     // 的，所以不承诺会自动重试。
     failedFiles: (block.failed_files || []).map((item) => item.filename).filter(Boolean),
@@ -63,5 +78,28 @@ export function interpretationFailureLine(block) {
   return `${text.title}${text.description}`;
 }
 
+/** 失败块 → 患者侧颜色。没有块时返回 null（调用点用状态色）。 */
+export function interpretationFailureColor(block) {
+  return interpretationFailureText(block)?.color || null;
+}
+
+/** 失败块 → 一个可抛出的错误，**自带颜色**。
+ *
+ *  只有一句话的 `Error` 传不了颜色，调用点就只好用红色渲染「我们这边出的问题」——
+ *  而本模块存在的理由之一就是那句红色是错的。所以把 `{message, color}` 挂在
+ *  `err.failure` 上，调用点直接交给告警组件。
+ */
+export function failureError(report) {
+  const text = interpretationFailureText(report?.interpretation_failure);
+  const err = new Error(text ? `${text.title}${text.description}` : NO_CAUSE);
+  err.failure = { message: err.message, color: text?.color || 'error' };
+  return err;
+}
+
+/** 没有成因可给时的那句话（历史行）。调用点**不要**各自再写一句兜底 ——
+ *  「失败时患者看到什么」只能有一处可改。 */
+export const NO_CAUSE_TEXT = NO_CAUSE;
+
 export const FAILURE_SENTENCES = Object.freeze(SENTENCES);
 export const FAILURE_ACTIONS = Object.freeze(ACTIONS);
+export const FAILURE_COLORS = Object.freeze(COLORS);
