@@ -32,7 +32,6 @@ function uploadResponse(seeded, files) {
       page_count: 1,
       source_url: `/api/health/report/9001/files/${index + 1}/pages/1`,
     })),
-    processing_warnings: [],
   };
 }
 

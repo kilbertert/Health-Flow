@@ -8,6 +8,7 @@ import {
   valueReasonOrNull,
 } from '../admissionText';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { interpretationFailureLine } from '../interpretationFailure.js';
 import { reportStatusColor, reportStatusLabel } from '../reportStatus.js';
 import {
   Alert,
@@ -568,6 +569,18 @@ export function chipReason(metric) {
   const reason = metric?.admission_reason;
   if (reason && notableAdmission(reason)) return reason;
   return valueReasonOrNull(metric);
+}
+
+/** 这份报告还有文件没解析完吗 —— 只决定界面说什么，不决定闸门（闸门由报告状态决定）。 */
+export function hasFailedFiles(result) {
+  return failedFileNames(result).length > 0;
+}
+
+/** 没能解析完的文件名。 */
+export function failedFileNames(result) {
+  return (result?.interpretation_failure?.failed_files || [])
+    .map((item) => item.filename)
+    .filter(Boolean);
 }
 
 /** 报告级台账 → 患者能读懂的分行说明。
@@ -1155,13 +1168,15 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
       for (let attempt = 0; data.status === 'processing' && attempt < MAX_ATTEMPTS; attempt += 1) {
         const job = data.extraction_job;
         if (job?.status === 'failed') {
-          throw new Error(data.processing_error || '报告智能解读失败，请重试');
+          throw new Error(interpretationFailureLine(data.interpretation_failure) || '报告智能解读失败，请重试');
         }
         await new Promise((resolve) => window.setTimeout(resolve, POLL_INTERVAL_MS));
         data = await getReport(data.id, accessToken);
         setResult(data);
       }
-      if (data.status === 'failed') throw new Error(data.processing_error || '报告智能解读失败，请重试');
+      if (data.status === 'failed') {
+        throw new Error(interpretationFailureLine(data.interpretation_failure) || '报告智能解读失败，请重试');
+      }
       if (data.status === 'processing') {
         const attempts = data.extraction_job?.attempt_count;
         message.warning(
@@ -1184,7 +1199,7 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
 
   const handleConfirm = async () => {
     if (!result) return;
-    if (Array.isArray(result.processing_warnings) && result.processing_warnings.length > 0) {
+    if (hasFailedFiles(result)) {
       message.warning('仍有文件未完成解析，不能生成健康提示');
       return;
     }
@@ -1606,12 +1621,12 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
           {result.status === 'processing' && (
             <Alert type="info" showIcon title="报告正在后台解析，完成后将自动显示指标。" style={{ marginBottom: 16 }} />
           )}
-          {Array.isArray(result.processing_warnings) && result.processing_warnings.length > 0 && (
+          {hasFailedFiles(result) && (
             <Alert
               type="error"
               showIcon
               title="报告解析不完整，已阻止生成健康提示"
-              description={result.processing_warnings.join('；')}
+              description={interpretationFailureLine(result.interpretation_failure) || failedFileNames(result).join('；')}
               style={{ marginBottom: 16 }}
             />
           )}
@@ -1654,7 +1669,7 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
                 type="primary"
                 icon={<CheckCircleOutlined />}
                 loading={confirming}
-                disabled={(result.processing_warnings || []).length > 0}
+                disabled={hasFailedFiles(result)}
                 onClick={handleConfirm}
               >
                 确认并生成健康提示
