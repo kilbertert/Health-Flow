@@ -51,7 +51,6 @@ function assessedResponse(seeded, reportUrl) {
       unmatched_count: 0,
       disclaimer: '本解读仅提供健康辅助建议。',
     },
-    processing_warnings: [],
   };
 }
 

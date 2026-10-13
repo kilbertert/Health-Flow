@@ -61,8 +61,12 @@ from app.service.evidence_bridge import (
     resolve_metric_code,
 )
 from app.service.interpretation_failure import (
+    FAILURES_ORDERED,
     InterpretationFailure,
     classify,
+    gate_detail,
+    is_retryable,
+    patient_action,
     report_failure,
 )
 from app.service.mall_goods import fetch_goods, label_pairs_for, serialized
@@ -94,8 +98,21 @@ from app.service.vision_encoder import ParsedReport, get_vision_encoder_service
 #: 只有这些状态的报告才谈得上加购：未完成确认/评估的报告没有可据以取货的风险。
 COMPLETED_FOR_LINK = frozenset({"confirmed", "assessed"})
 
+#: 词表的取值集合，供组装失败块时判「库里的成因是不是一个已知的成因」。历史行里可能
+#: 是缺失，也可能是别的形状 —— 两种都读成「没有成因」，不猜。
+FAILURE_SET = frozenset(FAILURES_ORDERED)
+
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _gate_detail(report: ReportModel) -> str | None:
+    """闸门被拒时说的话：**从成因派生**。
+
+    `gate_detail` 的家是词表模块（成因 → 那句话的唯一一处）。这一层只负责把库里的
+    成因取出来 —— 闸门本身由报告状态决定，这句话不影响判定。
+    """
+    return gate_detail((report.parsed_content or {}).get("failure"))
 
 
 def _authorized_report(db: Session, report_id: int, *, owner_id: str) -> ReportModel:
@@ -238,15 +255,49 @@ def _ordered_metrics(db: Session, report_id: int):
     )
 
 
-def _processing_warnings(report: ReportModel) -> list[str]:
-    """这次解析有哪些文件没能解析完（患者可见的解析细节）。
+def _interpretation_failure_block(report: ReportModel) -> dict | None:
+    """报告级的解读失败块 —— 成因与由它派生的两项，从**落库的事实**组装。
 
-    **它不是闸门的来源**：确认/评估能不能做由状态决定 —— 仍有文件未解析完的
-    报告，其状态是 ``processing`` 而不是 ``pending_confirmation``（见
-    ``app/service/report_status.py`` 的迁移表）。这个函数只用来把原因写进
-    给患者的提示里。
+    库里存的是 `parsed_content["failure"]`（成因）与 `parsed_content["file_results"]`
+    （每个文件的状态）。这一层只做组装：`retryable` 与 `action` 由成因**派生**
+    （`is_retryable` / `patient_action` 是唯一的口径），失败的文件只挑文件名 —— 每个
+    文件条目里的 `error` 自由文本**不出域**，它是排障用的，患者看它没有用。
+
+    **历史行**：本次改动之前的 `parsed_content` 只有 `error`（一句通用话术）与
+    `warnings`，没有 `failure`。那种行读出来是空失败块 —— 我们**不知道**它的成因，
+    所以不猜一个。这是诚实的空：患者侧据此退回状态级的那句话，而不是收到一个编出来的
+    成因。
     """
-    return list((report.parsed_content or {}).get("warnings") or [])
+    parsed = report.parsed_content or {}
+    cause = parsed.get("failure")
+    # `isinstance` 先判：`parsed_content` 是 JSON 列，历史行里这个键可能是任何形状。
+    # 一个列表或字典直接拿去查集合会抛 `TypeError: unhashable type` —— 那会让整份报告
+    # 的读路径 500，患者连打开都做不到，而这只是一个我们读不懂的陈旧字段。
+    if not isinstance(cause, str) or cause not in FAILURE_SET:
+        return None
+    return {
+        "cause": cause,
+        "retryable": is_retryable(cause),
+        "action": patient_action(cause),
+        "failed_files": [
+            {"file_index": item.get("file_index"), "filename": item.get("filename")}
+            for item in parsed.get("file_results") or []
+            if isinstance(item, dict) and item.get("status") == "failed" and item.get("filename")
+        ],
+    }
+
+
+def _partial_files_in_flight(report: ReportModel) -> bool:
+    """还有文件没解析完吗。**只**决定闸门被拒时说什么，不决定闸门本身。
+
+    #139 已把「能不能确认/评估」收到报告状态上，这里不再把闸门搬回 JSON —— 它靠报告
+    状态（`processing`）拒人，这个函数只为那句话提供依据。
+    """
+    parsed = report.parsed_content or {}
+    return any(
+        isinstance(item, dict) and item.get("status") == "failed"
+        for item in parsed.get("file_results") or []
+    )
 
 
 @dataclass(frozen=True)
@@ -541,7 +592,7 @@ def _parse_report(
                 if report is None:
                     return ParseOutcome(succeeded=False, failure=failure)
                 report.parsed_content = {
-                    **(report.parsed_content or {}),
+                    **_carried_forward(report.parsed_content),
                     "error": "报告智能解读失败，请重新上传或稍后重试。",
                     "failure": failure,
                 }
@@ -615,6 +666,42 @@ def _patient_notices_from_stored(stored: object) -> dict | None:
     }
 
 
+def _carried_forward(parsed_content: dict | None) -> dict:
+    """一次**新一轮**失败要保留的旧字段。
+
+    失败路径过去写的是 `{**parsed_content, "failure": ..., "error": ...}` —— 把上一轮
+    解析的**全部**结果一起留下。其中 `file_results` 会说谎：一次部分解析留下
+    `[{"filename": "坏.png", "status": "failed"}]`，下一轮整份材料因为**服务不可用**而失败
+    时，那份旧的 `file_results` 还在，于是在新的失败块里，「坏.png」被列成这一次失败的
+    文件 —— 患者看到的是一次服务故障去归咎于某个文件。
+
+    保留的只有抽取轨迹（它是**历史事实**，且下一轮可能没能产生任何轨迹），逐轮结果一律
+    丢掉：这一轮的失败块只描述这一轮。
+    """
+    parsed = parsed_content or {}
+    return {
+        key: parsed[key]
+        for key in (
+            "report_type",
+            "raw_text",
+            "page_count",
+            "metric_count",
+            "extraction_provider",
+            "extraction_model",
+            "extraction_prompt_version",
+            "extraction_prompt_hash",
+            "extraction_run_id",
+            "provider_run_id",
+            "provider_run_ids",
+            # `error` 保留：它可能是**本轮**早些时候（读盘失败）刚写下的那句话，
+            # 而终态分支要用 `error or <通用话术>` 决定说不说它。丢掉它会把「原文读取
+            # 失败」降级成一句通用话术。
+            "error",
+        )
+        if key in parsed
+    }
+
+
 def _report_response(
     report: ReportModel,
     metrics: list[MetricModel],
@@ -649,13 +736,11 @@ def _report_response(
         status=report.status or "pending_confirmation",
         subject_consistency=report.subject_consistency,
         evidence_result=_patient_notices_from_stored(report.evidence_result),
-        processing_error=(report.parsed_content or {}).get("error"),
-        processing_warnings=list((report.parsed_content or {}).get("warnings") or []),
+        interpretation_failure=_interpretation_failure_block(report),
         extraction_job=(
             {
                 "status": extraction_job.status,
                 "attempt_count": extraction_job.attempt_count,
-                "error_class": extraction_job.error_class,
                 "created_at": extraction_job.created_at,
                 "started_at": extraction_job.started_at,
                 "updated_at": extraction_job.updated_at,
@@ -722,13 +807,11 @@ async def confirm_report(
         owner_id=resolve_owner(request).storage_id,
     )
     # 闸门只看状态:仍有文件未解析完的报告状态是 processing,走不进这一步。
-    # 提醒里带上具体原因(患者可见),但判定不依赖它。
+    # 提醒里带上成因(患者可见),但判定不依赖它。
     if report.status not in {"pending_confirmation", "confirmed"}:
         raise HTTPException(
             status_code=409,
-            detail="报告仍有文件未完成解析，请重新上传或先修复失败文件"
-            if _processing_warnings(report)
-            else "报告当前状态不允许确认",
+            detail=_gate_detail(report) or "报告当前状态不允许确认",
         )
     try:
         # 闸门语义由 report_subject 单点拥有：非 same 的显式表态是「停止」，
@@ -865,10 +948,10 @@ async def assess_report(
         # 历史行的兼容闸门：本次收敛前，列已是 `same` 的报告可被二次确认改写成
         # `different` 并照常评估 —— 那些报告不该继续生成合并解读。
         raise HTTPException(status_code=409, detail="这批文件不属于同一主体，不能生成合并解读；请分开上传")
-    if _processing_warnings(report):
+    if _partial_files_in_flight(report):
         raise HTTPException(
             status_code=409,
-            detail="报告仍有文件未完成解析，不能生成健康提示",
+            detail=_gate_detail(report) or "报告仍有文件未完成解析，不能生成健康提示",
         )
     try:
         return await _assess_report(report, db, owned_by_account=owner_id is not None)

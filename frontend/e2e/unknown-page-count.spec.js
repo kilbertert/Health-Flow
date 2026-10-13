@@ -27,7 +27,6 @@ function reportWithPageCount(seeded, reportId, pageCount) {
       },
     ],
     evidence_result: null,
-    processing_warnings: [],
   };
 }
 

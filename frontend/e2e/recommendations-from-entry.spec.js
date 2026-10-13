@@ -41,7 +41,6 @@ const UPLOADED = {
       source_url: '/api/health/report/9001/files/1/pages/1',
     },
   ],
-  processing_warnings: [],
 };
 
 const ASSESSED = {

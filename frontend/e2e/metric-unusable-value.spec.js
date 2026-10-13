@@ -83,7 +83,6 @@ function pendingReport(seeded) {
     subject_consistency: 'same',
     metrics: [MULTI_VALUE, SINGLE_VALUE],
     files: [],
-    processing_warnings: [],
   };
 }
 

@@ -11,6 +11,10 @@ from app.service.confirmation_vocabulary import (
     DECISIONS_ORDERED,
     REQUEST_DECISIONS_ORDERED,
 )
+from app.service.interpretation_failure import (
+    FAILURE_LITERAL,
+    PATIENT_ACTION_LITERAL,
+)
 
 
 class MetricRecord(BaseModel):
@@ -153,11 +157,48 @@ class ReportExtractionJobResponse(BaseModel):
 
     status: Literal["queued", "running", "completed", "failed"]
     attempt_count: int = Field(..., ge=0)
-    error_class: str | None = None
     created_at: datetime | None = None
     started_at: datetime | None = None
     updated_at: datetime | None = None
     completed_at: datetime | None = None
+
+
+class FailedFile(BaseModel):
+    """一个没能解析完的原始文件。**只带文件名，不带错误原文。**
+
+    `errored_text` 曾经是 `["filename: <模型/框架的错误原文>"]` 这样的拼接串，直接
+    呈现给患者 —— provider 的自由文本本来就是给排障看的，不是给患者的。文件名是患者
+    自己给的，认得出来；错误原文不是。
+    """
+
+    file_index: int = Field(..., ge=1)
+    filename: str
+
+
+class InterpretationFailureReport(BaseModel):
+    """报告级的解读失败块（GLOSSARY.md 的「解读失败」）。成因的**唯一**出域形状。
+
+    它取代了三处半成品：`processing_error`（自由文本）、`processing_warnings`
+    （`["文件名: 错误"]` 自由文本数组）、`extraction_job.error_class`（Python 类名 /
+    策略标签，出域无人读）。那三处互相矛盾的方式是「同一件事有三个名字」，而**成因
+    与可重试性根本不在契约里**，所以患者侧无从复述。
+
+    `retryable` 与 `action` 都是 `cause` 的**派生读法**，不是各自独立的事实 —— 服务端
+    算好一起送出去，省得前端再按成因表推一遍（推的规则只有一处，这一条与
+    `AdmissionLedger` 把四类之和一起送出去同一个理由）。
+
+    **`failed_files` 里只有文件。** 「这次失败是谁的问题」由 `cause` 回答；把每个文件的
+    错误原文再出一遍是第二个入口，而第二个入口就是今天三个名字的来源。
+    """
+
+    cause: FAILURE_LITERAL
+    #: 这条命还有没有救。可重试的两个成因是「服务端当时不行」与「模型当时不可用」。
+    retryable: bool
+    #: 患者现在该做什么。只有两个取值，且只有两个成因会请患者动手。
+    action: PATIENT_ACTION_LITERAL
+    #: 没能解析完的文件（文件名，不带错误原文）。可以为空 —— 一次整份材料都读不出来
+    #: 的失败没有「某个文件」可指；这时患者侧的话由 `cause` 独自支撑。
+    failed_files: list[FailedFile] = Field(default_factory=list)
 
 
 class AdmissionLedger(BaseModel):
@@ -219,8 +260,13 @@ class MedicalReportResponse(BaseModel):
     # 「新形状，或旧形状的原始 dump」两者都收，由 `app/api/report.py` 负责
     # 把旧行归一成新形状后再出域（见 `_patient_notices_from_stored`）。
     evidence_result: PatientNotices | dict | None = None
-    processing_error: str | None = None
-    processing_warnings: list[str] = Field(default_factory=list)
+    # 报告级的解读失败块（GLOSSARY.md 的「解读失败」）。**为空表示这份报告没有失败**
+    # —— 它不是「有失败但说不出成因」：词表是封闭的，服务端每次失败都点名一个成因。
+    #
+    # 它取代了 `processing_error` / `processing_warnings` / `extraction_job.error_class`
+    # 三处半成品。历史行里没有它，读路径按「空即为没有失败」处理（见
+    # `app/api/report.py` 的组装）。
+    interpretation_failure: InterpretationFailureReport | None = None
     extraction_job: ReportExtractionJobResponse | None = None
     extraction_trace: dict[str, Any] | None = None
     audit_events: list[dict[str, Any]] = Field(default_factory=list)

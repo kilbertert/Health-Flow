@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { interpretationFailureLine } from '../interpretationFailure.js';
 import { reportStatusColor, reportStatusLabel } from '../reportStatus.js';
 import {
   ArrowLeftOutlined,
@@ -227,7 +228,7 @@ function ReportStatus({ result, onContinueConfirm }) {
         : '报告当前状态不可查看完整报告单';
   const description = isPending
     ? '完成指标确认后即可生成完整报告单与健康风险提示。'
-    : result.processing_error || result.processing_warnings?.join('；') || '请稍后重试。';
+    : interpretationFailureLine(result.interpretation_failure) || '请稍后重试。';
   return (
     <Card className="report-status-card">
       <Alert

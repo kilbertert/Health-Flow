@@ -82,7 +82,6 @@ test('修正后的指标值优先展示', async ({ page, seed }) => {
         }],
         files: [],
         evidence_result: null,
-        processing_warnings: [],
       }),
     });
   });
@@ -202,7 +201,7 @@ test.describe('状态呈现的一致性', () => {
           metrics: [],
           files: [],
           evidence_result: null,
-          processing_warnings: [],
+
         }),
       }),
     );
@@ -220,6 +219,50 @@ test.describe('状态呈现的一致性', () => {
     const statusTag = page.locator('.report-heading .ant-tag');
     await expect(statusTag).toContainText('解析失败');
     await expect(statusTag).toHaveClass(/ant-tag-error/);
+  });
+
+  // 解读失败：详情页说的是**成因**，而不是一句通用话术（PRD #226）。
+  //
+  // 收敛前这里只能显示服务端塞在 `processing_error` 里的那句「报告智能解读失败，请重新
+  // 上传或稍后重试。」—— 而那句话对下面这类失败是错的：同一份材料再传一遍既救不了
+  // 「服务当时不可用」，还会留下第二份记录。
+  test('失败详情页按成因说话，服务端问题不叫患者重新上传', async ({ page, seed }) => {
+    const seeded = await seed({ reports: ['assessed'] });
+    const reportId = seeded.reports[0].id;
+    await page.route(`**/api/health/report/${reportId}`, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          id: reportId,
+          patient_id: seeded.subject.owner_id,
+          report_type: '体检报告',
+          department: '健康管理中心',
+          created_at: new Date().toISOString(),
+          status: 'failed',
+          subject_consistency: 'same',
+          metrics: [],
+          files: [],
+          evidence_result: null,
+          interpretation_failure: {
+            cause: 'service_unavailable',
+            retryable: true,
+            action: 'no_action',
+            failed_files: [{ file_index: 1, filename: '体检单.png' }],
+          },
+        }),
+      }),
+    );
+
+    await loginWithSeed(page, seeded);
+    await page.goto(`/#/report/${reportId}`);
+    await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible();
+
+    const card = page.locator('.report-status-card');
+    // 成因说得出来。
+    await expect(card).toContainText('读取');
+    // 而「重新上传」**不出现** —— 这是我们这边的问题，重传没用。
+    await expect(card).not.toContainText('重新上传');
   });
 });
 
@@ -263,7 +306,6 @@ function correctedReport(seeded, reportId) {
     ],
     files: [],
     evidence_result: null,
-    processing_warnings: [],
   };
 }
 
@@ -418,7 +460,6 @@ test.describe('原文定位', () => {
         },
       ],
       evidence_result: null,
-      processing_warnings: [],
     };
   }
 

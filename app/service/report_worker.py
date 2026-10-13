@@ -11,7 +11,7 @@ from pathlib import Path
 from sqlalchemy import update
 from sqlalchemy.orm import sessionmaker
 
-from app.api.report import ParseOutcome, _audit, _parse_report
+from app.api.report import ParseOutcome, _audit, _carried_forward, _parse_report
 from app.config import get_settings
 from app.data.models import (
     MedicalReport,
@@ -203,8 +203,10 @@ def run_next_job(factory) -> int | None:
             db.commit()
             return job_id
         if read_error is not None and report is not None:
+            # 保留的只有抽取轨迹，逐轮结果丢掉 —— 见 `_carried_forward`：上一轮的
+            # `file_results` 会在这一轮的失败块里被说成「这次失败的文件」。
             report.parsed_content = {
-                **(report.parsed_content or {}),
+                **_carried_forward(report.parsed_content),
                 "error": "报告原文读取失败，请重新上传或稍后重试。",
                 "failure": read_error,
             }
@@ -262,10 +264,11 @@ def run_next_job(factory) -> int | None:
                         actor="system:report-worker",
                         detail={"attempt_count": job.attempt_count, "failure": failure},
                     )
-                error = (report.parsed_content or {}).get("error")
+                carried = _carried_forward(report.parsed_content)
                 report.parsed_content = {
-                    **(report.parsed_content or {}),
-                    "error": error or "报告智能解读失败，请重新上传或稍后重试。",
+                    **carried,
+                    # 本轮早些时候（读盘失败）写下的那句话优先 —— 它比通用话术说得准。
+                    "error": carried.get("error") or "报告智能解读失败，请重新上传或稍后重试。",
                     "failure": failure,
                 }
         db.commit()
