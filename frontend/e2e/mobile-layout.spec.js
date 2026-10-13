@@ -8,6 +8,23 @@ function horizontalExcess(page) {
   );
 }
 
+// 把指针移开，**并且等悬浮浮层（antd Tooltip）消失**，再量横向溢出。
+//
+// 为什么：Playwright 的 `click()` 会先把指针移到按钮中心 —— 于是点完页头那个「个人中心」
+// 图标按钮之后，它的 antd Tooltip 是**显示着**的。Tooltip 的定位容器贴着屏幕右缘（375
+// 视口下 right=379），会给文档带来 4px 的横向溢出。而它出现有约 100ms 的延迟 —— 于是
+// 「点完立刻量」平时量到 0（浮层还没出来）、并发负载下量到 3~4（浮层已经出来了），
+// 这就是 mobile-layout 那条偶发红的根因（#234：它和弹窗几何量那条不是同一个机制，但同
+// 一类错误 —— 量了一个由测试自己的交互造成的、会变的中间状态）。
+//
+// 判据用「浮层是否还在 DOM 里」，不是 `waitForTimeout`：移开指针后 antd 会先藏着再移除，
+// 轮询到它消失为止，不靠猜。
+async function excessWithoutHoverOverlay(page) {
+  await page.mouse.move(1, 1);
+  await expect.poll(() => page.locator('.ant-tooltip:visible').count()).toBe(0);
+  return horizontalExcess(page);
+}
+
 function headerClearsContent(page, selector) {
   return page.evaluate(({ selector }) => {
     const header = document.querySelector('.app-header');
@@ -46,7 +63,7 @@ function headerClearsContent(page, selector) {
 
       await page.getByRole('button', { name: '个人中心', exact: true }).click();
       await expect(page.getByRole('heading', { name: '个人中心' })).toBeVisible();
-      expect(await horizontalExcess(page)).toBeLessThanOrEqual(0);
+      expect(await excessWithoutHoverOverlay(page)).toBeLessThanOrEqual(0);
       expect(await headerClearsContent(page, '.profile-page')).toBeTruthy();
 
       const email = page.locator('.profile-identity p');
