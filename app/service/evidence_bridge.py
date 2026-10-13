@@ -73,9 +73,60 @@ METRIC_ALIASES = {
     "谷草转氨酶": "ast",
     "血钙": "calcium",
 }
-# 名称归一化用的括号剥离。**不是**参考范围解析的那一个 —— 参考范围的括号由
-# `admission.parse_reference_range` 的正则自己处理，这里剥的是指标名里的括注。
-_PARENTHETICAL_RE = re.compile(r"[（(][^）)]*[）)]")
+# 名称归一化用的括号剥离（**可重入**，逐层剥到不动为止）。**不是**参考范围解析的那一个
+# —— 参考范围的括号由 `admission.parse_reference_range` 的正则自己处理，这里剥的是指标名
+# 里的括注。
+#
+# 为什么必须重入：`LDL-C (低脂蛋白(坏)胆固醇)` 里嵌套着一对括号，而**嵌套**是真实的
+# 抽取形态（报告 57）。单次 `sub` 只剥最外那对，留下 `ldl-c (低脂蛋白` 与一个孤立右括号
+# —— 别名前缀还在，后缀却被切坏，于是这一行既匹配不上别名、也匹配不上目录。
+_PARENTHETICAL_RE = re.compile(r"[（(][^（()）]*[）)]")
+
+# 别名后缀的两种合法形态（见 `resolve_metric_code` 的规则 2）。
+_ALIAS_SUFFIX_ASCII_RE = re.compile(r"[a-z0-9%+._-]+")
+_ALIAS_SUFFIX_CJK_RE = re.compile(r"[㐀-䶿一-鿿]+")
+
+
+def _strip_redundant_parentheticals(name: str) -> str:
+    """逐层剥掉括注，直到名称不再变化。"""
+    previous = name
+    while True:
+        stripped = _PARENTHETICAL_RE.sub("", previous)
+        if stripped == previous:
+            return stripped
+        previous = stripped
+
+
+def _alias_suffix_is_redundant(suffix: str, alias: str) -> bool:
+    """别名之后那段多出来的文字，是不是**同一件事的中文写法** —— 两种形态，缺一不可。
+
+    这里是本票（#235）修的那一处：抽取名常把一项印成「英文缩写 + 中文全称」，例如
+    `LDL-C 低脂蛋白(坏)胆固醇`、`Total Chol 总胆固醇`。归一化后名称**以别名开头**，
+    后缀却是中文，而旧规则只认「以 `/` 开头」或「纯 ASCII」的后缀 —— 于是全库唯一的
+    真异常（`LDL-C 3.63`）连不到知识卡、进不了解读。
+
+    **中文后缀只在别名本身是 ASCII 时才认**，这是评审在 #237 指出的一处漏洞：中文里
+    没有词间空格，所以「中文别名 + 中文」与「两项粘连」在字面上不可分 ——
+    `空腹血糖餐后血糖` 会被判成「空腹血糖」的中文写法，而它其实是**两项**，于是拿到一张
+    错的知识卡。而「英文缩写 + 中文全称」之所以可分，正因为**前半是拉丁字母、后半是汉字**
+    —— 那种拼接不会是两个中文指标名连在一起。所以：
+
+    - **纯 ASCII 后缀**（`ldl-c / cholesterol`）—— 旧的 `[a-z0-9%+._-]+` 原样保留，
+      别名是什么都可以；
+    - **纯中文后缀**（`低脂蛋白胆固醇`）—— 只认 `alias` 是纯 ASCII 的情形。
+
+    混合脚本（`ldl-c低density`）一律拒绝 —— 放行它等于承认「任意粘连」都算同义词。
+    这条判据的上限写在明处：一个**中文缩写**后面跟着它自己的中文全称会被拒绝（那种形态
+    在观测到的报告里不存在，而猜错的方向是把两项合成一项）。别名表里的中文条目本来就
+    是完整指标名，精确匹配那一条覆盖它们。
+    """
+    if not suffix:
+        return False
+    if suffix.startswith(("/", "／")):
+        return True
+    if _ALIAS_SUFFIX_ASCII_RE.fullmatch(suffix):
+        return True
+    return alias.isascii() and bool(_ALIAS_SUFFIX_CJK_RE.fullmatch(suffix))
 
 
 class EvidenceBridgeError(RuntimeError):
@@ -105,22 +156,30 @@ def resolve_metric_code(name: str, catalog: Iterable[str] | None) -> str | None:
        验证。调用方据此把编码留作「待目录恢复后重新裁决」，而不是当成已确认。
 
     解析不出来返回 ``None``：这样的指标不跨证据边界，保留为可追溯的未匹配项。
+
+    规则 2 的「后缀」判据在 `_alias_suffix_is_redundant`（本票 #235 修的是它：抽取名
+    常写成「英文别名 + 中文全称」，旧规则只认 `/` 开头或纯 ASCII 后缀，于是
+    `LDL-C 低脂蛋白(坏)胆固醇` 解析不出来 —— 那是全库唯一的真异常）。
     """
-    text = unicodedata.normalize("NFKC", _PARENTHETICAL_RE.sub("", name)).casefold()
+    text = unicodedata.normalize("NFKC", _strip_redundant_parentheticals(name)).casefold()
     normalized = "".join(text.split())
     known = set(catalog) if catalog is not None else None
     if known is not None and normalized in known:
         return normalized
+    # **最长别名优先**：`Non-HDL-C` 与 `Non-HDL`、`Total Cholesterol` 与 `Total Chol`
+    # 都在表里，短的那个是长的那个的前缀。按表序取第一个命中的话，命中的是哪一个取决
+    # 于字面顺序 —— 那是一个随每次编辑别名表都会变的隐式判据。
     candidate: str | None = None
+    matched_length = -1
     for label, code in METRIC_ALIASES.items():
         alias = "".join(unicodedata.normalize("NFKC", label).casefold().split())
-        suffix = normalized.removeprefix(alias) if normalized.startswith(alias) else ""
-        if normalized == alias or (
-            suffix
-            and (suffix.startswith(("/", "／")) or (suffix.isascii() and re.fullmatch(r"[a-z0-9%+._-]+", suffix)))
-        ):
-            candidate = code
-            break
+        if not normalized.startswith(alias):
+            continue
+        suffix = normalized.removeprefix(alias)
+        if not (normalized == alias or _alias_suffix_is_redundant(suffix, alias)):
+            continue
+        if len(alias) > matched_length:
+            candidate, matched_length = code, len(alias)
     if candidate is None and normalized in set(METRIC_ALIASES.values()):
         candidate = normalized
     if candidate is None:
@@ -142,14 +201,20 @@ def metric_code_for_name(name: str) -> str | None:
 
 def _observation_payload(metric: Any, *, code: str, effective: Any) -> dict[str, object]:
     """跨证据边界的观察载荷。**只有准入结论为「进入解读」时才会被调用** ——
-    所以这里可以放心地假定值、单位、原文证据、页码都已齐备。"""
+    所以这里可以放心地假定值、原文证据、页码都已齐备。
+
+    单位**不**在此列，是刻意的：无量纲项（比值、pH、尿比重）的「单位」就是「没有单位」
+    这件事本身 —— 达标是 `unit=""` 而不是 `unit=None`，因为契约（`SourceObservation.unit`）
+    要求一个字符串。准入只把无量纲项放到这里来（缺单位的**测量**行在那边就被拦下了），
+    所以这条兜底不会替任何真实测量掩盖一个缺失的单位。
+    """
     reference_low, reference_high = parse_reference_range(effective.reference_range)
     return {
         "observation_id": f"health-flow-metric-{metric.id}",
         "confirmation_status": "confirmed",
         "metric_code": code,
         "value": single_number(effective.value),
-        "unit": effective.unit,
+        "unit": effective.unit or "",
         "reference_low": reference_low,
         "reference_high": reference_high,
         "evidence_text": effective.evidence_text,
@@ -176,7 +241,7 @@ def _unmatched_payload(metric: Any, *, effective: Any) -> dict[str, object]:
         "metric_code": None,
         "metric_label": metric.metric_name or "未命名指标",
         "value": value,
-        "unit": effective.unit,
+        "unit": effective.unit or "",
         "reference_low": reference_low,
         "reference_high": reference_high,
         "evidence_text": effective.evidence_text,
@@ -291,15 +356,19 @@ async def fetch_metric_catalog(*, settings: Settings | None = None) -> list[dict
     return [item.model_dump() for item in payload]
 
 
-def _inference_inputs(metric: Any) -> tuple[str, str | None]:
-    """异常判定的输入：当前最佳值（确认值优先）与当前参考范围（确认范围优先）。
+def _inference_inputs(metric: Any) -> tuple[str, str | None, str | None]:
+    """异常判定的输入：当前最佳值（确认值优先）、当前参考范围与单位（同样确认优先）。
 
-    两条优先级本身在 ``app/service/metric_effective_value.py`` 里 —— 那里是唯一
+    三条优先级本身在 ``app/service/metric_effective_value.py`` 里 —— 那里是唯一
     实现，证据门禁、异常判定与响应契约都消费它。本函数只负责把生效值转成判定
-    需要的形状（值转字符串、参考范围原样）。
+    需要的形状（值转字符串、参考范围与单位原样）。
+
+    单位与值、参考范围同源（都在同一个四元组里）而不是从 ``metric.unit`` 另取一次：
+    「这个界之后还剩什么」要按**生效**单位判，否则患者修正过单位的行会在这一侧与
+    准入那一侧给出不同答案。
     """
     effective = effective_value(metric)
-    return str(effective.value or ""), effective.reference_range
+    return str(effective.value or ""), effective.reference_range, effective.unit
 
 
 def _decidable(metric: Any) -> bool:
@@ -336,10 +405,11 @@ def abnormal_flag_reason(metric: Any) -> str | None:
     """
     if not _decidable(metric):
         return "not_decidable"
-    text, reference = _inference_inputs(metric)
+    text, reference, unit = _inference_inputs(metric)
     # 与准入结论**同一份**判定：空值一行在这一侧与证据门禁那一侧从此同名
-    # （此前分别是 `missing_value` 与 `invalid_value`）。
-    return value_level_reason(text, reference)
+    # （此前分别是 `missing_value` 与 `invalid_value`）。带符号的「报告自己给了判据」
+    # 那一类也在同一个函数里先答 —— 不在这里另摆一遍顺序（#235）。
+    return value_level_reason(text, reference, unit)
 
 
 def infer_abnormal_flag_for_metric(metric: Any) -> str | None:
@@ -350,8 +420,8 @@ def infer_abnormal_flag_for_metric(metric: Any) -> str | None:
     """
     if abnormal_flag_reason(metric) is not None:
         return None
-    text, reference = _inference_inputs(metric)
-    return infer_abnormal_flag(text, reference)
+    text, reference, unit = _inference_inputs(metric)
+    return infer_abnormal_flag(text, reference, unit)
 
 
 # 参考范围解析、数值解析与异常判定的**实现**住在 `app/service/admission.py`

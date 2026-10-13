@@ -40,15 +40,62 @@ def test_alias_normalisation_resolves_when_the_catalog_confirms(name, expected):
     assert resolve_metric_code(name, CATALOG) == expected
 
 
-def test_names_the_alias_table_cannot_normalise_still_resolve_via_the_catalog():
-    """「英文名 + 中文名」这种组合形态别名表解析不出来 —— 这正是目录的意义。
+def test_a_name_that_carries_the_alias_plus_its_chinese_full_name_resolves():
+    """「英文别名 + 中文全称」是**别名表能归一化的正常形态**，不是「只能靠目录」。
 
-    别名表是 45 条硬编码，覆盖不了真实报告里的写法；目录里带着指标的正式标签，
-    所以「目录是唯一事实来源，别名表只是归一化辅助」不是修辞。
+    这条断言此前是反的：它把 `Non-HDL 非高密度脂蛋白胆固醇` **解析不出来**当成
+    「目录是唯一事实来源」的证据。那是把缺陷读成了美德 —— 抽取模型对这种行经常只给出
+    组合名（`LDL-C 低脂蛋白(坏)胆固醇`），名字里明明带着正确的别名前缀，规则却因为
+    后缀是中文而拒绝，于是报告 54 唯一的那条真异常连不到知识卡（#235）。
+
+    目录仍然是权威：它给出不同的答案时以它为准（见下一条）。
     """
-    assert metric_code_for_name("Non-HDL 非高密度脂蛋白胆固醇") is None
+    assert metric_code_for_name("Non-HDL 非高密度脂蛋白胆固醇") == "non_hdl_c"
+    assert metric_code_for_name("LDL-C 低脂蛋白(坏)胆固醇") == "ldl_c"
+    assert metric_code_for_name("Total Chol 总胆固醇") == "total_cholesterol"
+    # 嵌套括号是真实的抽取形态（报告 57）：单次剥括号会切坏后缀，于是这一行谁也认不出。
+    assert metric_code_for_name("LDL-C (低脂蛋白(坏)胆固醇)") == "ldl_c"
     # 目录里若有归一化后的同名编码，则解析成功（这里用归一化后的形态表达该契约）。
     assert resolve_metric_code("nonhdl非高密度脂蛋白胆固醇", ["nonhdl非高密度脂蛋白胆固醇"]) is not None
+
+
+def test_a_mixed_script_suffix_is_not_treated_as_a_synonym():
+    """**只认「整段中文」，不认中英混排** —— 这条是本判据的负控。
+
+    放行「任意粘连」就等于承认任意以同一个别名开头的名字都是同义词，那会让
+    `LDL-C低密度…` 这类行静默连到错的知识卡上。中文那一支要求后缀**整段都是中文**，
+    所以它只覆盖「同一项的中文写法」这一件事。
+    """
+    assert resolve_metric_code("LDL-C低density", None) is None
+    assert resolve_metric_code("LDL-C 低 density", None) is None
+    # **中文别名不行**：中文没有词间空格，「中文别名 + 中文」与「两项粘连」在字面上不可分。
+    # 评审在 #237 指出 `空腹血糖餐后血糖` 会被判成「空腹血糖」的中文写法 —— 而它其实是
+    # **两项**（空腹 + 餐后），连到一张错的知识卡。可分的是「拉丁字母 + 汉字」那种拼接。
+    assert resolve_metric_code("空腹血糖餐后血糖", None) is None
+    # 反过来，「英文缩写 + 中文全称」照常认 —— 那正是本票要修的那一类。
+    assert resolve_metric_code("LDL-C 低脂蛋白(坏)胆固醇", None) == "ldl_c"
+    # 括号里的英文全称**剥掉**之后后缀为空，认得出来；带括号的不是「后缀」。
+    assert resolve_metric_code("LDL-C (Low Density Lipoprotein)", None) == "ldl_c"
+    # 斜杠开头那一种老形态照旧（`LDL-C/HDL-C` 是复合项，别名表管不着它）。
+    assert resolve_metric_code("空腹血糖/餐后", None) == "fasting_glucose"
+
+    # 上限写在明处：**纯 ASCII 后缀那一条是本次之前就有的**，它比中文那一条宽 ——
+    # `LDL-C Target Level` 会被归一成 `ldl_c`。真实报告里风险目标行的名字都以
+    # 「High/Low/Moderate CV Risk Target」**开头**，别名因此落在名字中间而不是前缀，
+    # 所以这条宽口子今天没有咬到东西。要收它得先有一份「哪些后缀不是同义词」的依据，
+    # 那不在 #235 的射程内（本票修的是中文后缀被拒，不是 ASCII 后缀被放行）。
+    assert resolve_metric_code("LDL-C Target Level", None) == "ldl_c"
+
+
+def test_the_longest_matching_alias_wins():
+    """表里短别名是长别名的前缀（`Non-HDL` / `Non-HDL-C`）时，取**最长**命中的那个。
+
+    按表序取第一个命中的话，命中的是哪一个取决于字面顺序 —— 一个随每次编辑别名表
+    都会变的隐式判据。
+    """
+    assert metric_code_for_name("Non-HDL-C") == "non_hdl_c"
+    assert metric_code_for_name("Non HDL 非高密度脂蛋白") == "non_hdl_c"
+    assert metric_code_for_name("Total Cholesterol") == "total_cholesterol"
 
 
 def test_catalog_exact_match_wins():

@@ -134,6 +134,11 @@ export function valueReasonOrNull(metric) {
   // 两侧由 `tests/test_two_value_agreement.py` 对一组输入逐条比对（含全角数字）。
   const text = String(metric?.metric_value ?? '').trim();
   if (text === '') return 'missing_value';
+  // 「报告把判据印成了同一个界」（`Rheumatoid Factor <20 IU/ml (<20)`，#235）：这一行
+  // **判得出**，报告说的是「低于这个界」，而那个界就是它自己的参考上界 —— 值没有坏，
+  // 患者也没有可修正的东西。判定顺序必须在带符号那一条**之前**，否则带符号一律落
+  // `invalid_value`，而报告上根本没有精确值可填。
+  if (signedBoundIsTheCriterion(metric)) return null;
   if (SIGN_MARKERS.some((marker) => text.includes(marker))) return 'invalid_value';
   const numbers = dualValues(metric);
   if (numbers.length === 2 && !TWO_VALUE_BLOCKERS.some((marker) => text.includes(marker))) {
@@ -141,6 +146,43 @@ export function valueReasonOrNull(metric) {
   }
   if (numbers.length === 0 || numbers.length >= 2) return 'invalid_value';
   return null;
+}
+
+/** 后端的 `admission._SIGNED_BOUND_RE` —— 同一份口径的**一个**家。 */
+export const SIGNED_BOUND_RE = /(<=|>=|≤|≥|<|>)\s*(-?\d+(?:\.\d+)?)/;
+
+/** 文本里那个「界」的规范写法（方向 + 数值），没有界时 `null`。
+ *
+ * 与后端 `admission._bound_key` 对位：`≤`/`≥` 归一成 `<=`/`>=`，空白不参与比较 ——
+ * 报告与抽取器对同一件事的排版不必逐字相同，而**方向与数值**必须。
+ */
+export function boundKey(text) {
+  const match = SIGNED_BOUND_RE.exec(String(text ?? ''));
+  if (!match) return null;
+  const sign = { '≤': '<=', '≥': '>=' }[match[1]] ?? match[1];
+  return `${sign}${match[2]}`;
+}
+
+/** 报告把判据印成了**同一个界**吗（`<20 IU/ml` 配 `(<20)`）—— 后端
+ * `admission.signed_value_reason` 的同一份判据。
+ *
+ * 单位的取值与后端同源（`effective_unit ?? unit`，`metric_effective_value` 的优先级），
+ * 否则患者修正过单位的行会在这一侧与准入那一侧给出不同答案。 */
+export function signedBoundIsTheCriterion(metric) {
+  const value = String(metric?.metric_value ?? '').trim();
+  const unit = String(metric?.effective_unit ?? metric?.unit ?? '');
+  const reference = String(metric?.effective_reference_range ?? metric?.reference_range ?? '');
+  // 值必须在**开头**就是一个界（`40 >20` 里那个 40 是测量值，`>20` 只是旁边一句话），
+  // 且之后只剩它自己的单位。**不预先折叠空白** —— `<20 5.2` 折叠后成了 `<205.2`，第二个
+  // 数会被吃进界里（后端第一版就是这么错的）。
+  const anchored = new RegExp(`^(?:${SIGNED_BOUND_RE.source})`).exec(value);
+  if (!anchored) return false;
+  const tail = value.slice(anchored[0].length).trim().replace(/\s+/g, '').toLowerCase();
+  if (tail !== '' && tail !== unit.replace(/\s+/g, '').toLowerCase()) return false;
+  // 参考范围里**只有这一个界**（`>20, <30` 有两个判据，光看一个就下结论会错）。
+  const referenceNumbers = reference.match(/(?<![0-9０-９.,eE])-?[0-9]+(?:\.[0-9]+)?(?![0-9.,eE])/g) || [];
+  if (referenceNumbers.length !== 1) return false;
+  return boundKey(value) !== null && boundKey(value) === boundKey(reference);
 }
 
 /** 后端的 `admission._SIGN_MARKERS` / `_TWO_VALUE_BLOCKERS` —— 同一份口径的**一个**家。

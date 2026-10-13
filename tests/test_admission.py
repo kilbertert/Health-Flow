@@ -28,6 +28,7 @@ from app.data.models import MetricRecord as MetricModel
 from app.schema.evidence import Skipped, Unmatched
 from app.service.admission import (
     admission_reason,
+    infer_abnormal_flag,
     parse_reference_range,
     reference_reason,
     single_number,
@@ -568,6 +569,115 @@ def test_a_row_without_an_abnormality_concept_is_not_blocked_by_its_missing_unit
     measured = _row(metric_value="6.5", unit=None, reference_range="3.9-6.1",
                     evidence_text="空腹血糖 6.5 mmol/L 3.9-6.1")
     assert admission_reason(measured, code="fasting_glucose") == "missing_unit"
+
+
+def test_a_ratio_or_scale_row_is_not_blocked_by_a_unit_it_should_not_have():
+    """比值与标度值**本来就没有单位** —— 拿缺单位拦下它，是推给患者一个不存在的任务（#235）。
+
+    四条真实行（`admission.py` 本票的立据）：`N:L Ratio 1.94 (0.79-3.53)`、
+    `pH 7.0 (4.8-7.4)`、`SG 1.009`、血蛋白/球蛋白比率 1.6。它们的无量纲不是抽取漏了
+    —— 比值是两个量之比，pH 是 −log[H⁺] 标度，SG 是相对水的密度比 —— 所以判定要先
+    认出这一类，再谈单位。
+
+    **跳过单位那一关，不跳过别的判定**（评审在 #237 指出）：这几行报告印了参考范围，
+    值也落在里面，所以它们的答案是**「在参考区间内」**——「正常」，不是 `missing_unit`，
+    也不是 `no_reference_concept`（后者是「这一项没有异常概念」这句关于这一项的断言，
+    而它有判据）。
+    """
+    for metric_name, value, reference in (
+        ("N:L Ratio", "1.94", "(0.79-3.53)"),
+        ("pH", "7.0", "(4.8-7.4)"),
+        ("SG", "1.009", "(1.004-1.030)"),
+        ("血蛋白/球蛋白比率", "1.6", "(1.0-2.5)"),
+        ("Albumin/Globulin ratio 血蛋白/球蛋白比率", "1.6", "(1.0-2.5)"),
+    ):
+        row = _row(metric_name=metric_name, metric_value=value, unit=None, reference_range=reference,
+                   evidence_text=f"{metric_name} {value} {reference}")
+        assert admission_reason(row, code=None) == "within_reference_range", metric_name
+
+    # **真的超出范围时它照样是异常** —— 这一条是评审在 #237 指出的核心：跳过单位不等于
+    # 放过数值。`pH 8.0` 落在 `(4.8-7.4)` 之外，判定必须说 H，而且它**进入解读**。
+    out_of_range = _row(metric_name="pH", metric_value="8.0", unit=None, reference_range="(4.8-7.4)",
+                        evidence_text="pH 8.0 (4.8-7.4)")
+    assert infer_abnormal_flag("8.0", "(4.8-7.4)", None) == "H"
+    # 有编码时它**进入解读**（`None` = 没有拦下它）—— 这是评审在 #237 指出的那条：
+    # 一个真的异常不能因为「这一项没有单位」而被挡在解读之外。
+    assert admission_reason(out_of_range, code="urine_ph") is None
+
+    # **负控一半**：真的有单位、只是抽取漏了的测量行，仍然是缺单位 —— 不能跟着放宽。
+    measured = _row(metric_name="Fasting Glucose", metric_value="6.5", unit=None,
+                    reference_range="3.9-6.1", evidence_text="Fasting Glucose 6.5 mmol/L 3.9-6.1")
+    assert admission_reason(measured, code="fasting_glucose") == "missing_unit"
+
+
+def test_the_scale_table_is_closed_and_word_bounded():
+    """标度那一半是**封闭词表**，且必须按词边界匹配。
+
+    这张表存在的原因写在这里：报告上没有任何文字能证明 `pH` 没有单位 —— 一条
+    `Glucose: 葡萄糖 6.5` 与一条 `pH: 酸碱值 7.0` 在文本上完全同形，差别只在
+    「葡萄糖有量纲、pH 没有」。所以它必须是**物理事实**的声明，而它之所以可以不
+    过期：常规尿分析的标度栏永远只有 pH 与比重这两个。
+
+    词边界是防误伤的：`SGOT`（谷草转氨酶的旧称）里含 `SG`，它不是标度值。
+    """
+    assert admission_reason(_row(metric_name="SGOT", metric_value="6.5", unit=None,
+                                 reference_range="3.9-6.1",
+                                 evidence_text="SGOT 6.5 3.9-6.1"), code="ast") == "missing_unit"
+
+
+def test_a_signed_value_whose_bound_is_the_reports_own_criterion_is_normal():
+    """报告把判据印成**同一个界**时，这一行有结论，而且是「正常」（#235）。
+
+    `Rheumatoid Factor <20 IU/ml (<20)`：报告说的是「低于这个界」，而那个界就是它自己
+    印的参考上界 —— 「低于上界」与「在上界之内」是同一句话。它原本一见 `<` 就落
+    `invalid_value`（「数值不是一个数，需要修正」），而报告上根本没有精确值可填。
+
+    **三条约束都钉住**，缺一即回到 `invalid_value`（那是本判据的负控）：
+    """
+    def reason(value, reference, unit="IU/ml"):
+        return admission_reason(
+            _row(metric_name="Rheumatoid Factor", metric_value=value, unit=unit,
+                 reference_range=reference, evidence_text=f"Rheumatoid Factor {value} {reference}"),
+            code=None,
+        )
+
+    # 同一个界 → 正常。
+    assert reason("<20", "(<20)") == "within_reference_range"
+    # 排版不讲究（空格、全角关系符）：方向和数值相同就是同一句话。
+    assert reason("≤ 20", "(<=20)") == "within_reference_range"
+    assert reason("< 20", "(< 20)") == "within_reference_range"
+    # **界之后还有别的东西** → 不是「这一格是一个界」这回事，回 invalid_value。
+    assert reason("<20 5.2", "(<20)") == "invalid_value"
+    assert reason("<20 mmol/L", "(<20)") == "invalid_value"
+    # **方向不同** → 报告没有把同一句话印在两处。
+    assert reason("<20", "(>20)") == "invalid_value"
+    # **数值不同** → 那是别人的判据（风险目标那一类），不是这一项的。
+    assert reason("<2.6", "<=1.8") == "invalid_value"
+    # **参考范围里没有界**（AIP 那种：影射到哪个阈值是医学判断）→ 不猜。
+    assert reason("<0.01", None) == "invalid_value"
+    assert reason("<0.01", "(1.0-2.0)") == "invalid_value"
+
+
+def test_the_signed_bound_verdict_is_the_same_on_both_sides():
+    """带符号的那一行，门禁与判定守卫**同名** —— 本票新增的那条也要在两侧同名。
+
+    判据住在一处（`admission.signed_value_reason`），两侧各自调它：门禁在
+    `admission_reason` 的 `invalid_value` 分支里问，守卫在 `abnormal_flag_reason` 里问。
+    两份实现会让「值能不能判」在这两处各答一次 —— 那正是本 PRD 一直在消灭的形状。
+    """
+    metric = _row(metric_name="Rheumatoid Factor", metric_value="<20", unit="IU/ml",
+                  reference_range="(<20)", evidence_text="Rheumatoid Factor <20 IU/ml (<20)")
+    metric.metric_code = None
+    _, skipped, _ = build_observations_with_unmatched([metric])
+    assert {item["reason"] for item in skipped} == {"within_reference_range"}
+    assert abnormal_flag_reason(metric) is None
+
+    guessed = _row(metric_name="AIP", metric_value="<0.01", unit=None, reference_range=None,
+                   evidence_text="AIP <0.01")
+    guessed.metric_code = None
+    _, skipped, _ = build_observations_with_unmatched([guessed])
+    assert {item["reason"] for item in skipped} == {"invalid_value"}
+    assert abnormal_flag_reason(guessed) == "invalid_value"
 
 
 def test_a_qualitative_row_with_a_word_domain_is_judged_by_it():
