@@ -271,3 +271,47 @@ def test_no_gate_sentence_promises_an_automatic_retry():
     for cause, detail in GATE_DETAIL_BY_FAILURE.items():
         for banned in ("自动重试", "会自动", "马上重试", "正在重试"):
             assert banned not in detail, f"{cause} 的闸门话术承诺了 {banned}：{detail}"
+
+
+# ── 陈旧/畸形数据的读路径（评审发现的三条） ────────────────────────────────────
+
+
+@pytest.mark.parametrize("malformed", [["a"], {"x": 1}, 7, True])
+def test_a_malformed_stored_cause_does_not_block_the_report(malformed):
+    """`parsed_content` 是 JSON 列，历史行里这个键可能是任何形状。
+
+    一个列表或字典直接拿去查集合会抛 `TypeError: unhashable type` —— 那会让整份报告的
+    读路径 500，患者连打开都做不到，而这只是一个我们读不懂的陈旧字段。
+    """
+    factory, report_id = _report_with({"failure": malformed, "file_results": []})
+    assert _block(factory, report_id) is None
+
+    from app.api.report import _gate_detail
+
+    with factory() as db:
+        assert _gate_detail(db.get(ReportModel, report_id)) is None
+
+
+def test_a_new_failure_does_not_blame_the_previous_round_s_files():
+    """一次部分解析留下 `file_results` 之后，**下一轮**整份材料因服务不可用而失败时，
+    那份旧结果还在 —— 在新的失败块里「坏.png」会被列成这一次失败的文件。
+
+    患者看到的是一次服务故障去归咎于某个文件。逐轮结果必须丢掉。
+    """
+    from app.api.report import _carried_forward
+
+    previous = {
+        "file_results": [{"file_index": 2, "filename": "坏.png", "status": "failed"}],
+        "failure": "provider_unavailable",
+        "raw_text": "上一轮的原文",
+        "extraction_provider": "openai-compatible-chat",
+        "warnings": ["坏.png: provider timeout"],
+    }
+    carried = _carried_forward(previous)
+
+    assert "file_results" not in carried, "上一轮的文件结果不许活到这一轮"
+    assert "failure" not in carried
+    assert "warnings" not in carried
+    # 抽取轨迹是**历史事实**，留下：下一轮可能什么都还没产生。
+    assert carried["raw_text"] == "上一轮的原文"
+    assert carried["extraction_provider"] == "openai-compatible-chat"

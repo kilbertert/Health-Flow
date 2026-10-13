@@ -253,12 +253,12 @@ def report_failure(causes: Iterable[InterpretationFailure]) -> InterpretationFai
 
 def is_retryable(failure: InterpretationFailure | str | None) -> bool:
     """这条命还有没有救。成因的**派生读法** —— 不要另存一份布尔。"""
-    return failure in RETRYABLE_FAILURES
+    return isinstance(failure, str) and failure in RETRYABLE_FAILURES
 
 
 def patient_action(failure: InterpretationFailure | str | None) -> PatientAction | None:
     """患者现在该做什么。同样是派生读法。没有成因时没有动作可给。"""
-    return PATIENT_ACTION_BY_FAILURE.get(failure) if failure else None
+    return PATIENT_ACTION_BY_FAILURE.get(failure) if isinstance(failure, str) else None
 
 
 #: 出域契约用的 `Literal`。`MedicalReportResponse.interpretation_failure` 从它派生 ——
@@ -291,5 +291,9 @@ GATE_DETAIL_BY_FAILURE: Final[dict[str, str]] = {
 
 
 def gate_detail(failure: InterpretationFailure | str | None) -> str | None:
-    """闸门被拒时说的话 —— 由成因派生；没有成因时是 ``None``（调用点用自己的兜底）。"""
-    return GATE_DETAIL_BY_FAILURE.get(failure) if failure else None
+    """闸门被拒时说的话 —— 由成因派生；没有成因时是 ``None``（调用点用自己的兜底）。
+
+    `isinstance` 先判：这个函数的输入来自 JSON 列，非字符串的键会让 `dict.get` 抛
+    `TypeError: unhashable type`。
+    """
+    return GATE_DETAIL_BY_FAILURE.get(failure) if isinstance(failure, str) else None

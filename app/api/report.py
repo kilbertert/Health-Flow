@@ -270,7 +270,10 @@ def _interpretation_failure_block(report: ReportModel) -> dict | None:
     """
     parsed = report.parsed_content or {}
     cause = parsed.get("failure")
-    if cause not in FAILURE_SET:
+    # `isinstance` 先判：`parsed_content` 是 JSON 列，历史行里这个键可能是任何形状。
+    # 一个列表或字典直接拿去查集合会抛 `TypeError: unhashable type` —— 那会让整份报告
+    # 的读路径 500，患者连打开都做不到，而这只是一个我们读不懂的陈旧字段。
+    if not isinstance(cause, str) or cause not in FAILURE_SET:
         return None
     return {
         "cause": cause,
@@ -589,7 +592,7 @@ def _parse_report(
                 if report is None:
                     return ParseOutcome(succeeded=False, failure=failure)
                 report.parsed_content = {
-                    **(report.parsed_content or {}),
+                    **_carried_forward(report.parsed_content),
                     "error": "报告智能解读失败，请重新上传或稍后重试。",
                     "failure": failure,
                 }
@@ -660,6 +663,42 @@ def _patient_notices_from_stored(stored: object) -> dict | None:
         "skipped": list(stored.get("skipped") or []),
         "unmatched_count": patient_reply.get("unmatched_count", len(unmatched)),
         "disclaimer": patient_reply.get("disclaimer") or "",
+    }
+
+
+def _carried_forward(parsed_content: dict | None) -> dict:
+    """一次**新一轮**失败要保留的旧字段。
+
+    失败路径过去写的是 `{**parsed_content, "failure": ..., "error": ...}` —— 把上一轮
+    解析的**全部**结果一起留下。其中 `file_results` 会说谎：一次部分解析留下
+    `[{"filename": "坏.png", "status": "failed"}]`，下一轮整份材料因为**服务不可用**而失败
+    时，那份旧的 `file_results` 还在，于是在新的失败块里，「坏.png」被列成这一次失败的
+    文件 —— 患者看到的是一次服务故障去归咎于某个文件。
+
+    保留的只有抽取轨迹（它是**历史事实**，且下一轮可能没能产生任何轨迹），逐轮结果一律
+    丢掉：这一轮的失败块只描述这一轮。
+    """
+    parsed = parsed_content or {}
+    return {
+        key: parsed[key]
+        for key in (
+            "report_type",
+            "raw_text",
+            "page_count",
+            "metric_count",
+            "extraction_provider",
+            "extraction_model",
+            "extraction_prompt_version",
+            "extraction_prompt_hash",
+            "extraction_run_id",
+            "provider_run_id",
+            "provider_run_ids",
+            # `error` 保留：它可能是**本轮**早些时候（读盘失败）刚写下的那句话，
+            # 而终态分支要用 `error or <通用话术>` 决定说不说它。丢掉它会把「原文读取
+            # 失败」降级成一句通用话术。
+            "error",
+        )
+        if key in parsed
     }
 
 
