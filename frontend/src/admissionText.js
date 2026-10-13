@@ -68,6 +68,14 @@ export const ADMISSION_TEXT = Object.freeze({
   missing_source_page: '缺少原文页码，未进入解读',
   // 判定过、在区间内 —— 这一条是「正常」，**不是**「没进解读」。
   within_reference_range: '在参考区间内',
+  // 报告给出的是**阴性**（`Not Detected` / `Negative`）—— 正常，患者不必动手。与上一句
+  // 分开：那说的是「在参考区间内」，这一句说的是「报告给出的是未检出」，两项没有区间
+  // 可比（#236）。
+  qualitative_negative: '报告给出的是未检出（阴性）',
+  // 报告给出的是**阳性**（`Detected` / `Positive`）—— 一个确定的异常。患者要做的不是
+  // 修正这个值（报告上写的就是那个词），而是按提示就诊。它不进知识卡匹配：分类结果没有
+  // 可跨证据边界的数值（#236）。
+  qualitative_positive: '检测到（阳性），建议就诊',
   // 这一项没有「是否异常」这个概念（血型、外观、透明度、比值型）：不是「判不了」，
   // 也不是「值坏了」——这个判断对它所问的问题不存在（#206）。患者不用为它表态。
   no_reference_concept: '这一项没有异常概念，未参与判定',
@@ -78,9 +86,10 @@ export const ADMISSION_TEXT = Object.freeze({
 
 /** 判定过、且**患者不必为它做任何事**的两条结论 —— 逐行不挂提示、也不进待处理集合。
  *
- * 两条各自的理由不同，所以它们在这一层是分开的（服务端台账里也分列 `normal` 与
+ * 三条各自的理由不同，所以它们在这一层是分开的（服务端台账里也分列 `normal` 与
  * `not_evaluated`）：
  *   - `within_reference_range` —— 结论已给：正常。
+ *   - `qualitative_negative` —— 结论已给：报告给出的是未检出（阴性），也是正常（#236）。
  *   - `awaiting_confirmation` —— 结论已给：判得出（值/单位/参考范围/原文证据都齐），
  *     缺的只是患者那一次核对；而「核对」正是确认页在做的事，报告单上不必逐行再说一遍。
  *
@@ -88,6 +97,7 @@ export const ADMISSION_TEXT = Object.freeze({
  * 钉住两者相等 —— 分叉会让同一行在两处得到不同的说法。 */
 export const NO_ACTION_REASONS = Object.freeze([
   'within_reference_range',
+  'qualitative_negative',
   'no_reference_concept',
   'awaiting_confirmation',
 ]);
@@ -139,6 +149,10 @@ export function valueReasonOrNull(metric) {
   // 患者也没有可修正的东西。判定顺序必须在带符号那一条**之前**，否则带符号一律落
   // `invalid_value`，而报告上根本没有精确值可填。
   if (signedBoundIsTheCriterion(metric)) return null;
+  // 规范分类结果词（`Not Detected` / `Detected`，#236）：这一行**判得出**，值并没有坏 ——
+  // 报告给的就是那个词。与后端 `admission.value_level_reason` 同一份判据、同一个**顺序**
+  // （先于「值不是一个数」）。
+  if (qualitativeResult(text) !== null) return null;
   if (SIGN_MARKERS.some((marker) => text.includes(marker))) return 'invalid_value';
   const numbers = dualValues(metric);
   if (numbers.length === 2 && !TWO_VALUE_BLOCKERS.some((marker) => text.includes(marker))) {
@@ -150,6 +164,30 @@ export function valueReasonOrNull(metric) {
 
 /** 后端的 `admission._SIGNED_BOUND_RE` —— 同一份口径的**一个**家。 */
 export const SIGNED_BOUND_RE = /(<=|>=|≤|≥|<|>)\s*(-?\d+(?:\.\d+)?)/;
+
+/** 后端的 `admission._QUALITATIVE_WORDS` —— 同一份口径的**一个**家。
+ *
+ * 规范分类结果词：报告给出的定性结果，判据是结果词本身（HL7 v2 OBX-8，#236）。两侧都
+ * 必须**整值**匹配（不是子串）—— 真语料里的假朋友 `AB Rh(D) POSITIVE` 是血型（描述
+ * 项），含 "POSITIVE" 却不是阳性检验结果。 */
+export const QUALITATIVE_WORDS = Object.freeze({
+  negative: Object.freeze(['not detected', 'undetected', 'negative', 'nil', 'absent', 'non-reactive', 'nonreactive']),
+  positive: Object.freeze(['detected', 'positive', 'reactive', 'present']),
+});
+
+/** 这个值是规范分类结果词吗 —— `'negative'` / `'positive'` / `null`（不是这一类）。
+ *
+ * 与后端 `admission.qualitative_result_reason` 对位：只有整值命中词表才算，集合外的词
+ * 一律 `null`（交回别的原因处置）。把任意非数值词都当成阴性会把「值读不出来」也判成
+ * 正常（#236 的约束 1）。 */
+export function qualitativeResult(value) {
+  const word = String(value ?? '').trim().replace(/^[（(]+|[）)]+$/g, '').trim().toLowerCase()
+    .split(/\s+/).filter(Boolean).join(' ');
+  if (!word || /\d/.test(word)) return null;
+  if (QUALITATIVE_WORDS.negative.includes(word)) return 'negative';
+  if (QUALITATIVE_WORDS.positive.includes(word)) return 'positive';
+  return null;
+}
 
 /** 文本里那个「界」的规范写法（方向 + 数值），没有界时 `null`。
  *

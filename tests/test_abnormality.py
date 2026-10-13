@@ -123,6 +123,31 @@ def test_model_flag_is_ignored_by_inference():
     assert infer_abnormal_flag_for_metric(_metric(metric_value="6.5", reference_range="3.9-6.1")) == "H"
 
 
+def test_the_report_printed_word_domain_governs_the_builtin_qualitative_table():
+    """报告**印了取值域**时，判据是那个词：相符 → N，不符 → 判不了（评审在 #239）。
+
+    内置的分类结果词表（#236）不许越权覆盖报告自己印出来的判据 —— 尤其是
+    `Negative (Positive)` 这种「值对不上报告判据」的行，把它当成阴性正常会**漏报一个
+    阳性项**。两侧（准入与异常判定）必须一致。
+    """
+    from app.service.admission import admission_reason
+
+    def row(value, reference):
+        return _metric(metric_value=value, reference_range=reference)
+
+    # 相符 → 正常（N）。
+    assert infer_abnormal_flag_for_metric(row("Negative", "(Negative)")) == "N"
+    # 不符 → 判不了（不拿内置词表覆盖成阴性正常）。
+    assert infer_abnormal_flag_for_metric(row("Negative", "(Positive)")) is None
+    assert abnormal_flag_reason(row("Negative", "(Positive)")) == "invalid_value"
+    # 准入那一侧与它同向：不符时说 `invalid_value`（与 `value_level_reason` 同源），
+    # **不**说 `qualitative_negative`。
+    assert admission_reason(row("Negative", "(Positive)"), code="x") == "invalid_value"
+    # `Detected (Detected)`：报告自己的判据就是「检测到」—— 相符，不是异常。
+    assert infer_abnormal_flag_for_metric(row("Detected", "(Detected)")) == "N"
+    assert admission_reason(row("Detected", "(Detected)"), code="x") == "within_reference_range"
+
+
 # ---------------------------------------------------------------------------
 # 不可判定时给出原因，且原因词汇与证据门禁同源
 # ---------------------------------------------------------------------------

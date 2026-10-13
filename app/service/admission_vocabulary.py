@@ -68,6 +68,23 @@ AdmissionReason = Literal[
     # `missing_value` / `invalid_value` 的分别是患者的**动作**不同：那两条要他去等解析或
     # 重新给一个值；定性项的值本来就是一个词，系统读得出它，只是不需要它参与判定。
     "no_reference_concept",
+    # 值本身是一个**规范分类结果词**（`Detected` / `Positive` / `Reactive` / `Present`）。
+    # 它不是「数值不是一个数」—— 那个值根本没有坏，报告给的就是一个分类结果，而且
+    # 它说的是**阳性**。GLOSSARY 的「解读准入」与 ADR 0014：定性结果的判据是结果词本身
+    # （HL7 v2 OBX-8 的 Interpretation Codes 承载 categorical assessment），所以这一类
+    # **判得出**，判定是「异常」。
+    #
+    # 与 `no_reference_concept` 的分别是方向：描述项（血型、外观）没有「是否异常」这回事；
+    # 阳性结果有的是一个**确定的异常**。与 `invalid_value` 的分别是患者动作：那一条要他
+    # 修正一个值，这一条没有可修正的东西 —— 报告上印的就是那个词。
+    #
+    # 它**不跨证据边界**：卡片契约要一个数值（`SourceObservation.value: float`），而分类
+    # 结果没有数值可跨。所以它落在 `skipped` 那一桶，报告单照样如实说它是阳性。
+    "qualitative_positive",
+    # 与上一条同族，方向相反：`Not Detected` / `Negative` / `Absent` —— 报告给出的是**阴性**。
+    # 它是**正常**，患者不必动手。为什么单列而不并进 `within_reference_range`：那一句说的是
+    # 「在参考区间内」，而这里根本没有区间 —— 报告给的是「未检出」（#236）。
+    "qualitative_negative",
     # 没进解读，但原因是「没有对应的知识卡」而不是「证据不足」。
     "unknown_metric_code",
     "no_published_knowledge_card",
@@ -91,6 +108,8 @@ SKIPPED_REASONS_ORDERED: tuple[str, ...] = (
     "missing_reference_range",
     "within_reference_range",
     "no_reference_concept",
+    "qualitative_positive",
+    "qualitative_negative",
 )
 UNMATCHED_REASONS_ORDERED: tuple[str, ...] = ("unknown_metric_code", "no_published_knowledge_card")
 
@@ -137,7 +156,11 @@ AdmissionReasonLiteral = Literal[*SKIPPED_REASONS_ORDERED, *UNMATCHED_REASONS_OR
 # 「这一项没有异常概念」与「判定过、在区间内」是**两句不同的话**，所以分两桶（报告单上
 # 一句是「均在参考区间内」，另一句是「N 项没有异常概念，未参与解读」）。它们同属
 # `NO_ACTION_REASONS` —— 都不需要患者做任何事。
-NORMAL_REASONS_ORDERED: tuple[str, ...] = ("within_reference_range",)
+#
+# `qualitative_negative`（报告给的是「未检出」/「阴性」）同样是**正常**：结论说这一项
+# 没问题。它不并进 `within_reference_range` 是因为患者侧的说法不同 —— 报告给的是
+# 「未检出」，不是「在参考区间内」（#236）。
+NORMAL_REASONS_ORDERED: tuple[str, ...] = ("within_reference_range", "qualitative_negative")
 NORMAL_REASONS: frozenset[str] = frozenset(NORMAL_REASONS_ORDERED)
 
 # 没有异常概念的项：同样不必患者做任何事，但它**不是**「正常」—— 说「正常」是在一项

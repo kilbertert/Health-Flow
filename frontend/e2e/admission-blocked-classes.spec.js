@@ -94,3 +94,120 @@ test('「报告给了同一个界」的行不再要求患者修正，而参考�
   await expect(control.getByText(MARKER)).toBeVisible();
   await expect(page.getByText(MARKER)).toHaveCount(1);
 });
+
+// ── #236：报告给出的是分类结果（`Not Detected` / `Detected`）─────────────────────────
+
+// 阴性：报告印的是 `Not Detected`、原文里没有取值域 —— 患者不该被要求「修正数值」。
+//
+// `abnormal_flag: 'H'` 与上面那条同一个用意：确认页的「值用不了」是从「模型宣称异常、
+// 而服务端判不出一个数」反推出来的。三行都让它宣称异常，于是这一条测的是**判定本身**，
+// 而不是「某一行刚好没被标异常」。
+const NEGATIVE = {
+  id: 2301,
+  metric_name: 'Hepatitis B Surface antigen - HBsAg',
+  metric_value: 'Not Detected',
+  unit: null,
+  reference_range: null,
+  abnormal_flag: 'H',
+  page_number: 1,
+  evidence_text: 'Hepatitis B Surface antigen - HBsAg B型肝炎表面抗原 Not Detected',
+  confirmation_status: null,
+  inferred_abnormal_flag: null,
+};
+// 阳性：`Detected` —— 一个确定的异常，但报告上写的就是那个词，同样没有可修正的数值。
+const POSITIVE = {
+  ...NEGATIVE,
+  id: 2302,
+  metric_name: 'Hepatitis B e Antigen - HBeAg',
+  metric_value: 'Detected',
+  evidence_text: 'Hepatitis B e Antigen - HBeAg B型肝炎e抗原 Detected',
+};
+// 负控：**血型**（描述项）含 "POSITIVE" 却不是阳性检验结果 —— 整值匹配之下它不该被当成
+// 分类结果词，因此仍然挂着「值不是一个数」的标记（它是描述项，由服务端落
+// `no_reference_concept`，但确认页的反推只到值这一层，所以标记照挂）。
+const BLOOD_GROUP = {
+  ...NEGATIVE,
+  id: 2303,
+  metric_name: 'Blood Group',
+  metric_value: 'AB Rh(D) POSITIVE',
+  evidence_text: 'Blood Group: AB Rh(D) POSITIVE',
+};
+
+const QUAL_METRICS = [NEGATIVE, POSITIVE, BLOOD_GROUP];
+
+test('分类结果（未检出/检测到）不再要求患者修正，而含 POSITIVE 的血型不会被误判', async ({ page, seed }) => {
+  test.setTimeout(90_000);
+  const seeded = await seed({ reports: ['pending_confirmation'] });
+  const report = {
+    id: seeded.reports[0].id,
+    patient_id: seeded.subject.owner_id,
+    report_type: '体检报告',
+    department: '健康管理中心',
+    created_at: '2020-01-01T00:00:00.000Z',
+    status: 'pending_confirmation',
+    subject_consistency: 'same',
+    metrics: QUAL_METRICS,
+    files: [],
+  };
+  await page.route(new RegExp(`/api/health/report/${report.id}/metrics`), (route) =>
+    json(route, { metrics: QUAL_METRICS }),
+  );
+  await page.route(new RegExp(`/api/health/report/${report.id}$`), (route) => json(route, report));
+
+  await openPendingReport(page, seeded);
+
+  // 阴性行：不该有「需要修正」的标记。
+  const negative = page.getByRole('button', { name: /HBsAg指标卡片/ });
+  await expect(negative).toBeVisible();
+  await expect(negative.getByText(MARKER)).toHaveCount(0);
+  // 阳性行：同样没有可修正的数值 —— 它不该被要求修正。
+  const positive = page.getByRole('button', { name: /HBeAg指标卡片/ });
+  await expect(positive).toBeVisible();
+  await expect(positive.getByText(MARKER)).toHaveCount(0);
+
+  // 负控：血型含 "POSITIVE"，但整值不匹配 → 仍挂「需要修正」标记（恰好一处）。
+  await expect(page.getByText(MARKER)).toHaveCount(1);
+  const blood = page.getByRole('button', { name: 'Blood Group指标卡片' });
+  await expect(blood.getByText(MARKER)).toBeVisible();
+});
+
+// 阳性在**服务端判出来之后**（`inferred_abnormal_flag: 'A'`）的展示：它必须被当成异常
+// —— 红色「异常」标记、不是「待核对」，也不要求修正（评审在 #239 指出前一条只覆盖了
+// 判定之前的形态）。
+const POSITIVE_JUDGED = {
+  ...POSITIVE,
+  id: 2310,
+  metric_name: 'Hepatitis B Surface antigen - HBsAg',
+  inferred_abnormal_flag: 'A',
+};
+
+test('阳性（判定为 A）在确认页显示为异常，不是「待核对」，也不要求修正', async ({ page, seed }) => {
+  test.setTimeout(90_000);
+  const seeded = await seed({ reports: ['pending_confirmation'] });
+  const metrics = [POSITIVE_JUDGED];
+  const report = {
+    id: seeded.reports[0].id,
+    patient_id: seeded.subject.owner_id,
+    report_type: '体检报告',
+    department: '健康管理中心',
+    created_at: '2020-01-01T00:00:00.000Z',
+    status: 'pending_confirmation',
+    subject_consistency: 'same',
+    metrics,
+    files: [],
+  };
+  await page.route(new RegExp(`/api/health/report/${report.id}/metrics`), (route) =>
+    json(route, { metrics }),
+  );
+  await page.route(new RegExp(`/api/health/report/${report.id}$`), (route) => json(route, report));
+
+  await openPendingReport(page, seeded);
+
+  const positive = page.getByRole('button', { name: /HBsAg指标卡片/ });
+  await expect(positive).toBeVisible();
+  // 异常标记：红色「异常」（`A` 无方向 —— 不是「偏高」也不是「偏低」）。
+  await expect(positive.getByText('异常', { exact: true })).toBeVisible();
+  await expect(positive.getByText('待核对')).toHaveCount(0);
+  // 阳性已经判出来了 —— 报告上写的就是那个词，没有可修正的数值。
+  await expect(page.getByText(MARKER)).toHaveCount(0);
+});

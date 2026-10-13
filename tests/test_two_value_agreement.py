@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from app.service.admission import value_level_reason, value_reason
+from app.service.admission import value_level_reason, value_only_reason, value_reason
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MODULE = REPO_ROOT / "frontend" / "src" / "admissionText.js"
@@ -191,7 +191,11 @@ def test_both_sides_give_the_same_reason_for_every_shape():
     相等这条比「各自正确」强：往一侧加一条出口、或在一侧换个顺序，都会红。
     """
     front = _frontend_reasons(_CASES)
-    server = {value: value_reason(value) for value in _CASES}
+    # 确认页的反推只到**值这一层**（没有参考范围），所以基准是 `value_only_reason` 而不是
+    # `value_reason`：带符号（#235）与分类结果词（#236）两条出口就在那一层里，两侧都要有。
+    # 拿裸 `value_reason` 当基准会让这两条出口在服务端"多出来"、判成分叉 —— 那是本断言
+    # 该有的敏感度，不是它的错。
+    server = {value: value_only_reason(value, None) for value in _CASES}
     mismatched = {
         value: {"server": server[value], "frontend": front[value]}
         for value in _CASES

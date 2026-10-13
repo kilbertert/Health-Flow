@@ -286,6 +286,30 @@ def test_hidden_internal_findings_do_not_produce_a_normal_conclusion():
     assert "均在参考区间内" not in notices.summary
 
 
+def test_a_qualitative_positive_is_surfaced_not_buried_in_inconclusive():
+    """定性阳性（`Detected`）不能被「其余指标未见需要关注的问题」盖过去（评审在 #239）。
+
+    阳性落 `skipped`（分类结果不跨证据边界），但它不是「未能判定」—— 它是报告给出的一个
+    **确定的异常**。而且摘要必须点明它不参与知识卡匹配，否则患者会把「没有知识卡」误读成
+    「没问题」。
+    """
+    skipped = [{"observation_id": "obs-1", "reason": "qualitative_positive"}]
+    notices = _notices(_response(findings=[], unmatched=[], skipped=skipped))
+    assert "阳性" in notices.summary
+    assert "未见需要关注的问题" not in notices.summary
+    assert "未能完成解读" not in notices.summary
+
+
+def test_a_qualitative_negative_is_not_counted_as_inconclusive():
+    """定性阴性（`Not Detected`）是**正常**，不算「未能完成解读」（评审在 #239）。
+
+    它落 `skipped` 只是因为分类结果不跨证据边界，不代表没判出来。
+    """
+    skipped = [{"observation_id": "obs-1", "reason": "qualitative_negative"}]
+    notices = _notices(_response(findings=[], unmatched=[], skipped=skipped))
+    assert "未能完成解读" not in notices.summary
+
+
 def test_skipped_metrics_do_not_produce_a_normal_conclusion():
     """`skipped` 非空时**不能**宣告「指标均在参考区间内」。
 

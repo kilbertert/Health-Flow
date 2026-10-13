@@ -15,5 +15,5 @@ test('历史列表项渲染指标数与异常摘要', async ({ page, seed }) => 
   await expect(historyItem).toContainText('5 项指标');
   // 5 项里 2 项判定为异常(原有两条 H);误标的第 3 条判成 N 不计数,
   // 漏标的第 4 条判成 H **计入** —— 摘要从此是「判定口径」。
-  await expect(historyItem).toContainText('3 项偏高/偏低');
+  await expect(historyItem).toContainText('3 项异常');
 });
