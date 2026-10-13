@@ -233,14 +233,19 @@ function ReportStatus({ result, onContinueConfirm }) {
   const description = isPending
     ? '完成指标确认后即可生成完整报告单与健康风险提示。'
     : isFailed
-      ? (failure ? `${failure.title}${failure.description}` : NO_CAUSE_TEXT)
+      ? failure
+        ? failure.description
+        : NO_CAUSE_TEXT
       : '请稍后重试。';
   return (
     <Card className="report-status-card">
       <Alert
+        // 颜色只在**终态失败**时取自成因。`processing` 的报告可能带着一个成因
+        // （一次可重试的失败刚把队列放回去），但那时它还在解析中 —— 用失败色和失败
+        // 标题会让患者以为已经结束了。
         type={isFailed ? failure?.color || 'error' : 'info'}
         showIcon
-        title={failure?.title || title}
+        title={isFailed && failure ? failure.title : title}
         description={description}
       />
       <Space style={{ marginTop: 20 }} wrap>

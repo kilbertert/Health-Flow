@@ -8,7 +8,7 @@ import {
   valueReasonOrNull,
 } from '../admissionText';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { NO_CAUSE_TEXT, interpretationFailureLine } from '../interpretationFailure.js';
+import { interpretationFailureLine, failureError } from '../interpretationFailure.js';
 import { reportStatusColor, reportStatusLabel } from '../reportStatus.js';
 import {
   Alert,
@@ -935,6 +935,10 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
   const [result, setResult] = useState(null);
   const [drafts, setDrafts] = useState({});
   const [subjectConsistency, setSubjectConsistency] = useState('');
+  // 要么是一句话（大多数错误就是这么简单），要么是 `{ message, color }` ——
+  // 解读失败要带**成因给的颜色**：红色说的是「你上传的东西有问题」，而「我们这边
+  // 出的问题」不是。留字符串这条形态，是为了让其余六处 `setError(err.message)` 不必
+  // 为了一个颜色各改一遍。
   const [error, setError] = useState('');
   const [showAllMetrics, setShowAllMetrics] = useState(false);
   const [sourceMetric, setSourceMetric] = useState(null);
@@ -1168,14 +1172,14 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
       for (let attempt = 0; data.status === 'processing' && attempt < MAX_ATTEMPTS; attempt += 1) {
         const job = data.extraction_job;
         if (job?.status === 'failed') {
-          throw new Error(interpretationFailureLine(data.interpretation_failure) || NO_CAUSE_TEXT);
+          throw failureError(data);
         }
         await new Promise((resolve) => window.setTimeout(resolve, POLL_INTERVAL_MS));
         data = await getReport(data.id, accessToken);
         setResult(data);
       }
       if (data.status === 'failed') {
-        throw new Error(interpretationFailureLine(data.interpretation_failure) || NO_CAUSE_TEXT);
+        throw failureError(data);
       }
       if (data.status === 'processing') {
         const attempts = data.extraction_job?.attempt_count;
@@ -1190,7 +1194,8 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
       setSubjectConsistency(data.subject_consistency === 'same' ? 'same' : '');
       message.success(`已解析 ${fileList.length} 个文件，请批量确认指标`);
     } catch (err) {
-      setError(err.message);
+      // 解读失败自带成因与颜色（`failureError`）；其余错误是一条消息。
+      setError(err.failure || err.message);
       message.error(err.message);
     } finally {
       setUploading(false);
@@ -1585,7 +1590,13 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
         </Button>
       </Card>
 
-      {error && <Alert type="error" showIcon title={error} />}
+      {error && (
+        <Alert
+          type={typeof error === 'string' ? 'error' : error.color || 'error'}
+          showIcon
+          title={typeof error === 'string' ? error : error.message}
+        />
+      )}
 
       {result && (
         <Card title={<Space>解析结果 · 报告 #{result.id} {evidenceStatus(result.status)}</Space>}>

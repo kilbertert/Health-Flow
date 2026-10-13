@@ -52,12 +52,17 @@ const mod = await import(pathToFileURL(outfile).href);
 fs.writeFileSync(
   path.join(outDir, 'result.json'),
   JSON.stringify(
-    JSON.parse(process.env.HEALTHFLOW_TEST_BLOCKS).map((block) => ({
-      line: mod.interpretationFailureLine(block),
-      text: mod.interpretationFailureText(block),
-      sentences: mod.FAILURE_SENTENCES,
-      actions: mod.FAILURE_ACTIONS,
-    })),
+    JSON.parse(process.env.HEALTHFLOW_TEST_BLOCKS).map((block) => {
+      const err = mod.failureError({ interpretation_failure: block });
+      return {
+        line: mod.interpretationFailureLine(block),
+        text: mod.interpretationFailureText(block),
+        sentences: mod.FAILURE_SENTENCES,
+        actions: mod.FAILURE_ACTIONS,
+        errorMessage: err.message,
+        errorColor: err.failure ? err.failure.color : null,
+      };
+    }),
   ),
 );
 """
@@ -203,3 +208,24 @@ def test_the_no_cause_line_lives_in_the_module_not_in_the_callers():
         source = (REPO_ROOT / "frontend" / "src" / page).read_text(encoding="utf-8")
         assert "报告智能解读失败" not in source, f"{page} 自己写了一句兜底文案"
         assert "请稍后重试。" not in source or page == "pages/ReportDetail.jsx", page
+
+
+@pytest.mark.skipif(NODE is None, reason="需要 node 才能驱动前端模块")
+@pytest.mark.skipif(
+    not (REPO_ROOT / "frontend" / "node_modules" / "esbuild").is_dir(),
+    reason="需要 frontend/node_modules（esbuild）才能转译；先在前端目录 npm install",
+)
+def test_the_thrown_upload_error_carries_the_cause_colour():
+    """上传页的失败提示也必须按成因上色。
+
+    只抛一句 `Error` 传不了颜色，调用点就只好用红色渲染「我们这边出的问题」—— 而
+    「那句红色是错的」正是本模块存在的理由之一。`failureError` 把颜色挂在 `err.failure`
+    上，调用点直接交给告警组件。
+    """
+    results = _drive([{"cause": cause, "failed_files": []} for cause in CAUSES])
+    for cause, item in zip(CAUSES, results, strict=True):
+        assert item["errorMessage"], f"{cause} 抛出的错误没有消息"
+        assert item["errorColor"] == item["text"]["color"], f"{cause} 抛出的错误颜色与卡片不一致"
+    colors = {cause: item["errorColor"] for cause, item in zip(CAUSES, results, strict=True)}
+    assert colors["service_unavailable"] == "warning"
+    assert colors["material_unreadable"] == "error"

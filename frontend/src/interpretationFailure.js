@@ -83,6 +83,19 @@ export function interpretationFailureColor(block) {
   return interpretationFailureText(block)?.color || null;
 }
 
+/** 失败块 → 一个可抛出的错误，**自带颜色**。
+ *
+ *  只有一句话的 `Error` 传不了颜色，调用点就只好用红色渲染「我们这边出的问题」——
+ *  而本模块存在的理由之一就是那句红色是错的。所以把 `{message, color}` 挂在
+ *  `err.failure` 上，调用点直接交给告警组件。
+ */
+export function failureError(report) {
+  const text = interpretationFailureText(report?.interpretation_failure);
+  const err = new Error(text ? `${text.title}${text.description}` : NO_CAUSE);
+  err.failure = { message: err.message, color: text?.color || 'error' };
+  return err;
+}
+
 /** 没有成因可给时的那句话（历史行）。调用点**不要**各自再写一句兜底 ——
  *  「失败时患者看到什么」只能有一处可改。 */
 export const NO_CAUSE_TEXT = NO_CAUSE;
