@@ -115,6 +115,14 @@ export function abnormalSummaryText(result) {
     .filter((metric) => metric.confirmation_status !== 'excluded' && isAbnormal(displayFlag(metric)))
     .map((metric) => metric.metric_name)
     .join('、');
+  // **有未判定的行时不许宣告「均在参考区间内」。** 那些行是**没判出来**，不是「在区间内」
+  // —— 在它们存在时说那句话是一句假话，而患者会据此放心。这是本改动可见的行为变化。
+  //
+  // 少了 `counts` 字段时（旧服务端响应、或测试夹具）**不说那句话**：`undecided` 无法从
+  // 逐行数据推导出来（它要「判定为空」与「患者没排除」两条，而前端那份展示映射对
+  // 「模型没标异常、也没有参考范围」的行无法与「判不了」区分）。一句说不出口的结论，
+  // 比一句可能为假的结论好。
+  const knowsCounts = typeof counts.undecided === 'number';
   return {
     type: abnormalCount || undecidedCount ? 'warning' : 'success',
     title: abnormalCount ? `异常指标 ${abnormalCount} 项` : '未见异常指标',
@@ -122,7 +130,9 @@ export function abnormalSummaryText(result) {
       ? names
       : undecidedCount > 0
         ? `另有 ${undecidedCount} 项未能判定，未参与解读，请查看下方说明。`
-        : '当前报告的指标均在参考区间内。',
+        : knowsCounts
+          ? '当前报告的指标均在参考区间内。'
+          : '未发现异常标记的指标。',
   };
 }
 
