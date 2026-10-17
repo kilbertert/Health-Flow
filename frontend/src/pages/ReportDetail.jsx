@@ -100,21 +100,56 @@ function metricColumns(onOpenSource) {
   ];
 }
 
+/**
+ * 告警块的标题与描述 —— **数字来自服务端**（GLOSSARY.md 的「报告指标计数」）。
+ *
+ * 导出是为了能在测试里直接钉住结论句的规则：有未判定的行时**不许**宣告「均在参考区间内」
+ * ——那些行是**没判出来**，不是「在区间内」，而患者会据此放心。这是本改动可见的行为变化。
+ */
+export function abnormalSummaryText(result) {
+  const counts = result?.counts || {};
+  const abnormalCount = counts.abnormal ?? 0;
+  const undecidedCount = counts.undecided ?? 0;
+  // 名字列表仍是行渲染：服务端的数决定不了顺序，也带不了名字。
+  const names = (result?.metrics || [])
+    .filter((metric) => metric.confirmation_status !== 'excluded' && isAbnormal(displayFlag(metric)))
+    .map((metric) => metric.metric_name)
+    .join('、');
+  // **有未判定的行时不许宣告「均在参考区间内」。** 那些行是**没判出来**，不是「在区间内」
+  // —— 在它们存在时说那句话是一句假话，而患者会据此放心。这是本改动可见的行为变化。
+  //
+  // 少了 `counts` 字段时（旧服务端响应、或测试夹具）**不说那句话**：`undecided` 无法从
+  // 逐行数据推导出来（它要「判定为空」与「患者没排除」两条，而前端那份展示映射对
+  // 「模型没标异常、也没有参考范围」的行无法与「判不了」区分）。一句说不出口的结论，
+  // 比一句可能为假的结论好。
+  const knowsCounts = typeof counts.undecided === 'number';
+  return {
+    type: abnormalCount || undecidedCount ? 'warning' : 'success',
+    title: abnormalCount ? `异常指标 ${abnormalCount} 项` : '未见异常指标',
+    description: abnormalCount
+      ? names
+      : undecidedCount > 0
+        ? `另有 ${undecidedCount} 项未能判定，未参与解读，请查看下方说明。`
+        : knowsCounts
+          ? '当前报告的指标均在参考区间内。'
+          : '未发现异常标记的指标。',
+  };
+}
+
 function MetricOverview({ result, onOpenSource }) {
   const columns = useMemo(() => metricColumns(onOpenSource), [onOpenSource]);
   // 患者明确排除的指标没有生效值（服务端语义），不进报告单总览 ——
   // 否则患者会看到自己刚排除的指标还挂在报告上。
   const metrics = (result.metrics || []).filter((metric) => metric.confirmation_status !== 'excluded');
-  const abnormalMetrics = metrics.filter((metric) => isAbnormal(displayFlag(metric)));
-  const abnormalNames = abnormalMetrics.map((metric) => metric.metric_name).join('、');
+  const summary = abnormalSummaryText(result);
   return (
     <Card className="metric-overview-card" title="指标总览">
       <Alert
         className="report-abnormal-summary"
-        type={abnormalMetrics.length ? 'warning' : 'success'}
+        type={summary.type}
         showIcon
-        title={abnormalMetrics.length ? `异常指标 ${abnormalMetrics.length} 项` : '未见异常指标'}
-        description={abnormalMetrics.length ? abnormalNames : '当前报告的指标均在参考区间内。'}
+        title={summary.title}
+        description={summary.description}
         style={{ marginBottom: 16 }}
       />
       <Table

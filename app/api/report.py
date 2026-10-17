@@ -45,6 +45,7 @@ from app.schema.report import (
     MetricRecord,
     RecommendationResponse,
     ReportConfirmationRequest,
+    ReportMetricCounts,
 )
 from app.service.admission_projection import (
     admission_shapes,
@@ -83,6 +84,7 @@ from app.service.report_material import (
 from app.service.report_material import (
     resolve as resolve_material,
 )
+from app.service.report_metric_counts import metric_counts
 from app.service.report_ownership import UNOWNED_SENTINEL, resolve_owner
 from app.service.report_status import record_event, transition
 from app.service.report_subject import (
@@ -696,6 +698,7 @@ def _report_response(
     extraction_job = getattr(report, "extraction_job", None)
     assessed = has_conclusion(report.status)
     pairs, ledger = admission_shapes(metrics, assessed=assessed, catalog=catalog)
+    counts = metric_counts(metrics)
     return MedicalReportResponse(
         id=report.id,
         patient_id=report.patient_id,
@@ -705,6 +708,12 @@ def _report_response(
         department=report.department,
         metrics=[_metric_response(metric, reason) for metric, reason in pairs],
         admission=ledger,
+        counts=ReportMetricCounts(
+            parsed=counts.parsed,
+            abnormal=counts.abnormal,
+            needs_review=counts.needs_review,
+            undecided=counts.undecided,
+        ),
         files=[
             {
                 "file_index": item.file_index,

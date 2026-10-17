@@ -49,3 +49,7 @@ class ReportHistoryItem(BaseModel):
     metric_count: int = 0
     finding_count: int = 0
     abnormal_count: int = 0
+    # 需要患者处理的行数（GLOSSARY.md 的「报告指标计数」）：异常的行，加上「判定不出来、
+    # 但模型宣称异常」的行。它是**另一个谓词**，不是 `abnormal_count` 的第二种读法 ——
+    # 两者在某份报告上可以不同，那是两个具名事实的差，不是一个数的两套算法。
+    needs_review_count: int = 0

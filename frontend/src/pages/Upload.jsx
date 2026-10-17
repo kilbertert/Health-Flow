@@ -175,9 +175,13 @@ export function isAbnormal(flag) {
   return ['H', 'HIGH', '高', 'L', 'LOW', '低', 'A', '*'].includes(String(flag || '').toUpperCase());
 }
 
-function needsReview(metric) {
+export function needsReview(metric) {
   // 「这条指标值不值得患者看一眼」= 它显示的标记是异常（偏高/偏低/阳性）或待核对。
   // 直接复用 displayFlag，避免「显示的标记」与「计入异常候选」再次分叉。
+  //
+  // **页头那个数就是数这些行**（服务端的 `counts.needs_review` 是同一条判据的服务端镜像）。
+  // 两者分叉就会出现「数字说有 3 项，下面只有 2 条」—— 服务端那条镜像由
+  // `tests/test_metric_counts.py` 驱动这个函数逐行断言。
   const flag = displayFlag(metric);
   return flag === 'H' || flag === 'L' || flag === 'A' || flag === '待核对';
 }
@@ -1507,7 +1511,12 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
       ? metrics
       : metrics.filter(needsReview);
   }, [result?.metrics, showAllMetrics]);
-  const abnormalCount = (result?.metrics || []).filter(needsReview).length;
+  // 页头的数字来自**服务端**（GLOSSARY.md 的「报告指标计数」）—— 它此前在这里自己用
+  // `needsReview` 数一遍，而报告单用的是另一个谓词，于是同一份报告能同时说「未见异常
+  // 指标」与「其中 N 项需要确认」。`needsReview` 保留：它决定**显示哪些行**
+  // （`metricOptions`），那是渲染，不是计数。
+  const counts = result?.counts || {};
+  const abnormalCount = counts.needs_review ?? (result?.metrics || []).filter(needsReview).length;
 
   return (
     <div className="page-stack">
@@ -1629,7 +1638,7 @@ export default function UploadPage({ account, initialReportId = null, onReportSa
             <Alert
               type="info"
               showIcon
-              title={`识别到 ${result.metrics?.length || 0} 项指标，其中 ${abnormalCount} 项需要确认；当前优先显示异常候选项和未映射项。`}
+              title={`识别到 ${counts.parsed ?? result.metrics?.length ?? 0} 项指标，其中 ${abnormalCount} 项需要确认；当前优先显示异常候选项和未映射项。`}
               style={{ marginBottom: 16 }}
             />
           )}

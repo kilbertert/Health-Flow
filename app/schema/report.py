@@ -250,6 +250,29 @@ class ReportAuditEventRecord(BaseModel):
     created_at: datetime
 
 
+class ReportMetricCounts(BaseModel):
+    """一份报告的四个患者可见计数（GLOSSARY.md 的「报告指标计数」）。
+
+    它此前由**三处各自计算**：历史摘要数 `{H,L,A}`、报告单自己再数一遍（还先剔掉
+    `excluded` 行）、确认页数的是另一个把「待核对」也算进去的谓词。于是同一份报告在报告单
+    上说「未见异常指标」并给出「当前报告的指标均在参考区间内」，在确认页上却在数
+    「其中 N 项需要确认」。
+
+    `undecided` 是**结论句的前提**：有它的时候不许宣告「均在参考区间内」——那些行是
+    **没判出来**，不是「在区间内」。`needs_review` 与它刻意分开：一行 `two_values`
+    同时落进两桶，而一行「模型没标异常、也没有参考范围」只落进 `undecided`。
+    """
+
+    #: 已解析行数 —— 另外三个数的分母。
+    parsed: int = 0
+    #: 判定为异常的行数（`H`/`L`/`A`）。
+    abnormal: int = 0
+    #: 需要患者处理的行数（异常，或判定不出来但模型宣称异常）。
+    needs_review: int = 0
+    #: 还没有判定的行数（判不出来、且患者没有排除）。结论句以它为前提。
+    undecided: int = 0
+
+
 class MedicalReportResponse(BaseModel):
     id: int
     patient_id: str
@@ -278,6 +301,10 @@ class MedicalReportResponse(BaseModel):
     # 台账表达那件事：全 0 与「没有一行被拦下」在数值上一样，靠旁证去区分等于给
     # 同一个问题留第二个答案 —— 报告状态才是那个答案的唯一来源。
     admission: "AdmissionLedger | None" = None
+    # 报告指标计数（GLOSSARY.md 的「报告指标计数」）。报告单与确认页的**数字**读它，
+    # 不再自己数一遍 —— 它们此前各用一个谓词，所以同一份报告能同时说「未见异常指标」
+    # 与「其中 N 项需要确认」。
+    counts: ReportMetricCounts = Field(default_factory=ReportMetricCounts)
     # 患者可见的健康风险提示（唯一出域的形状）。内部事实层不出域。
     #
     # 历史行存的是旧形状（含 `schema_version` / `patient_reply` / 内部层
