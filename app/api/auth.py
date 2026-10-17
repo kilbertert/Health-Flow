@@ -14,28 +14,12 @@ from app.api.deps import db_dependency, session_owner_dependency
 from app.config import get_settings
 from app.data.models import MedicalReport
 from app.schema.auth import ReportHistoryItem, SessionSubjectResponse, TicketExchangeRequest
-from app.service.evidence_bridge import infer_abnormal_flag_for_metric
+from app.service.report_metric_counts import metric_counts
 from app.service.report_ownership import subject_storage_id
 from app.service.sessions import SESSION_COOKIE, revoke_session
 from app.service.tickets import TicketError, build_verifier
 
 router = APIRouter()
-
-
-def _abnormal_metric_count(report: MedicalReport) -> int:
-    """历史摘要的「N 项偏高/偏低」：数**异常判定**为 H、L 或 A 的指标。
-
-    不是数模型写下的原始 abnormal_flag。两个口径会在患者眼前分叉——模型标 H
-    但数值在参考范围内时，报告页显示正常而摘要计一条异常。#30 引入摘要时的
-    口径由此修正为「判定口径」，即摘要预测解读会考虑什么。
-
-    `A` 是分类结果的阳性（`Detected`，详见 `infer_abnormal_flag`）：它同样是异常，
-    只是没有方向 —— 不数它会让一个阳性检验在摘要里消失（#236）。
-
-    判定不可定（缺参考范围、含比较符、多数字值）的指标**不计入**；它们在报告页
-    仍以原始标记展示、由患者在指标确认中处理。
-    """
-    return sum(1 for metric in report.metrics if infer_abnormal_flag_for_metric(metric) in {"H", "L", "A"})
 
 
 def _require_owner(owner_id: str | None) -> str:
@@ -123,13 +107,16 @@ async def report_history(
             status=report.status,
             exam_date=report.exam_date,
             created_at=report.created_at,
-            metric_count=len(report.metrics),
-            abnormal_count=_abnormal_metric_count(report),
+            # 四个数由**唯一**一处给出（GLOSSARY.md 的「报告指标计数」）：历史摘要、报告单
+            # 与确认页读的是同一份判据，所以同一份报告不可能在三处给出互相矛盾的说法。
+            metric_count=counts.parsed,
+            abnormal_count=counts.abnormal,
+            needs_review_count=counts.needs_review,
             finding_count=(
                 len(report.evidence_result.get("findings") or []) if isinstance(report.evidence_result, dict) else 0
             ),
         )
-        for report in reports
+        for report, counts in ((report, metric_counts(report.metrics)) for report in reports)
     ]
 
 

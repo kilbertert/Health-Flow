@@ -240,7 +240,7 @@ def test_excluded_rows_are_not_decided_and_pending_rows_still_are():
 
 def test_history_count_uses_the_decision_not_the_model_flag():
     """摘要数的是「判定为 H/L」，且不数患者排除掉的行。"""
-    from app.api.auth import _abnormal_metric_count
+    from app.service.report_metric_counts import metric_counts
 
     class _Report:
         def __init__(self, metrics):
@@ -258,4 +258,4 @@ def test_history_count_uses_the_decision_not_the_model_flag():
             _metric(metric_value="6.5/7.2", reference_range="3.9-6.1", confirmation_status="pending"),
         ]
     )
-    assert _abnormal_metric_count(report) == 1
+    assert metric_counts(report.metrics).abnormal == 1

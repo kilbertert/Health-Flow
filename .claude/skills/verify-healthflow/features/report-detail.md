@@ -65,3 +65,17 @@ await page.getByRole('button', { name: '查看空腹血糖原文' }).click();
   那个瞬时值 —— 它会在动画跑起来之前的一帧读到 960 而当场通过，紧接着的断言又读到动画
   中间的 192，于是只在并发负载下才红（#234）。
 - 技术详情默认收起，需先点「技术详情」再断言内容。
+
+## 报告指标计数（#245）
+
+计数由**服务端**给出（`counts`：`parsed` / `abnormal` / `needs_review` / `undecided`），
+前端只渲染。要证明这条，不能只看「页面上有数字」——要构造一条**计入一个数、不计入另一个
+数**的行：
+
+- 一行 `abnormal_flag: 'H'` 而 `metric_value: '3.39 / 3.63'`（值判不出单值）→
+  `inferred_abnormal_flag: null`，它计入 `needs_review`、**不计入** `abnormal`，
+  且 `undecided` 为真。
+- 断言报告单**不出现**「均在参考区间内」（那句话在有未判定行时是假的），
+  改为「另有 N 项未能判定」。
+
+可跑的先例：`e2e/report-counts.spec.js`（mock 同源报告端点喂入上面那份响应）。
