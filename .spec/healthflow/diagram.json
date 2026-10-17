@@ -1,0 +1,222 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "HealthFlow：报告线四层，加两块冻结代码",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "legend": {
+      "mode": "hidden"
+    },
+    "repository": {
+      "url": "https://github.com/kilbertert/Health-Flow",
+      "revision": "719a43f137e3630ec8d3db6807d5853acba476ef"
+    },
+    "note": "上半是当前运行时：解析 → 判定 → 出域，每一步都向下依赖。schema 在最底是硬约束而非审美——出域契约要直接消费 service 的词表，词表因此不 import 任何项目模块；反过来若契约依赖 service，导入即成为环（实测报半初始化 ImportError），所以箭头由 service 指向 schema 的那条是「读取词表的声明」，不是「依赖实现」。下方两块是冻结代码：archive（Chat、训练、知识图谱、数据增强）已移出运行时承诺，改它不产生对外行为；它画在下方而不是删掉，因为「冻结」是一个状态、不是一个位置，读代码的人无法从目录判断它是否在跑。图中不画的：模型调用链、SSE、以及各判定模块之间的调用关系——那些在节点正文里陈述，画出来会把图变成线团。"
+  },
+  "components": [
+    {
+      "id": "report-api",
+      "type": "frontend",
+      "label": "report-api",
+      "sublabel": "上传 · 确认 · 追溯 · 匹配",
+      "sources": [
+        {
+          "path": ".spec/healthflow/api/report-api/spec.md",
+          "label": "spec"
+        },
+        {
+          "path": "app/api/report.py",
+          "label": "code"
+        }
+      ],
+      "pos": [
+        180,
+        40
+      ],
+      "size": [
+        260,
+        66
+      ]
+    },
+    {
+      "id": "service",
+      "type": "backend",
+      "label": "service",
+      "sublabel": "判定与编排 · 每条规则一个家",
+      "sources": [
+        {
+          "path": ".spec/healthflow/service/spec.md",
+          "label": "spec"
+        },
+        {
+          "path": "app/service/report_worker.py",
+          "label": "code"
+        }
+      ],
+      "pos": [
+        180,
+        200
+      ],
+      "size": [
+        260,
+        66
+      ]
+    },
+    {
+      "id": "schema",
+      "type": "security",
+      "label": "schema",
+      "sublabel": "出域契约 · 最底层",
+      "sources": [
+        {
+          "path": ".spec/healthflow/schema/spec.md",
+          "label": "spec"
+        },
+        {
+          "path": "app/schema/evidence.py",
+          "label": "code"
+        }
+      ],
+      "pos": [
+        180,
+        360
+      ],
+      "size": [
+        260,
+        66
+      ]
+    },
+    {
+      "id": "data",
+      "type": "database",
+      "label": "data",
+      "sublabel": "持久化与外部客户端",
+      "sources": [
+        {
+          "path": ".spec/healthflow/data/spec.md",
+          "label": "spec"
+        },
+        {
+          "path": "app/data/models.py",
+          "label": "code"
+        }
+      ],
+      "pos": [
+        560,
+        300
+      ],
+      "size": [
+        220,
+        66
+      ]
+    },
+    {
+      "id": "archive",
+      "type": "cloud",
+      "label": "archive",
+      "sublabel": "冻结代码 · 不在当前 API",
+      "sources": [
+        {
+          "path": ".spec/healthflow/archive/spec.md",
+          "label": "spec"
+        }
+      ],
+      "pos": [
+        180,
+        540
+      ],
+      "size": [
+        260,
+        66
+      ]
+    },
+    {
+      "id": "agent",
+      "type": "cloud",
+      "label": "agent",
+      "sublabel": "Chat 线 · 冻结",
+      "sources": [
+        {
+          "path": ".spec/healthflow/agent/spec.md",
+          "label": "spec"
+        }
+      ],
+      "pos": [
+        560,
+        540
+      ],
+      "size": [
+        220,
+        66
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "report-api",
+      "to": "service",
+      "label": "提交报告",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        310,
+        155
+      ]
+    },
+    {
+      "from": "service",
+      "to": "schema",
+      "label": "读词表声明",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        310,
+        315
+      ]
+    },
+    {
+      "from": "report-api",
+      "to": "data",
+      "label": "落库",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [
+        480,
+        73
+      ]
+    },
+    {
+      "from": "archive",
+      "to": "agent",
+      "label": "同属冻结",
+      "fromSide": "right",
+      "toSide": "left",
+      "variant": "dashed",
+      "labelAt": [
+        480,
+        573
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "为什么 schema 在最底",
+      "items": [
+        "出域契约被最底层消费",
+        "词表只声明、不 import 项目模块",
+        "反向依赖会成为环（实测 ImportError）"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "冻结不等于废弃",
+      "items": [
+        "改 archive 不产生对外行为",
+        "但被测试与迁移脚本引用",
+        "删除需先评估"
+      ]
+    }
+  ]
+}
