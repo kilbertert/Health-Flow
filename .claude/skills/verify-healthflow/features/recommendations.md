@@ -52,3 +52,18 @@ expect(mallRequests).toEqual([]);
 - 至少保留一条**不 mock 同源端点**的用例（回到真实服务端），否则 mock 本身会
   漂移到与真实契约不一致。
 - 商品读取在服务端。断言时检查浏览器实际发出的请求集合，而不是只看渲染结果。
+
+## 错误分支的原因（#246）
+
+空态的原因由**服务端具名**出域，错误分支同样如此。要证明归因不是从文本里猜的，必须让
+同源端点**按失败形状**返回：
+
+- 报告读不到：`status: 404` + 头 `X-Report-Access-Reason: report_not_found` →
+  患者看到「这份报告打不开」，**不是**「商城暂时不可用」。
+- 会话失效：`status: 401` + 头 `X-Report-Access-Reason: session_expired` →
+  患者被指向**商城入口**（本仓没有登录页，「重新登录」指向一个不存在的入口）。
+- 加购失败：`{url: null, reason: 'report_not_ready'}` → 「还没完成确认」那句，
+  而不是一句一概而论的「暂时无法跳转到商城」。
+
+可跑的先例：`e2e/recommendations-errors.spec.js`（三条都覆盖；`recommendations.spec.js`
+只 mock 2xx，那正是旧的自造成因能活下来的原因）。

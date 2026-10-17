@@ -10,10 +10,11 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import db_dependency, session_owner_dependency
+from app.api.deps import ACCESS_REASON_HEADER, db_dependency, session_owner_dependency
 from app.config import get_settings
 from app.data.models import MedicalReport
 from app.schema.auth import ReportHistoryItem, SessionSubjectResponse, TicketExchangeRequest
+from app.service.recommendation_empty_reason import REPORT_ACCESS_BY_STATUS
 from app.service.report_metric_counts import metric_counts
 from app.service.report_ownership import subject_storage_id
 from app.service.sessions import SESSION_COOKIE, revoke_session
@@ -27,9 +28,16 @@ def _require_owner(owner_id: str | None) -> str:
 
     票面明确写了「解析失败不得回退到登录页（那会让整个应用白屏）」。所以这里只报错，
     不重定向、不渲染任何需要身份的东西。
+
+    成因随**响应头**出域（不是从 `detail` 里猜）：前端要据此说「请从商城入口重新进入」，
+    而这句话的正确来源只有一处 —— 本仓没有登录页（#172）。
     """
     if not owner_id:
-        raise HTTPException(status_code=401, detail="会话无效，请从商城入口重新进入")
+        raise HTTPException(
+            status_code=401,
+            detail="会话无效，请从商城入口重新进入",
+            headers={ACCESS_REASON_HEADER: REPORT_ACCESS_BY_STATUS[401]},
+        )
     return owner_id
 
 

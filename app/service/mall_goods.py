@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from app.config import Settings, get_settings
 from app.service.condition_tags import label_pair_for
+from app.service.recommendation_empty_reason import MALL_GOODS_REASONS_ORDERED
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +35,12 @@ logger = logging.getLogger(__name__)
 EMPTY_LABELS: tuple[tuple[str, str], ...] = ()
 
 # 调用成功但没货可给 / 压根没调到商城。两者对运维的含义不同，不得合并。
-# 这是响应契约词汇表（`app.schema.report.RecommendationReason`）里本模块**能产生**的
-# 子集；第四个值 `no_published_card` 由端点判定（报告本身没有风险，不调商城）。
-# 两侧一致由 `tests/test_mall_goods.py` 断言，避免多写一份枚举后各自漂移。
-Reason = Literal["no_label_data", "mall_unavailable"]
+#
+# 它是响应契约词汇表里本模块**能产生**的**子集**，而那份完整词表的家在
+# `app/service/recommendation_empty_reason.py`（第三个值 `no_published_card` 由端点判定：
+# 报告本身没有风险，不调商城）。这里用 `Literal[*...]` **派生**而不是再抄一遍 ——
+# 两侧一致由 `tests/test_mall_goods.py` 断言，而派生让漂移不可能发生。
+Reason = Literal[*MALL_GOODS_REASONS_ORDERED]
 
 
 class MallGoodsError(RuntimeError):

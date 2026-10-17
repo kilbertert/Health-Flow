@@ -1,5 +1,11 @@
 const BASE = '/api';
 
+//: 服务端具名成因的响应头（`app/api/deps.py` 的 `ACCESS_REASON_HEADER`）。
+//:
+//: 报告访问失败（会话失效 / 报告读不到）的**成因**走这里，而不是让人从 `detail` 那句
+//: 人话里猜 HTTP 状态。`detail` 是给人看的、会随措辞变；这个头是给机器读的判据。
+const ACCESS_REASON_HEADER = 'X-Report-Access-Reason';
+
 export async function parseError(res) {
   let detail = `请求失败（HTTP ${res.status}）`;
   try {
@@ -10,12 +16,17 @@ export async function parseError(res) {
   } catch {
     // Keep the HTTP status fallback for non-JSON responses.
   }
-  return detail;
+  const error = new Error(detail);
+  // **把结构化事实带出去**：`parseError` 此前只留下那句话，状态码被丢掉，于是调用方只能
+  // 从文本里把它嗅探回来。成因由服务端给出，取不到就是 `null`（调用方落到中性说法）。
+  error.status = res.status;
+  error.accessReason = res.headers.get(ACCESS_REASON_HEADER) || null;
+  return error;
 }
 
 async function request(path, options = {}) {
   const res = await fetch(`${BASE}${path}`, { credentials: 'include', ...options });
-  if (!res.ok) throw new Error(await parseError(res));
+  if (!res.ok) throw await parseError(res);
   if (res.status === 204) return null;
   const contentType = res.headers.get('content-type') || '';
   if (contentType.includes('application/json')) return res.json();
@@ -75,7 +86,7 @@ export async function fetchReportPage(reportId, fileIndex, pageNumber, token) {
     `${BASE}/health/report/${reportId}/files/${fileIndex}/pages/${pageNumber}`,
     { credentials: 'include', headers: reportHeaders(token) },
   );
-  if (!res.ok) throw new Error(await parseError(res));
+  if (!res.ok) throw await parseError(res);
   return res.blob();
 }
 

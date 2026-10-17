@@ -2,15 +2,37 @@ import React, { useEffect, useState } from 'react';
 import { Button, Card, Empty, List, Space, Spin, Tag, Typography, message } from 'antd';
 import { createCartLink, getReportRecommendations } from '../api.js';
 
-// 为空的三种情况必须能区分：把"商城不可达"和"没有对应商品"合并成一句，
-// 会让运维分不清该去修配置还是该去提醒租户上货。
-// 后端的三种 reason 由服务端给出；`session_expired` 是**客户端**的第四种，
-// 不对应服务端契约——它描述的是这次请求根本没到达取商品那一步。
-const EMPTY_REASONS = {
+// 取货为空的原因由**服务端**给出（`app/service/recommendation_empty_reason.py` 是词表的
+// 家）。这里只把每个取值翻成患者能懂的一句话 —— **不推导、不合并、不发明**。
+//
+// 这里此前有两处客户端自造的事实，本文件不再有：
+//   1. `session_expired` —— 一个服务端**从不产生**的第四种原因，靠 `/\\b(401|404)\\b/`
+//      从**人话**里捞 HTTP 状态。那句人话由 `api.js` 的 `parseError` 拼成，可能被服务端的
+//      `detail` 覆盖，于是同一个 401 在有的路径上被认成「登录失效」、在有的路径上被认成
+//      「商城暂时不可用」。现在访问失败由服务端具名出域（响应头 `X-Report-Access-Reason`），
+//      前端读**结构化事实**。
+//   2. 「加购失败」那句一概而论的兜底 —— 服务端已经把 `report_not_ready` 与
+//      `link_unavailable` 两个具名原因送过来了，丢掉它们等于把一个到手的结论扔掉。
+export const EMPTY_REASONS = {
   no_published_card: '本次未能生成健康风险提示，因此没有可对应的商品。',
   no_label_data: '该健康方向暂无可推荐的已上架商品。',
   mall_unavailable: '商城暂时不可用，请稍后再试。',
-  session_expired: '登录状态已失效，请重新登录后查看推荐。',
+};
+
+// 报告访问那一类：这份报告读不到（会话失效，或报告不存在/不属于你）。它们是**报告级访问
+// 问题**，不是「商城的空」—— 说成「商城不可用」会把人引到错的排查方向。
+//
+// 会话失效那句必须指向**商城入口**：本仓没有登录页（#172），叫患者「重新登录」是在指向
+// 一个不存在的页面。这句话的正确来源也是服务端（`app/api/auth.py`），这里与它同向。
+export const ACCESS_REASONS = {
+  session_expired: '登录状态已失效，请从商城入口重新进入后查看推荐。',
+  report_not_found: '这份报告打不开，请返回报告列表重新进入。',
+};
+
+// 加购失败的两个具名原因（服务端 `CartLinkResponse.reason`）。两件事、两句话。
+export const CART_LINK_REASONS = {
+  report_not_ready: '这份报告还没完成确认，暂时不能加购。',
+  link_unavailable: '暂时无法跳转到商城，请稍后再试。',
 };
 
 function priceText(item) {
@@ -62,7 +84,10 @@ export default function Recommendations({ reportId, reportToken = '' }) {
 
   useEffect(() => {
     if (!reportId) {
-      setState({ loading: false, items: [], reason: 'no_published_card', error: '' });
+      // 报告都还没打开，谈不上「没有可据以取货的风险」——**不伪造服务端的成因**。
+      // 组件本不该在这个状态下挂载（调用方都在拿到报告之后才渲染它）；真的出现时
+      // 如实说「还没有报告」，而不是冒充一个服务端取值。
+      setState({ loading: false, items: [], reason: null, error: '' });
       return undefined;
     }
     let active = true;
@@ -75,14 +100,15 @@ export default function Recommendations({ reportId, reportToken = '' }) {
       })
       .catch((err) => {
         // 取推荐失败不阻断报告页：如实说明，不伪造商品。
-        // 但**不能把所有失败都归给商城**：会话过期（或报告被删除后重开）会让这个请求
-        // 拿到 401/404，那是本服务自己的访问问题，说成"商城不可用"会把人引到错的排查方向。
+        //
+        // 归因不再靠正则从消息里捞状态码 —— 那是「按自由文本决定归因」，与服务端那句
+        // 人话的措辞耦合（#226 消灭的是同一形状的错法）。起因由服务端**具名**出域
+        // （响应头 `X-Report-Access-Reason`），拿不到时才落到中性的「商城不可用」。
         if (active) {
-          const expired = /\b(401|404)\b/.test(err.message || '');
           setState({
             loading: false,
             items: [],
-            reason: expired ? 'session_expired' : 'mall_unavailable',
+            reason: err.accessReason || 'mall_unavailable',
             error: err.message,
           });
         }
@@ -100,11 +126,11 @@ export default function Recommendations({ reportId, reportToken = '' }) {
         window.location.assign(link.url);
         return;
       }
-      // 服务端明确说构造不出来——如实说明是**跳转前**的失败，与「商城拒绝了链接」
-      // 是两回事，后者本仓看不到（契约里分得很清）。
-      message.info('暂时无法跳转到商城，请稍后再试。');
+      // 服务端给了**具名原因**（`report_not_ready` / `link_unavailable`），照它说话。
+      // 此前这里是一句一概而论的「暂时无法跳转到商城」—— 把两个已经到手的结论扔掉了。
+      message.info(CART_LINK_REASONS[link.reason] || '暂时无法跳转到商城，请稍后再试。');
     } catch (err) {
-      message.error(err.message || '暂时无法跳转到商城，请稍后再试。');
+      message.error(CART_LINK_REASONS[err.accessReason] || err.message || '暂时无法跳转到商城，请稍后再试。');
     } finally {
       setBusySpu('');
     }
@@ -130,7 +156,9 @@ export default function Recommendations({ reportId, reportToken = '' }) {
             description="暂无推荐"
           />
           <Typography.Paragraph type="secondary" style={{ textAlign: 'center', marginBottom: 0 }}>
-            {EMPTY_REASONS[state.reason] || '该报告暂无可推荐的商品。'}
+            {state.reason
+              ? EMPTY_REASONS[state.reason] || ACCESS_REASONS[state.reason] || '该报告暂无可推荐的商品。'
+              : '该报告暂无可推荐的商品。'}
           </Typography.Paragraph>
         </>
       )}

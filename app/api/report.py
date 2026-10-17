@@ -26,7 +26,7 @@ from fastapi import (
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from app.api.deps import db_dependency, session_owner_dependency
+from app.api.deps import ACCESS_REASON_HEADER, db_dependency, session_owner_dependency
 from app.config import get_settings
 from app.data.models import MedicalReport as ReportModel
 from app.data.models import MetricRecord as MetricModel
@@ -74,6 +74,7 @@ from app.service.mall_goods import fetch_goods, label_pairs_for, serialized
 from app.service.metric_effective_value import effective_value
 from app.service.metric_rows import deduplicate
 from app.service.origin_location import page_url, source_id_for
+from app.service.recommendation_empty_reason import REPORT_ACCESS_BY_STATUS
 from app.service.report_material import (
     ACCEPTED_EXTENSIONS,
     KIND_MEDIA_TYPE,
@@ -122,19 +123,35 @@ def _authorized_report(db: Session, report_id: int, *, owner_id: str) -> ReportM
 
     注意 `report.access_token_hash` 不再参与判定，但**不要求它为空**：历史行里有它，
     而「有令牌」不构成访问依据——本票之后没有任何凭据能替代主体。
+
+    三个分支都给同一个状态与同一个**具名成因**：报告不存在、无主、不属于你 —— 对患者
+    是同一件事，不分别暴露（分别暴露等于告诉调用者「这个 id 存在但不是你的」）。
     """
     report = db.query(ReportModel).filter(ReportModel.id == report_id).first()
     if report is None or not report.owner_id:
-        raise HTTPException(status_code=404, detail="报告不存在")
+        raise _report_not_found()
     # **无主历史行对任何人封闭。** 移除令牌旁路之后有一个更弱的路径会冒出来：
     # `resolve_owner` 在无会话时返回哨兵值，若它与旧行的 `owner_id` 相等，
     # 一个未认证请求就能读到无主报告——那比被移除的令牌旁路还宽。所以哨兵值
     # 显式拒绝，双方都不算匹配。
     if report.owner_id == UNOWNED_SENTINEL:
-        raise HTTPException(status_code=404, detail="报告不存在")
+        raise _report_not_found()
     if not hmac.compare_digest(report.owner_id or "", owner_id):
-        raise HTTPException(status_code=404, detail="报告不存在")
+        raise _report_not_found()
     return report
+
+
+def _report_not_found() -> HTTPException:
+    """报告读不到时的唯一形状：状态 + **具名成因**。
+
+    成因走响应头而不是从 `detail` 里猜 —— 前端此前用 `/\\b(401|404)\\b/` 匹配那句人话，
+    而 `detail` 一旦被写得更具体（例如带上报告号），正则就再也匹配不到，归因**静默翻转**。
+    """
+    return HTTPException(
+        status_code=404,
+        detail="报告不存在",
+        headers={ACCESS_REASON_HEADER: REPORT_ACCESS_BY_STATUS[404]},
+    )
 
 
 def _persist_report_files(
