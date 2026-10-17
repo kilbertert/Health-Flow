@@ -1,0 +1,10 @@
+{
+  "dashboard": {
+    "title": "HealthFlow"
+  },
+  "lint": {
+    "governedRoots": [
+      "app"
+    ]
+  }
+}
