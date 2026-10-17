@@ -177,7 +177,10 @@ def test_recover_stale_jobs_leaves_a_finished_report_alone():
         report = db.query(MedicalReport).one()
         assert report.status == "pending_confirmation"  # 没有被退回解析中
         events = db.query(ReportAuditEvent).all()
-        assert [event.action for event in events] == ["status_recovered"]
+        # **报告状态没有动过** —— 所以这一笔是审计专用事件，不与迁移同形（#247）。
+        # 它此前写成 `status_recovered`，与上面那条真的迁移同名：读者无法分辨
+        # 「状态被恢复」与「状态从未变过、只记了一笔」。
+        assert [event.action for event in events] == ["extraction_committed_unacked"]
         assert events[0].detail["reason"] == "stale_running_job_after_success"
 
 

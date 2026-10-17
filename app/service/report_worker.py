@@ -11,7 +11,7 @@ from pathlib import Path
 from sqlalchemy import update
 from sqlalchemy.orm import sessionmaker
 
-from app.api.report import ParseOutcome, _audit, _carried_forward, _parse_report
+from app.api.report import ParseOutcome, _carried_forward, _parse_report
 from app.config import get_settings
 from app.data.models import (
     MedicalReport,
@@ -20,7 +20,7 @@ from app.data.models import (
 )
 from app.data.mysql_client import get_mysql_client
 from app.service.interpretation_failure import InterpretationFailure, classify, is_retryable
-from app.service.report_status import transition
+from app.service.report_status import record_event, transition
 
 
 def recover_stale_jobs(factory) -> int:
@@ -58,17 +58,21 @@ def recover_stale_jobs(factory) -> int:
                 job.error_class = None
                 job.completed_at = now
                 job.updated_at = now
-                _audit(
+                # 解析**已经提交**（指标行已落库、报告已离开 processing），只是 worker 在
+                # ack 之前重启。**报告状态没有被碰过** —— 所以这一笔是审计专用事件，不是
+                # 一次迁移。它此前与真的迁移同名（`status_recovered`），审计流因此断言了
+                # 一次「状态被恢复」而状态机从未动过。
+                record_event(
                     db,
                     report,
-                    "status_recovered",
-                    {
+                    "extraction_committed_unacked",
+                    actor="system:report-worker",
+                    detail={
                         "job_id": job.id,
                         "reason": "stale_running_job_after_success",
                         "report_status": report.status,
                         "job_outcome": "completed",
                     },
-                    actor="system:report-worker",
                 )
                 continue
             job.status = "queued"
@@ -182,23 +186,26 @@ def run_next_job(factory) -> int | None:
         if report is not None and not still_processing and not read_error:
             # 报告在我们开始解析之前就已经离开 `processing`（患者已确认或评估过）。
             # 这一轮**什么都没解析**（上面据此没读文件、没调 `_parse_report`），所以
-            # 没有失败可报，更不该往患者已经看到的东西里写一个字。任务直接 ack 掉：
-            # 同一形状在 `recover_stale_jobs` 里也是这么处置的。
+            # 没有失败可报，更不该往患者已经看到的东西里写一个字。任务直接 ack 掉。
+            #
+            # 与上面那条 `extraction_committed_unacked` 是**两件事**，名字因此不同：
+            # 那一条是「解析成功提交了、只差 ack」，这一条是「这一轮什么都没做」。
+            # 两条都**没有迁移状态**，所以都是审计专用事件，不与迁移同形。
             job.status = "completed"
             job.error_class = None
             job.completed_at = now
             job.updated_at = now
-            _audit(
+            record_event(
                 db,
                 report,
-                "status_recovered",
-                {
+                "extraction_dropped_for_settled_report",
+                actor="system:report-worker",
+                detail={
                     "job_id": job.id,
                     "reason": "skipped_job_for_a_report_that_left_processing",
                     "report_status": report.status,
                     "job_outcome": "completed",
                 },
-                actor="system:report-worker",
             )
             db.commit()
             return job_id

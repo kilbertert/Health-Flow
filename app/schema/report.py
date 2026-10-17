@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from app.schema.evidence import PatientNotices
 from app.service.admission_vocabulary import AdmissionReasonLiteral
+from app.service.audit_vocabulary import AuditActionLiteral
 from app.service.confirmation_vocabulary import (
     DECISIONS_ORDERED,
     REQUEST_DECISIONS_ORDERED,
@@ -227,6 +228,26 @@ class AdmissionLedger(BaseModel):
     total: int = 0
 
 
+class ReportAuditEventRecord(BaseModel):
+    """一条审计事件（GLOSSARY.md 的「审计事件」）。
+
+    它此前是 `list[dict[str, Any]]`：`action` 没有类型、没有约束，而**全部 action 名只
+    出现在 `report_status.transition` 的 docstring 里** —— 拼错一个名字不会有任何东西
+    发现。现在 `action` 派生自 `app/service/audit_vocabulary.py` 的那一份声明。
+
+    **`detail` 刻意保持自由形状。** 每条事件要带的明细本来就不同（抽取轨迹、确认过的
+    指标 id、任务 id），给它一个统一模型只会逼出一堆全可选的字段 —— 那是把「每条自己
+    的形状」换成「一个谁都不完整的形状」。类型化的收益在 action 上，因为 action 是
+    被**判读**的那个字段，而 detail 是被**查证**的。
+    """
+
+    action: AuditActionLiteral
+    actor: str
+    correlation_id: str | None = None
+    detail: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
 class MedicalReportResponse(BaseModel):
     id: int
     patient_id: str
@@ -273,7 +294,10 @@ class MedicalReportResponse(BaseModel):
     interpretation_failure: InterpretationFailureReport | None = None
     extraction_job: ReportExtractionJobResponse | None = None
     extraction_trace: dict[str, Any] | None = None
-    audit_events: list[dict[str, Any]] = Field(default_factory=list)
+    # 这份报告的审计流，按时间序**原样**透出（`app/api` 不得筛、不得挑 —— 见
+    # `tests/test_report_status_vocabulary.py` 的守卫）。逐条目是带类型的记录，
+    # action 取自唯一的词表。
+    audit_events: list[ReportAuditEventRecord] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 
