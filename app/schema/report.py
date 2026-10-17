@@ -16,6 +16,8 @@ from app.service.interpretation_failure import (
     FAILURE_LITERAL,
     PATIENT_ACTION_LITERAL,
 )
+from app.service.report_status import PATIENT_STATUSES
+from app.service.report_subject import SUBJECT_CONSISTENCIES_ORDERED
 
 
 class MetricRecord(BaseModel):
@@ -265,10 +267,8 @@ class MedicalReportResponse(BaseModel):
     # 患者可见的报告状态（GLOSSARY.md 的「报告状态」）。唯一迁移入口见
     # app/service/report_status.py；数据库列仍是 String（兼容既有行），
     # 但这个契约只允许这五个值。
-    status: Literal["processing", "pending_confirmation", "confirmed", "assessed", "failed"] = (
-        "pending_confirmation"
-    )
-    subject_consistency: Literal["same", "different", "uncertain"] | None = None
+    status: Literal[*PATIENT_STATUSES] = "pending_confirmation"
+    subject_consistency: Literal[*SUBJECT_CONSISTENCIES_ORDERED] | None = None
     # 报告级的准入台账（GLOSSARY.md 的「解读准入」）：每一行的结论恰好归一类，
     # 四类相加 == 已解析行数。`included` 是**成功进入解读**的行数 —— 这是逐行的
     # `admission_reason` 那个 `None` 独自表达不了的那一半（它还要兼表达「本报告
@@ -317,4 +317,4 @@ class MetricConfirmation(BaseModel):
 
 class ReportConfirmationRequest(BaseModel):
     observations: list[MetricConfirmation] = Field(default_factory=list)
-    subject_consistency: Literal["same", "different", "uncertain"] | None = None
+    subject_consistency: Literal[*SUBJECT_CONSISTENCIES_ORDERED] | None = None

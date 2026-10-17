@@ -15,9 +15,24 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
+#: 患者对「这批文件是不是同一个人的」能表的态。
+#:
+#: 这是那份词表的**家**：出域契约（`app/schema/report.py`）的那两处字段从它派生
+#: （`Literal[*SUBJECT_CONSISTENCIES_ORDERED]`），所以「有几种表态」只有一个答案。
+#: 本模块同时拥有**判定**（初始判定、闸门、表态写入）—— 三者此前各写一套，见模块
+#: docstring。
 SubjectConsistency = Literal["same", "different", "uncertain"]
+
+#: 有序的那一份：`Literal[*X]` 的展开顺序应当稳定，而集合的迭代顺序不是。
+SUBJECT_CONSISTENCIES_ORDERED: Final[tuple[SubjectConsistency, ...]] = (
+    "same",
+    "different",
+    "uncertain",
+)
+
+SUBJECT_CONSISTENCIES: Final[frozenset[str]] = frozenset(SUBJECT_CONSISTENCIES_ORDERED)
 
 
 class SubjectGateError(ValueError):
