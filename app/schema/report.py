@@ -16,6 +16,10 @@ from app.service.interpretation_failure import (
     FAILURE_LITERAL,
     PATIENT_ACTION_LITERAL,
 )
+from app.service.recommendation_empty_reason import (
+    CartLinkReasonLiteral,
+    RecommendationReasonLiteral,
+)
 from app.service.report_status import PATIENT_STATUSES
 from app.service.report_subject import SUBJECT_CONSISTENCIES_ORDERED
 
@@ -123,12 +127,10 @@ class ReportFileRecord(BaseModel):
     source_url: str
 
 
-# 推荐为空的原因。**只有三种**，且与 `app.service.mall_goods.Reason` 是同一条约定：
-# `no_published_card`（本报告没有可据以取货的健康风险，不调商城）、
-# `no_label_data`（商城调用成功但按标签交集为空）、
-# `mall_unavailable`（不可达/超时/业务错误/凭据未配置）。命中时为空值。
-# 这条约定有测试钉住两侧一致（`tests/test_mall_goods.py`），别再各写一份。
-RecommendationReason = Literal["no_published_card", "no_label_data", "mall_unavailable"]
+# 取货为空的原因。取值与 `app/service/recommendation_empty_reason.py` 的声明**派生自
+# 同一处**；`app.service.mall_goods.Reason` 是本模块能产生的那个子集，两侧一致由
+# `tests/test_mall_goods.py` 断言。
+RecommendationReason = RecommendationReasonLiteral
 
 
 class RecommendationItem(BaseModel):
@@ -146,10 +148,14 @@ class RecommendationItem(BaseModel):
 
 
 class CartLinkResponse(BaseModel):
-    """加购深链。为空时 `reason` 说明是哪一种空，不合并成一句。"""
+    """加购深链。为空时 `reason` 说明是哪一种空，不合并成一句。
+
+    两个取值各有各的患者动作：「这份报告还没准备好」与「商城暂时跳不过去」是两件事，
+    此前前端把两者都压成一句「暂时无法跳转到商城」。
+    """
 
     url: str | None = None
-    reason: Literal["report_not_ready", "link_unavailable"] | None = None
+    reason: CartLinkReasonLiteral | None = None
 
 
 class RecommendationResponse(BaseModel):
