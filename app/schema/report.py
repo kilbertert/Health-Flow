@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from app.schema.evidence import PatientNotices
 from app.service.admission_vocabulary import AdmissionReasonLiteral
+from app.service.audit_vocabulary import AuditActionLiteral
 from app.service.confirmation_vocabulary import (
     DECISIONS_ORDERED,
     REQUEST_DECISIONS_ORDERED,
@@ -15,6 +16,8 @@ from app.service.interpretation_failure import (
     FAILURE_LITERAL,
     PATIENT_ACTION_LITERAL,
 )
+from app.service.report_status import PATIENT_STATUSES
+from app.service.report_subject import SUBJECT_CONSISTENCIES_ORDERED
 
 
 class MetricRecord(BaseModel):
@@ -227,6 +230,26 @@ class AdmissionLedger(BaseModel):
     total: int = 0
 
 
+class ReportAuditEventRecord(BaseModel):
+    """一条审计事件（GLOSSARY.md 的「审计事件」）。
+
+    它此前是 `list[dict[str, Any]]`：`action` 没有类型、没有约束，而**全部 action 名只
+    出现在 `report_status.transition` 的 docstring 里** —— 拼错一个名字不会有任何东西
+    发现。现在 `action` 派生自 `app/service/audit_vocabulary.py` 的那一份声明。
+
+    **`detail` 刻意保持自由形状。** 每条事件要带的明细本来就不同（抽取轨迹、确认过的
+    指标 id、任务 id），给它一个统一模型只会逼出一堆全可选的字段 —— 那是把「每条自己
+    的形状」换成「一个谁都不完整的形状」。类型化的收益在 action 上，因为 action 是
+    被**判读**的那个字段，而 detail 是被**查证**的。
+    """
+
+    action: AuditActionLiteral
+    actor: str
+    correlation_id: str | None = None
+    detail: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
 class MedicalReportResponse(BaseModel):
     id: int
     patient_id: str
@@ -244,10 +267,8 @@ class MedicalReportResponse(BaseModel):
     # 患者可见的报告状态（GLOSSARY.md 的「报告状态」）。唯一迁移入口见
     # app/service/report_status.py；数据库列仍是 String（兼容既有行），
     # 但这个契约只允许这五个值。
-    status: Literal["processing", "pending_confirmation", "confirmed", "assessed", "failed"] = (
-        "pending_confirmation"
-    )
-    subject_consistency: Literal["same", "different", "uncertain"] | None = None
+    status: Literal[*PATIENT_STATUSES] = "pending_confirmation"
+    subject_consistency: Literal[*SUBJECT_CONSISTENCIES_ORDERED] | None = None
     # 报告级的准入台账（GLOSSARY.md 的「解读准入」）：每一行的结论恰好归一类，
     # 四类相加 == 已解析行数。`included` 是**成功进入解读**的行数 —— 这是逐行的
     # `admission_reason` 那个 `None` 独自表达不了的那一半（它还要兼表达「本报告
@@ -273,7 +294,10 @@ class MedicalReportResponse(BaseModel):
     interpretation_failure: InterpretationFailureReport | None = None
     extraction_job: ReportExtractionJobResponse | None = None
     extraction_trace: dict[str, Any] | None = None
-    audit_events: list[dict[str, Any]] = Field(default_factory=list)
+    # 这份报告的审计流，按时间序**原样**透出（`app/api` 不得筛、不得挑 —— 见
+    # `tests/test_report_status_vocabulary.py` 的守卫）。逐条目是带类型的记录，
+    # action 取自唯一的词表。
+    audit_events: list[ReportAuditEventRecord] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 
@@ -293,4 +317,4 @@ class MetricConfirmation(BaseModel):
 
 class ReportConfirmationRequest(BaseModel):
     observations: list[MetricConfirmation] = Field(default_factory=list)
-    subject_consistency: Literal["same", "different", "uncertain"] | None = None
+    subject_consistency: Literal[*SUBJECT_CONSISTENCIES_ORDERED] | None = None

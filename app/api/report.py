@@ -30,7 +30,7 @@ from app.api.deps import db_dependency, session_owner_dependency
 from app.config import get_settings
 from app.data.models import MedicalReport as ReportModel
 from app.data.models import MetricRecord as MetricModel
-from app.data.models import ReportAuditEvent, ReportExtractionJob
+from app.data.models import ReportExtractionJob
 from app.data.models import ReportFile as ReportFileModel
 from app.schema.evidence import (
     EvidenceMatchResponse,
@@ -84,7 +84,7 @@ from app.service.report_material import (
     resolve as resolve_material,
 )
 from app.service.report_ownership import UNOWNED_SENTINEL, resolve_owner
-from app.service.report_status import transition
+from app.service.report_status import record_event, transition
 from app.service.report_subject import (
     SubjectGateError,
     apply_declaration,
@@ -221,25 +221,6 @@ def _metric_response(metric: MetricModel, admission: str | None = None) -> Metri
         effective_unit=effective.unit,
         effective_reference_range=effective.reference_range,
         effective_evidence_text=effective.evidence_text,
-    )
-
-
-def _audit(
-    db: Session,
-    report: ReportModel,
-    action: str,
-    detail: dict[str, object] | None = None,
-    *,
-    actor: str = "system",
-) -> None:
-    db.add(
-        ReportAuditEvent(
-            report_id=report.id,
-            action=action,
-            actor=actor,
-            correlation_id=report.evidence_correlation_id,
-            detail=detail or {},
-        )
     )
 
 
@@ -384,19 +365,22 @@ async def upload_report(
         exam_date=datetime.now(),
     )
     # 状态由唯一迁移入口设置。此刻对象还没 flush，列默认值尚未落到属性上，
-    # 所以这是「从无到有」的第一次迁移；审计事件要等 id 存在后再写。
+    # 所以这是「从无到有」的第一次迁移（不带 `db`：还没有 id 可写事件）。
     transition(report, "processing")
     db.add(report)
     db.flush()
     if report.id is None:
         raise HTTPException(status_code=500, detail="报告写入数据库失败")
     _persist_report_files(report.id, accepted_files, db)
-    _audit(
+    # 「这份报告被接收」是一笔**审计专用**事件：状态在上一行就已经设好，这里没有
+    # 迁移。它此前写成一条与迁移事件同形的事件，于是读者无法分辨「状态动过」与
+    # 「状态没动、只是记了一笔」—— `record_event` 是这两类分开之后的那个入口。
+    record_event(
         db,
         report,
         "uploaded",
-        {"file_count": len(accepted_files)},
         actor=resolve_owner(request).subject,
+        detail={"file_count": len(accepted_files)},
     )
     db.add(ReportExtractionJob(report_id=report.id, status="queued"))
 
@@ -908,21 +892,24 @@ async def confirm_report(
         metric.confirmed_evidence_text = item.evidence_text or metric.evidence_text
         metric.confirmed_at = now
         (corrected_ids if decision == "corrected" else confirmed_ids).append(metric.id)
-    transition(report, "confirmed", db=db, action="confirmed", actor=resolve_owner(request).subject)
-    apply_declaration(report, settled)
-    report.evidence_result = None
-    _audit(
-        db,
+    # 一次确认**恰好一条**审计事件，detail 在这里一次给全。
+    # 此前这里是 `transition(action="confirmed")` 写一条空壳、紧跟 `_audit` 再写一条
+    # 带实体的同名事件 —— 同一次确认落下两条，读的人无法判断该信哪一条。
+    transition(
         report,
         "confirmed",
-        {
+        db=db,
+        action="confirmed",
+        actor=resolve_owner(request).subject,
+        detail={
             "confirmed_metric_ids": confirmed_ids,
             "corrected_metric_ids": corrected_ids,
             "excluded_metric_ids": excluded_ids,
             "subject_consistency": report.subject_consistency,
         },
-        actor=resolve_owner(request).subject,
     )
+    apply_declaration(report, settled)
+    report.evidence_result = None
     db.commit()
     try:
         return await _assess_report(report, db, owned_by_account=owner_id is not None)
@@ -1018,19 +1005,24 @@ async def _assess_report(
     notices = build_patient_notices(typed_result, unmatched=typed_result.unmatched, skipped=typed_result.skipped)
     report.evidence_result = notices.model_dump(mode="json")
     report.evidence_correlation_id = typed_result.correlation_id
-    _audit(
-        db,
+    # 一次评估**恰好一条**审计事件。此前两条：`_audit(action="assessed",
+    # actor="system:evidence-service")` 带三个计数、紧跟
+    # `transition(action="assessed", actor="system:report-assessor")` 写 `detail={}` ——
+    # 同一条 `assessed` 因此有两个 actor，而两个都不是完整答案。现在 actor 是**一个**
+    # 取值（它是「评估由谁产生」这个问题的唯一答案），明细由这一处一次给全。
+    transition(
         report,
         "assessed",
-        {
+        db=db,
+        action="assessed",
+        actor="system:report-assessor",
+        detail={
             "finding_count": len(typed_result.findings),
             "unmatched_count": len(typed_result.unmatched),
             "skipped_count": len(typed_result.skipped),
             "correlation_id": typed_result.correlation_id,
         },
-        actor="system:evidence-service",
     )
-    transition(report, "assessed", db=db, action="assessed", actor="system:report-assessor")
     db.commit()
     db.refresh(report)
     metrics = _ordered_metrics(db, report.id).all()
