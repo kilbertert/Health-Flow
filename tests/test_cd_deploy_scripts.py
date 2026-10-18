@@ -741,23 +741,27 @@ def test_transfer_refuses_a_payload_that_does_not_match_the_declared_identity() 
 
 @needs_topology
 @needs_topology
-def test_a_run_leaves_no_worktree_registration_behind() -> None:
+def test_a_run_leaves_no_worktree_registration_behind(scratch) -> None:
     """跑完不能留下 worktree 登记。
 
     worktree 是**仓库里的登记**，不只是目录。跑完不注销，登记就比目录活得久，之后每次
     `git worktree list` 都带着一条悬挂项 —— 那是审计违规，而且会把真正的违规埋掉。
     实测：本脚本的第一版在自己的测试里漏了 55 条。
 
-    断言的是「登记数在一次运行前后相同」，不是「目录被删了」：`--dry-run` 刻意保留暂存
-    目录，登记的注销与它无关。
+    断言的是「**本次运行自己那条**登记在运行前后相同」，不是「目录被删了」：`--dry-run`
+    刻意保留暂存目录，登记的注销与它无关。
+
+    ⚠️ 计数范围限定在**本次运行的暂存根**（`scratch`；`_own_tmpdir` 已把 `TMPDIR` 指过去，
+    而脚本的 `STAGE=$(mktemp -d)` 与登记都在它下面），不是 `git worktree list` 的全量行数。
+    数全量会让这条断言依赖**整个仓库的全局状态**：并行跑时别的 worker 正在加/减登记，
+    于是它必红 —— 而失败看起来像「脚本漏了注销」，实际是测试之间在抢同一份状态。
     """
     def registrations() -> int:
-        return len(
-            subprocess.run(
-                ["git", "worktree", "list"], cwd=REPO_ROOT,
-                capture_output=True, text=True, check=True,
-            ).stdout.strip().splitlines()
-        )
+        listed = subprocess.run(
+            ["git", "worktree", "list"], cwd=REPO_ROOT,
+            capture_output=True, text=True, check=True,
+        ).stdout
+        return sum(1 for line in listed.splitlines() if str(scratch) in line)
 
     before = registrations()
     result = _run_script(dict(os.environ), "--commit", TARGET_SHA, "--dry-run")
