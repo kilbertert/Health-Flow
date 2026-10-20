@@ -87,12 +87,17 @@ below. Uploading still works and jobs queue durably.
    - The evidence API key must **match** the evidence service's; read it from
      that service's own file as root and pass it in, because this identity
      cannot read the other project's secrets — by design.
-   - `APP_ENV` stays `development` because `production` would make the
-     application select MySQL instead of the SQLite tenant. That means the two
-     settings normally inferred from `APP_ENV` must be set explicitly:
-     `REPORT_ACCOUNT_REQUIRED=true` and `AUTH_COOKIE_SECURE=true`. Omitting the
-     latter leaves session cookies without `Secure`, so a user's session token
-     could cross plaintext HTTP at any route in front of the app.
+   - `APP_ENV` does **not** choose MySQL: `DATABASE_URL` is set explicitly, and
+     the production branch in `app/config.py::database_url` is only reached when
+     that value is empty. It is kept at `development` for the reason it always
+     was, but the reason is not "production would select MySQL".
+     `report_account_required` and `auth_cookie_secure` both take their defaults
+     from `APP_ENV`, so they are written explicitly (`REPORT_ACCOUNT_REQUIRED=true`,
+     `AUTH_COOKIE_SECURE=true`) rather than inherited: a security posture that is
+     a derived value changes silently when someone edits the variable it derives
+     from. Omitting `AUTH_COOKIE_SECURE` leaves session cookies without `Secure`,
+     so a user's session token could cross plaintext HTTP at any route in front
+     of the app.
 
    `OPENAI_API_KEY` (or `VLLM_API_KEY`) must be present for the report worker to
    do anything. Without it the service still starts and accepts uploads, and
@@ -240,15 +245,31 @@ same reasoning already recorded in `app/main.py` for the mall connection.
 The probes below are the operator-run acceptance checks, all run as the service
 identity, all exiting nonzero on mismatch:
 
-- `upload-probe.sh` — **stale, and it will report a false failure.** It asserts
-  `POST /api/auth/register` returns 201, but that route was retired with the
-  account system and the live deployment answers **405** (measured 2026-10-09).
-  Sessions are now minted by exchanging a mall ticket. Fixing it needs a ticket
-  the development host cannot mint, so the repair is its own ticket and this file
-  does not claim the probe passes.
-- `cookie-probe.sh` — asserts the session cookie's hardening attributes on their
-  own, printing attribute names only and never the token value. It registers an
-  account first, so it is stale in the same way as above.
+- `upload-probe.sh` — asserts the account boundary (a protected route and an
+  upload are both refused without a session) and the upload contract (a real
+  session gets `202 processing` with a `queued` extraction job, i.e. the work
+  is persisted rather than parsed inline). It takes its session from
+  `mint-probe-session.py` and does **not** register an account: registration was
+  retired with the account system (#172) and the live deployment answers 405.
+  Run it in three steps — mint, probe, clean up — because the minted session is
+  a live credential:
+
+  ```bash
+  mint-probe-session.py        # writes /tmp/e2e-state.json (mode 0600)
+  upload-probe.sh              # this script
+  cleanup-probe-session.py     # removes the minted session
+  ```
+
+  The two minting scripts ship with the evidence service's acceptance suite
+  (`genesis-evidence/ops/service-host/acceptance/`), because the session table
+  they write belongs to the database both services read; this repository does
+  not keep a second copy of them.
+
+  The cookie's `Secure` / `HttpOnly` attributes are **not** asserted here. They
+  are only written by `set_cookie` on a real ticket exchange, which the minting
+  path bypasses, so a probe holding a minted session would be asserting a
+  property of the mint rather than of the deployment. That assertion belongs to
+  a real-ticket acceptance run.
 - `bridge-probe.py` — calls the same function the report API calls to reach the
   evidence service, so it proves the real cross-service path (configuration,
   key, loopback edge, response contract) rather than a synthetic request.
