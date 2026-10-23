@@ -187,11 +187,75 @@ WHEEL=$(ls "$BUILD/pkg"/*.whl)
 # The frontend build must come from the target commit's tree, so check out that
 # tree into a scratch worktree rather than building whatever is on disk.
 # (`FRONTEND_WT` itself is defined above, next to the trap that unregisters it.)
-info "前端（从 $SHORT_SHA 的树构建）"
-git worktree add --detach --quiet "$FRONTEND_WT" "$FULL_SHA"
-( cd "$FRONTEND_WT/frontend" && npm ci --silent && npm run build >/dev/null )
-FRONTEND_DIST="$FRONTEND_WT/frontend/dist"
-[ -f "$FRONTEND_DIST/index.html" ] || die "前端构建失败：没有 index.html"
+#
+# ── WHY THERE IS A CACHE HERE ────────────────────────────────────────────────
+# `npm ci` + `npm run build` measured 13 s on a warm npm cache, and the test suite
+# runs this script 17 times against the SAME commit. That is 3.5 minutes of the
+# 4.2-minute suite spent producing byte-identical output — the deploy test file
+# alone was 214 s of 255 s.
+#
+# Under xdist the waste is worse rather than better: every worker repeats the same
+# build, so the parallelism the suite nominally has is spent on identical work.
+#
+# ⚠️ KEYED ON THE TREE, NOT THE COMMIT SHA. The build's input is the tree; two
+# commits with the same tree produce the same frontend, and a commit whose SHA is
+# absent locally (shallow clone, a fetch that did not bring it) can still have its
+# tree if the parent object is present. `rev-parse "$FULL_SHA^{tree}"` is the
+# narrowest statement of "the input did not change".
+#
+# ⚠️ A HIT IS ONLY TRUSTED WITH A COMPLETE MARKER. The build is written to a
+# temporary name and renamed into place only after `index.html` exists, so a
+# half-written entry (interrupted build, full disk) can never be read as a hit.
+# Measured need: the first prototype wrote straight into the cache path, and an
+# interrupted run would have left a directory that looks populated and is not.
+#
+# The cache is per-machine, outside the repository, and never transferred: it is a
+# local shortcut for a deterministic function, not an artifact of record. Deleting
+# it costs one rebuild.
+FRONTEND_CACHE_ROOT="${XDG_CACHE_HOME:-$HOME/.cache}/health-flow/frontend-build"
+TREE=$(git -C "$REPO_ROOT" rev-parse "$FULL_SHA^{tree}" 2>/dev/null || true)
+FRONTEND_DIST=""
+if [ -n "$TREE" ] && [ -f "$FRONTEND_CACHE_ROOT/$TREE/.complete" ]; then
+  FRONTEND_DIST="$FRONTEND_CACHE_ROOT/$TREE/dist"
+  [ -f "$FRONTEND_DIST/index.html" ] || FRONTEND_DIST=""
+fi
+if [ -n "$FRONTEND_DIST" ]; then
+  info "前端（命中缓存，树 ${TREE:0:12}…）"
+else
+  info "前端（从 $SHORT_SHA 的树构建）"
+  git worktree add --detach --quiet "$FRONTEND_WT" "$FULL_SHA"
+  ( cd "$FRONTEND_WT/frontend" && npm ci --silent && npm run build >/dev/null )
+  FRONTEND_DIST="$FRONTEND_WT/frontend/dist"
+  [ -f "$FRONTEND_DIST/index.html" ] || die "前端构建失败：没有 index.html"
+
+  # Populate the cache only when the tree is known, and publish it atomically.
+  # `|| true` around the copy: a cache that cannot be written is a missed
+  # optimisation, never a failed deploy. The deploy path must not depend on it.
+  if [ -n "$TREE" ]; then
+    mkdir -p "$FRONTEND_CACHE_ROOT" 2>/dev/null || true
+    CACHE_TMP="$FRONTEND_CACHE_ROOT/.tmp-$$"
+    # ⚠️ `mkdir -p .../dist` BEFORE the copy. Measured on the first version: the
+    # copy target did not exist yet, `cp` failed, the `&&` chain short-circuited,
+    # and the entry was written without its marker — so every run rebuilt while a
+    # plausible-looking cache directory sat on disk. The failure was invisible
+    # except as "the cache never hits".
+    if rm -rf "$CACHE_TMP" && mkdir -p "$CACHE_TMP/dist" &&
+       cp -a "$FRONTEND_DIST/." "$CACHE_TMP/dist/" 2>/dev/null &&
+       [ -f "$CACHE_TMP/dist/index.html" ]; then
+      # ⚠️ The marker lives OUTSIDE `dist/`. It is bookkeeping, not site content:
+      # `dist/` is hashed into MANIFEST.sha256 and copied into the artifact, so a
+      # marker inside it would ship to the host and change the manifest that
+      # proves which revision is deployed.
+      : > "$CACHE_TMP/.complete"
+      # Replace any earlier (possibly partial) entry in one rename. A concurrent
+      # run doing the same thing yields the same bytes, so whichever wins is right.
+      rm -rf "$FRONTEND_CACHE_ROOT/$TREE" 2>/dev/null || true
+      mv "$CACHE_TMP" "$FRONTEND_CACHE_ROOT/$TREE" 2>/dev/null || rm -rf "$CACHE_TMP"
+    else
+      rm -rf "$CACHE_TMP" 2>/dev/null || true
+    fi
+  fi
+fi
 
 # Per-file manifest of the frontend tree. This is the long-lived version identity:
 # an archive hash is only reproducible on the same untouched tree (tar records
