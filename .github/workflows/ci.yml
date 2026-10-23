@@ -110,3 +110,46 @@ jobs:
       # skipping?" — the question this whole step exists to keep answerable.
       - name: Run tests
         run: uv run pytest -q -rs
+
+      # ── The browser suite ──────────────────────────────────────────────────
+      # 81 specs that drive the REAL frontend against a REAL server, with a
+      # throwaway SQLite database under TMPDIR and a fixture backend — the config
+      # in `frontend/playwright.config.js` never touches `data/healthflow.db`.
+      #
+      # WHY THIS IS IN CI, after it ran nowhere for as long as it existed. These
+      # are the only automated assertions in this repository about what a patient
+      # sees: colour, wording, which page a coordinate lands on. Every other test
+      # here is Python, and can only prove the API said the right thing. A green
+      # `pytest` run is compatible with a frontend that renders "failed" in the
+      # same colour as "passed" — measured, that exact spec exists because it
+      # happened.
+      #
+      # The cost is small BECAUSE of the two steps above: the suite reuses the
+      # `npm ci` and `npm run build` CI already performs, so what it adds is the
+      # chromium download and ~55 s of execution. Measured on a dev box
+      # 2026-10-23: 81 passed in 55.7 s and again in 54.0 s, twice in a row.
+      #
+      # ⚠️ A separate step, not folded into the pytest one. When it fails, the
+      # reviewer needs to know whether the API contract or the rendered page
+      # broke — one combined red gives neither.
+      - name: Install Playwright browsers
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Run end-to-end tests
+        working-directory: frontend
+        run: npm run test:e2e
+
+      # The report is the artifact a reviewer reads when the step above goes red;
+      # without it, a failure is only a list of test names. `if: always()` because
+      # the interesting case is exactly the failing one.
+      - name: Upload e2e report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
