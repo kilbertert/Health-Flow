@@ -27,6 +27,8 @@ be read together, because a divergence between them is a silent loss of the cap.
 
 from __future__ import annotations
 
+import contextlib
+import os
 import pathlib
 import tempfile
 
@@ -46,15 +48,71 @@ WAIT_SECONDS = 1800
 SLOT_ENV = "PYTEST_HOST_SLOTS"
 
 
+#: Where the slot files live. ⚠️ NOT `tempfile.gettempdir()`.
+#:
+#: The AFK agent runs inside a Docker sandbox (`.sandcastle/profile.ts`), and that
+#: container has its OWN `/tmp` — the mounts are settings and MCP only, because
+#: nothing needed a shared filesystem until now. Two sandboxed runs therefore take
+#: slot 0 of two different filesystems and neither blocks, which is precisely the
+#: scenario this gate exists for: the incident was several agent sessions at once.
+#: Measured by review on the first version of this file, which used `/tmp` and was
+#: correct on the host and inert in every container.
+#:
+#: So the directory is fixed and host-backed, and `.sandcastle/profile.ts` mounts
+#: it into every sandbox at the same path. A fixed path (rather than TMPDIR) is
+#: what lets the mount be unconditional: a per-run TMPDIR would need the sandbox to
+#: know the run's name before it starts.
+#:
+#: Falls back to TMPDIR only when the shared directory cannot be created, so a
+#: machine without it degrades to host-only gating instead of failing the suite.
+SHARED_LOCK_DIR = pathlib.Path("/tmp/aiops-host-test-slots")
+
+
+def _lock_dir() -> pathlib.Path:
+    try:
+        SHARED_LOCK_DIR.mkdir(mode=0o777, parents=True, exist_ok=True)
+        # ⚠️ `mkdir(mode=...)` is masked by the process umask (027 on this host),
+        # so the directory ends up 750 — owned by the host user, unwritable by the
+        # sandbox's `agent` user, whose UID differs. The gate would then fail
+        # inside every container with a permission error, which reads like a test
+        # bug rather than a mount problem. Set the mode explicitly, after.
+        SHARED_LOCK_DIR.chmod(0o777)
+        return SHARED_LOCK_DIR
+    except OSError:
+        return pathlib.Path(tempfile.gettempdir())
+
+
 def _host_lock_path(index: int) -> pathlib.Path:
     # ⚠️ Deliberately NOT keyed on the repository or the checkout: the resource
-    # being exhausted is the host's CPU, which every checkout shares.
-    return pathlib.Path(tempfile.gettempdir()) / f"host-test-slot-{index}.lock"
+    # being exhausted is the host's CPU, which every checkout and every project
+    # shares. The file NAME is the only contract between the three copies of this
+    # file; change it in one and the cap silently stops adding up.
+    return _lock_dir() / f"host-test-slot-{index}.lock"
+
+
+def _open_slot(path: pathlib.Path) -> object:
+    """Open a slot file so that a DIFFERENT uid can open it too.
+
+    ⚠️ The 0o666 is load-bearing, not tidy, and it took two corrections to get
+    right. This process runs as the host user; the sandbox runs as `agent`, a
+    different UID. Under umask 027 the file is created 0640, so the container gets
+    `PermissionError` — which surfaces as a test error inside the sandbox and looks
+    like a broken test rather than a lock nobody can share. 0644 is still wrong:
+    `flock` needs `O_RDWR`, and a read-only file cannot be opened for write by a
+    non-owner. Measured both: 0640 raised on open, 0644 raised on open, 0666 locks.
+
+    The lock is coordination state, not a secret — nothing in it but an empty file
+    whose lock bit is the whole payload.
+    """
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o666)
+    with contextlib.suppress(OSError):  # existing files keep their old mode
+        os.fchmod(fd, 0o666)
+    return os.fdopen(fd, "r+")
 
 
 def _acquire(path: pathlib.Path, fcntl, time, what: str) -> object:
     """Take an exclusive flock, polling so the wait can be bounded."""
-    handle = open(path, "w")  # noqa: SIM115 - held for the whole session
+    handle = _open_slot(path)
     deadline = time.monotonic() + WAIT_SECONDS
     while True:
         try:
@@ -80,7 +138,7 @@ def _acquire_host_slot(fcntl, time, slots: int) -> object:
     deadline = time.monotonic() + WAIT_SECONDS
     while True:
         for index in range(slots):
-            handle = open(_host_lock_path(index), "w")  # noqa: SIM115
+            handle = _open_slot(_host_lock_path(index))
             try:
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
