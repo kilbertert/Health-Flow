@@ -58,7 +58,12 @@ export default defineConfig({
   testDir: './e2e',
   timeout: 30_000,
   expect: { timeout: 10_000 },
-  reporter: [['list']],
+  // `list` is what a person reads while it runs; `html` is what they open AFTER a
+  // failure. Keeping only `list` meant CI had nothing to upload — measured on the
+  // first run: "No files were found with the provided path: playwright-report/",
+  // so the artifact step that exists for the failing case produced nothing in the
+  // case it was built for. The HTML report writes itself to `playwright-report/`.
+  reporter: [['list'], ['html', { open: 'never' }]],
   use: {
     baseURL,
     // 移动端优先基线视口(375px);桌面用例可在 spec 内用 test.use 覆盖。
