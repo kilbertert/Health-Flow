@@ -23,7 +23,7 @@ from app.schema.auth import (
     TicketExchangeResponse,
 )
 from app.schema.consent import ConsentItemState, ConsentRecordRequest, ConsentStatusResponse
-from app.service.consent import record_consent, source_for_request, states
+from app.service.consent import commit_consent, record_consent, source_for_request, states
 from app.service.recommendation_empty_reason import REPORT_ACCESS_BY_STATUS
 from app.service.report_metric_counts import metric_counts
 from app.service.report_ownership import subject_storage_id
@@ -180,8 +180,12 @@ async def record_consent_decision(
     报告解读」这件事由响应本身说出来，不必让客户端记住哪些项没动。
     """
     storage_id = _require_owner(owner_id)
-    record_consent(db, storage_id, payload.item, payload.decision, source=source_for_request(request))
-    db.commit()
+    recorded = record_consent(
+        db, storage_id, payload.item, payload.decision, source=source_for_request(request)
+    )
+    # 撤回「报告解读」时，这次提交同时删掉该主体的全部报告；提交成功之后才删磁盘文件
+    # （先删库、后删文件）。别的表态走同一个入口，句柄为空。
+    commit_consent(db, recorded)
     return _consent_status(db, storage_id)
 
 

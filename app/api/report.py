@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import hmac
 import json
 import logging
@@ -78,6 +77,7 @@ from app.service.metric_effective_value import effective_value
 from app.service.metric_rows import deduplicate
 from app.service.origin_location import page_url, source_id_for
 from app.service.recommendation_empty_reason import REPORT_ACCESS_BY_STATUS
+from app.service.report_deletion import delete_reports
 from app.service.report_material import (
     ACCEPTED_EXTENSIONS,
     KIND_MEDIA_TYPE,
@@ -1313,16 +1313,9 @@ async def delete_report(
         report_id,
         owner_id=resolve_owner(request).storage_id,
     )
-    # 先删数据库主记录；向量索引是尽力而为，放在 DB 成功之后，
-    # 避免 DB 删除失败时向量索引已被清掉造成状态不一致。
-    stored_paths = [Path(item.stored_path) for item in report.files]
-    db.delete(report)
-    db.commit()
-    for path in stored_paths:
-        path.unlink(missing_ok=True)
-    if stored_paths:
-        with contextlib.suppress(OSError):
-            stored_paths[0].parent.rmdir()
+    # 单份删除与「撤回解读同意删全部报告」走**同一个**删除入口：顺序（先删库、后删文件）
+    # 有两份实现就一定有一份会漂，而漂丢的那一半是「报告行指向不存在的文件」。
+    delete_reports(db, [report]).commit(db)
     return {"message": "报告已删除", "report_id": report_id}
 
 

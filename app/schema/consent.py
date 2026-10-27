@@ -46,6 +46,11 @@ class ConsentItemState(BaseModel):
     source: ConsentSourceLiteral | None = None
     required_text_version: str
     valid: bool
+    #: 最新一条若是一次「删报告的撤回」，它删掉了多少份报告（#272）。
+    #:
+    #: 报告行已经不存在了，「这次撤回删了什么」只能由这一行回答。非撤回、撤推荐的
+    #: 记录与从未表态都是 `None` —— 它们不是「删了 0 份」，而是「这一条不涉及删除」。
+    deleted_report_count: int | None = None
 
 
 class ConsentStatusResponse(BaseModel):

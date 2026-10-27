@@ -296,6 +296,11 @@ class HealthDataConsent(Base):
     `owner_id` 装的是主体的存储标识（`account:<tenant>:<sub>`），与 `medical_reports.
     owner_id` 同一形状；没有外键，理由与 `user_sessions.account_id` 相同：它是身份而不是
     一张表的键。撤回解读同意时删除该主体的报告，**不删这些行** —— 它们是那次撤回的留证。
+
+    `deleted_report_count` **只在 `report_interpretation` 的撤回记录上**有值：报告行已经被
+    删掉，那次删除的规模只能由这一行回答（#272）。它是**撤回这一刻**的事实快照，不是一份
+    要维护的计数；同意（`granted`）与「商品推荐」的撤回都留空 —— 「这一项撤回不删报告」
+    与「这一项撤回删了 0 份报告」是两件事，后者是一个会被读错的值。
     """
 
     __tablename__ = "health_data_consents"
@@ -310,4 +315,6 @@ class HealthDataConsent(Base):
     text_version = Column(String(64), nullable=False)
     #: 这条表态从哪个通道来（`mall_h5` / `legacy_web` / `seed`）。
     source = Column(String(32), nullable=False)
+    #: 这次撤回删掉了多少份报告（#272）。空 = 这一条不是一次「删报告的撤回」。
+    deleted_report_count = Column(Integer)
     created_at = Column(DateTime, nullable=False, default=datetime.now)

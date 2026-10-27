@@ -6,6 +6,7 @@ code:
   - app/service/consent.py
 related:
   - app/service/consent_vocabulary.py
+  - app/service/report_deletion.py
   - app/schema/consent.py
   - app/api/auth.py
 ---
@@ -34,3 +35,13 @@ related:
   `product_recommendation_consent_required`（[[recommendation-empty-reason]] 的
   「取货为空」那一组），且**一次商城请求都不发**。它是 200 而不是错误：页面照常渲染，
   患者看到的是「开启推荐」而不是一次失败。
+- **撤回「报告解读」＝ 删除该主体的全部报告**，与那条撤回记录**同一次提交**：原件、页图、
+  指标、解读结果、抽取任务与**审计事件**（审计行随报告级联，保留它与删除请求相反，见 ADR 0029）。
+  没有可删的报告时照样写 `0`。撤回「商品推荐」**不动报告**。哪一项撤回会删报告，只在
+  `_REVOCATION_DELETES_REPORTS` 一处声明。
+- **删除只有一条路径**（`app/service/report_deletion.py`）：先删库、提交成功之后才删磁盘文件。
+  单份删除（`DELETE /report/{id}`）与按主体删除共用它。文件删不掉只记日志、不把删除判成失败
+  —— 数据库已经提交，没有行指向那个文件。
+- **`deleted_report_count` 只写在「删报告的撤回」上**：授予、撤推荐、从未表态都是空。
+  「这一项不涉及报告」与「这一项删了 0 份」是两件事。
+- 撤回**不删同意记录**，也不改写此前的行：那一行就是这次撤回的留证。

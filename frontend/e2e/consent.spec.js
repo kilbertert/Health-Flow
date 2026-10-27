@@ -106,9 +106,13 @@ test.describe('健康数据同意', () => {
   });
 
   test('记录同意之后同一主体可以上传，撤回后闸门重新关上', async ({ page, seed }) => {
+    // 起始份数**读出来**而不是假设：种子脚本在缺省状态下会建出两份报告（已完成 + 待
+    // 确认），与这里传的 `reports: []` 无关。撤回删掉的份数 = 起始份数 + 这次上传的 1 份。
     const seeded = await seed({ reports: [], consent: [] });
     const token = seeded.subject.session_token;
     await page.goto(`${mallOrigin}/`);
+    const existing = await callApi(page, '/api/auth/reports', { headers: bearer(token) });
+    const before = existing.body.length;
 
     const granted = await callApi(page, '/api/auth/consent', {
       method: 'POST',
@@ -134,11 +138,79 @@ test.describe('健康数据同意', () => {
       headers: { ...bearer(token), 'Content-Type': 'application/json' },
       body: JSON.stringify({ item: 'report_interpretation', decision: 'revoked' }),
     });
-    expect(itemOf(revoked.body, 'report_interpretation')).toMatchObject({ decision: 'revoked', valid: false });
+    expect(itemOf(revoked.body, 'report_interpretation')).toMatchObject({
+      decision: 'revoked',
+      valid: false,
+      // #272：撤回的后果在服务端兑现，记录里写着这次删掉了多少份报告 —— 起始的那些
+      // 加刚才上传得到 202 的那一份。
+      deleted_report_count: before + 1,
+    });
+
+    const reports = await callApi(page, '/api/auth/reports', { headers: bearer(token) });
+    expect(reports.status).toBe(200);
+    expect(reports.body).toEqual([]);
 
     const deniedAgain = await uploadFromMall(page, token);
     expect(deniedAgain.status).toBe(403);
     expect(deniedAgain.accessReason).toBe('report_interpretation_consent_required');
+  });
+
+  // #272：撤回的结果必须是**患者看得见的**——报告列表空了，旧报告再也打不开，而不是
+  // 列表里还挂着一条点进去就报错的记录。这条用例从商城源走一遍，因为患者界面就在那里。
+  test('撤回报告解读后，商城模块里的报告列表变空，旧报告打不开', async ({ page, seed }) => {
+    const seeded = await seed({ reports: ['assessed', 'pending_confirmation'] });
+    const token = seeded.subject.session_token;
+    const reportIds = seeded.reports.map((report) => report.id);
+    await page.goto(`${mallOrigin}/`);
+
+    const before = await callApi(page, '/api/auth/reports', { headers: bearer(token) });
+    expect(before.body).toHaveLength(2);
+
+    const revoked = await callApi(page, '/api/auth/consent', {
+      method: 'POST',
+      headers: { ...bearer(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ item: 'report_interpretation', decision: 'revoked' }),
+    });
+    expect(itemOf(revoked.body, 'report_interpretation').deleted_report_count).toBe(2);
+
+    const after = await callApi(page, '/api/auth/reports', { headers: bearer(token) });
+    expect(after.body).toEqual([]);
+
+    for (const reportId of reportIds) {
+      const detail = await callApi(page, `/api/health/report/${reportId}`, { headers: bearer(token) });
+      // 不是 403 —— 那不是「报告还在、只是没授权」；它已经不存在了。
+      expect(detail.status).toBe(404);
+      expect(detail.accessReason).toBe('report_not_found');
+    }
+  });
+
+  // 界面路径：旧前端的报告历史在撤回之后**肉眼可见地空了**。同意页不在本仓，但撤回的
+  // 后果会落在患者每天看的那一页上 —— 一条还挂在列表里、点开就报错的记录等于没删。
+  test('撤回之后，旧前端的报告历史里一份报告都不剩', async ({ page, seed }) => {
+    const seeded = await seed({ reports: ['assessed', 'pending_confirmation'] });
+    await loginWithSeed(page, seeded);
+    await page.getByRole('button', { name: '个人中心', exact: true }).click();
+    await expect(page.getByRole('heading', { name: '报告历史' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '查看' })).toHaveCount(2);
+
+    // 撤回页在商城 H5 模块里；这里用同一主体的会话令牌驱动服务端那一半。
+    const revoked = await page.evaluate(
+      async ({ apiBase, authorization }) => {
+        const res = await fetch(`${apiBase}/api/auth/consent`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${authorization}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ item: 'report_interpretation', decision: 'revoked' }),
+        });
+        return res.json();
+      },
+      { apiBase: apiOrigin, authorization: seeded.subject.session_token },
+    );
+    expect(revoked.items.find((entry) => entry.item === 'report_interpretation').deleted_report_count).toBe(2);
+
+    await page.reload();
+    await page.getByRole('button', { name: '个人中心', exact: true }).click();
+    await expect(page.getByText('还没有报告记录')).toBeVisible();
+    await expect(page.getByRole('button', { name: '查看' })).toHaveCount(0);
   });
 
   test('旧前端（Cookie 会话）在同一道闸门前得到同样的拒绝', async ({ page, seed }) => {

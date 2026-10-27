@@ -68,6 +68,12 @@ class MySQLClient:
                 "confirmed_evidence_text": "TEXT",
                 "confirmed_at": "DATETIME",
             },
+            # #272：撤回「报告解读」时写下的「删掉了多少份报告」。可空 —— 授予与撤推荐
+            # 都不带这个数（见 `app/data/models.py` 的说明）。部署宿主上的
+            # `health_data_consents` 是 #269 用 `create_all` 建的，没有这一列。
+            "health_data_consents": {
+                "deleted_report_count": "INTEGER",
+            },
         }
         with self.engine.begin() as connection:
             inspector = inspect(connection)

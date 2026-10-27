@@ -12,6 +12,9 @@
 - 没有有效的「报告解读」同意时，`POST /api/health/report/upload` 返回 **403**，
   `X-Report-Access-Reason: report_interpretation_consent_required`，且**在读取文件之前**
 - 记录同意之后，同一主体的上传照常（202）；撤回后闸门重新关上
+- **撤回「报告解读」删除该主体的全部报告**（#272）：`GET /api/auth/reports` 随之为空，
+  旧报告详情返回 404 + `report_not_found`；撤回记录带 `deleted_report_count`（起始份数 +
+  本次上传的份数）。撤回「商品推荐」只让推荐返回「未同意」，报告一份都不动
 - 来源由会话通道判定：Bearer → `mall_h5`，Cookie → `legacy_web`，种子夹具 → `seed`
 
 ## How to get to it (user POV)
@@ -58,6 +61,11 @@ const status = await page.evaluate(async ({ apiBase, token }) => {
 上传一个 PNG → 点「上传并解析」→ 页面告警里出现「尚未同意「报告解读」授权」。它证明闸门
 不挑通道：Cookie 与 Bearer 走同一条判定。
 
+撤回的**界面后果**（#272）：种两份报告 → 个人中心 → 「报告历史」里两条「查看」→ 用同一
+主体的令牌 `POST /api/auth/consent {decision: 'revoked'}` → `page.reload()` → 个人中心 →
+「报告历史」显示「还没有报告记录」，一条「查看」都没有。撤回页本身在商城 H5 模块里，不在
+本仓；能在这里证明的是**它删对了**。
+
 ## Gotchas
 
 - **本仓没有同意页。** 不要在这里找一个勾选框；要驱动患者侧交互，去商城 H5 模块。
@@ -72,6 +80,10 @@ const status = await page.evaluate(async ({ apiBase, token }) => {
 - 「报告解读」与「商品推荐」**彼此独立**：授予其一不会让另一项有效，推荐闸门在下一张单。
 
 ## Evidence kept
+
+`artifacts/qa/20261027-consent-revocation.md` —— #272 的实测记录：撤回前后报告历史的两张截图
+（`revocation-01-before.png` / `revocation-02-after.png`，gitignored 的 `var/verify-evidence/`）
+与那次撤回记录的实际响应。
 
 `artifacts/qa/20261027-health-consent-gate.md` — 2026-10-27 的实测记录：界面路径的三张截图
 （首页 → 选文件 → 403 告警）落在 `var/verify-evidence/consent-0*.png`，跨源四条用例与服务端

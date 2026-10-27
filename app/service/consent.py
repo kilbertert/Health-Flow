@@ -7,6 +7,16 @@
 - ``states`` —— 当前状态。每项取**最新一条**，并要求它的文本版本等于**当前要求的版本**。
 - ``has_valid`` —— 门槛问的那一个问题（上传要「报告解读」，推荐要「商品推荐」）。
 
+## 撤回的后果在服务端兑现，而且与那条记录同一次提交
+
+撤回「报告解读」＝删除该主体的全部报告（原件、页图、指标、审计事件、抽取任务）。那不是
+一个「顺便」的动作：患者撤回的是「你可以拿我的数据做什么」，留下报告就是把撤回说成一句
+空话。所以 ``record_consent`` 在写撤回记录的那一次调用里发出删除，并由它**在同一次提交**
+里提交 —— 两条事实要么同时成立（记录说删了 N 份，报告也确实不在了），要么都不成立。
+
+撤回「商品推荐」**不动报告**：两项同意彼此独立，撤一项不该牵连另一项（GLOSSARY.md 的
+「健康数据同意」）。唯一一处判断「哪一项撤回会删报告」在这里，调用方不重复它。
+
 ## 有效 = 最新一条是同意，且写在当前那一版文本上
 
 两件事必须同时成立，缺一不可：
@@ -34,13 +44,15 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.data.models import HealthDataConsent
+from app.data.models import HealthDataConsent, MedicalReport
 from app.service.consent_vocabulary import (
     CONSENT_DECISIONS,
     CONSENT_ITEMS,
     CONSENT_ITEMS_ORDERED,
     CONSENT_SOURCES,
+    REPORT_INTERPRETATION,
 )
+from app.service.report_deletion import Deletion, delete_reports
 
 #: 每一项当前要求的文本版本从哪读。配置按项分开是刻意的：法务改一版「报告解读」的文本
 #: 不该顺带作废患者对「商品推荐」的表态，反之亦然。
@@ -60,6 +72,8 @@ class ConsentState:
     recorded_at: datetime | None
     source: str | None
     required_text_version: str
+    #: 最新一条若是一次「删报告的撤回」，它删掉了多少份；其余情况是 ``None``。
+    deleted_report_count: int | None = None
 
     @property
     def valid(self) -> bool:
@@ -107,6 +121,9 @@ def states(db: Session, owner_id: str | None) -> list[ConsentState]:
             recorded_at=(latest[item].created_at if item in latest else None),
             source=(latest[item].source if item in latest else None),
             required_text_version=required_text_version(item),
+            deleted_report_count=(
+                latest[item].deleted_report_count if item in latest else None
+            ),
         )
         for item in CONSENT_ITEMS_ORDERED
     ]
@@ -121,6 +138,11 @@ def has_valid(db: Session, owner_id: str | None, item: str) -> bool:
     return state(db, owner_id, item).valid
 
 
+#: 撤回哪一项会删掉该主体的全部报告。**只在这一处**写死这个对应关系：调用方（路由、
+#: 种子、将来别的通道）不判断「这次撤回要不要删数据」，它们只调用 ``record_consent``。
+_REVOCATION_DELETES_REPORTS = frozenset({REPORT_INTERPRETATION})
+
+
 def record_consent(
     db: Session,
     owner_id: str,
@@ -128,22 +150,55 @@ def record_consent(
     decision: str,
     *,
     source: str,
-) -> HealthDataConsent:
-    """追加一条表态并返回它。**不 commit** —— 由调用方在同一事务里提交。
+) -> tuple[HealthDataConsent, Deletion | None]:
+    """追加一条表态，**并在撤回解读同意时发出删除该主体全部报告**。
+
+    **不 commit** —— 由调用方提交；撤回那一支必须用返回的句柄提交（``Deletion.commit``），
+    否则数据库里的报告删了、磁盘上的文件还在。返回 ``(那条记录, 删除句柄或 None)``；
+    不涉及删除的表态返回 ``None``，调用方照常用 ``db.commit()``。
+
+    删除与撤回记录进的是**同一次提交**：要么「记录说删了 N 份、报告也确实不在了」，要么
+    两者都不成立。中途失败时什么都不落下（见 `app/service/report_deletion.py`）。
 
     词表之外的取值当场报错（与「指标确认决策」同一取向，不 fail open）：一个拼错的表态
     落库之后，读路径只能猜它是什么意思。
     """
+    item = _checked(item, CONSENT_ITEMS, "同意项")
+    decision = _checked(decision, CONSENT_DECISIONS, "同意表态")
+    deletion = None
+    report_count = None
+    if decision == "revoked" and item in _REVOCATION_DELETES_REPORTS:
+        deletion = delete_reports(
+            db,
+            db.query(MedicalReport).filter(MedicalReport.owner_id == owner_id).all(),
+        )
+        report_count = deletion.count
+
     row = HealthDataConsent(
         owner_id=owner_id,
-        consent_item=_checked(item, CONSENT_ITEMS, "同意项"),
-        decision=_checked(decision, CONSENT_DECISIONS, "同意表态"),
+        consent_item=item,
+        decision=decision,
         text_version=required_text_version(item),
         source=_checked(source, CONSENT_SOURCES, "同意来源"),
+        # 只有「删报告的撤回」带这个数。授予与推荐撤回留空 —— 见模型的说明。
+        deleted_report_count=report_count,
     )
     db.add(row)
     db.flush()
-    return row
+    return row, deletion
+
+
+def commit_consent(db: Session, recorded: tuple[HealthDataConsent, Deletion | None]) -> None:
+    """提交一次表态，并在提交**成功之后**删掉该删的文件。
+
+    撤回路由与别的表态走同一条提交路径，区别只在「提交之后还有一件事要做」。把它收成
+    一个函数，是为了让「写成 db.commit() 而忘了删文件」不可能出现在调用方。
+    """
+    _, deletion = recorded
+    if deletion is None:
+        db.commit()
+    else:
+        deletion.commit(db)
 
 
 def source_for_request(request) -> str:
