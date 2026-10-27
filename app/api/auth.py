@@ -125,11 +125,12 @@ async def report_history(
             status=report.status,
             exam_date=report.exam_date,
             created_at=report.created_at,
-            # 四个数由**唯一**一处给出（GLOSSARY.md 的「报告指标计数」）：历史摘要、报告单
+            # 每个数都由**唯一**一处给出（GLOSSARY.md 的「报告指标计数」）：历史摘要、报告单
             # 与确认页读的是同一份判据，所以同一份报告不可能在三处给出互相矛盾的说法。
             metric_count=counts.parsed,
             abnormal_count=counts.abnormal,
             needs_review_count=counts.needs_review,
+            in_range=counts.in_range,
             finding_count=(
                 len(report.evidence_result.get("findings") or []) if isinstance(report.evidence_result, dict) else 0
             ),

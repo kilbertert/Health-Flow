@@ -277,6 +277,9 @@ class ReportMetricCounts(BaseModel):
     needs_review: int = 0
     #: 还没有判定的行数（判不出来、且患者没有排除）。结论句以它为前提。
     undecided: int = 0
+    #: 判定在参考范围内的行数（`N`，且患者没有排除）。患者摘要上「需关注 / 待核对 /
+    #: 范围内」的第三个数。与 `abnormal`、`undecided` 是同一份判定的三个互斥出口。
+    in_range: int = 0
 
 
 class MedicalReportResponse(BaseModel):

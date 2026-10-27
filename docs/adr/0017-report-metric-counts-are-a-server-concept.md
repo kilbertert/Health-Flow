@@ -36,23 +36,31 @@
 
 ## 决定
 
-**「报告指标计数」是服务端拥有的单一领域概念：四个数，各有唯一判据，由服务端算好随响应
+**「报告指标计数」是服务端拥有的单一领域概念：每个数各有唯一判据，由服务端算好随响应
 出域，患者侧只渲染。**
 
-1. **四个数，四个具名判据**（`app/service/report_metric_counts.py`，全仓库唯一产生处）：
+1. **五个数，各有具名判据**（`app/service/report_metric_counts.py`，全仓库唯一产生处）：
    `parsed`（已解析行数，分母）、`abnormal`（判定为 `H`/`L`/`A`）、`needs_review`（异常，
-   或判定不出来但模型宣称异常）、`undecided`（判定为空且患者没有排除）。
+   或判定不出来但模型宣称异常）、`undecided`（判定为空且患者没有排除）、`in_range`
+   （判定为 `N` 且患者没有排除，#270）。
 2. **`needs_review` 与 `undecided` 刻意是两个数。** 一行「一行两个值」同时落进两桶；
    一行「模型没标异常、也没有参考范围」只落进 `undecided`。并成一个数会让结论句重新有机会
    说谎。
-3. **`abnormal` 与 `needs_review` 是两个具名事实，不是一个数的两套算法。** 若某份报告上
+3. **`abnormal`、`in_range`、`undecided` 是同一份判定的三个互斥出口。** 判定返回
+   `H`/`L`/`A` 落第一个，返回 `N` 落第二个，返回空落第三个 —— 三者两两不相交，且
+   `abnormal + in_range + undecided == parsed - 被排除的行数`。因此 `in_range`
+   **不得由减法得出**：`parsed - abnormal - undecided` 会把患者排除的行算成正常，而
+   患者说的是「这一行不要解读」。
+4. **`abnormal` 与 `needs_review` 是两个具名事实，不是一个数的两套算法。** 若某份报告上
    它们不同，那是两个事实的差 —— 契约上是两个字段。
-4. **一处出域。** 两个计数接口都带同一份计数块：`ReportHistoryItem` 增
-   `needs_review_count`；`MedicalReportResponse` 增 `counts`。
-5. **患者侧只渲染。** `ReportDetail.jsx` 与 `Upload.jsx` 的**计数**改为读服务端字段；
+5. **一处出域。** 两个计数接口都带同一份计数块：`ReportHistoryItem` 增
+   `needs_review_count` 与 `in_range`；`MedicalReportResponse` 增 `counts`。
+   `in_range` 在两个契约里**同名**（历史条目没有 `*_count` 后缀），因为患者侧要跨这两个
+   契约对同一个数 —— 两处不同名就得在模块里翻译一次键名，而翻译点就是下一次漂移点。
+6. **患者侧只渲染。** `ReportDetail.jsx` 与 `Upload.jsx` 的**计数**改为读服务端字段；
    `displayFlag` / `isAbnormal` / `needsReview` 保留为**纯展示映射**（行高亮、标签、
    显示哪些行、名字列表）。删除的是「客户端算数」，不是「客户端显示」。
-6. **结论句不越界。** 报告单在「异常行数 == 0」时说的话，与「有没有未判定的行」一致 ——
+7. **结论句不越界。** 报告单在「异常行数 == 0」时说的话，与「有没有未判定的行」一致 ——
    **不得**在存在未判定行时宣告「当前报告的指标均在参考区间内」。这是本改动可见的行为
    变化。
 
@@ -106,9 +114,12 @@
 
 更难的、被限制了的：
 
-- **契约多了两个字段**（`ReportHistoryItem.needs_review_count`、`MedicalReportResponse.counts`）。
-  旧响应没有它们时前端回落到本地计数，所以这是向后兼容的，但回落路径存在本身是债务：
-  它保证前端**永远**有一份可以偷偷算数的退路。
+- **契约多了三个字段**（`ReportHistoryItem.needs_review_count`、`ReportHistoryItem.in_range`、
+  `MedicalReportResponse.counts`）。旧响应没有它们时前端回落到本地计数，所以这是向后兼容的，
+  但回落路径存在本身是债务：它保证前端**永远**有一份可以偷偷算数的退路。
+- **`in_range` 多了一条要维持的等式**：`abnormal + in_range + undecided == parsed - 排除行`。
+  它是三个数的自洽约束，对新加入的判据（例如「需监控」那一档，本 PRD 明确不存在）是
+  一道闸：新增一档而不更新等式，`tests/test_auth` 的断言会先红。
 - **`undecided` 是一个新的、需要被记住的概念。** 它不是准入结论（准入对可判的未核对行说
   `awaiting_confirmation`），也不等于「需要患者处理」。把三者混起来是本记录要防止的下一次
   退化。
@@ -121,7 +132,9 @@
 | 断言 | 结果 |
 | --- | --- |
 | 一行 `raw=H`、值 `3.39 / 3.63` | `abnormal` 不计它、`needs_review` 计它、`undecided` 为真（负控，`test_metric_counts.py`） |
-| 全仓库产生这四个数的地方 | 1 处（AST 守卫） |
+| 一行判定为 `N` 但被患者排除 | `in_range` **不**计它（#270 的负控 —— 减法会把它算成正常，`test_metric_counts.py`） |
+| 同一份报告的两个契约 | `ReportHistoryItem.in_range == MedicalReportResponse.counts.in_range`，且 `abnormal + in_range + undecided == parsed - 排除行`（`test_auth.py`） |
+| 全仓库产生这些数的地方 | 1 处（AST 守卫） |
 | 结论句 | 有未判定行时**不**出现「均在参考区间内」，改说「另有 N 项未能判定」（node 驱动真实 `ReportDetail.jsx`） |
 | 浏览器证据 | `frontend/e2e/report-counts.spec.js`；截图 `var/verify-evidence/245-report-detail-no-false-conclusion.png`（375×1481） |
 | 既有 e2e「3 项异常」「其中 2 项需要确认」 | 口径不变，保持绿（77 passed） |

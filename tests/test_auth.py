@@ -229,6 +229,124 @@ def test_report_history_includes_abnormal_count(subject_client):
     assert items[0]["abnormal_count"] == 2
 
 
+def test_both_count_blocks_carry_in_range_and_agree(subject_client):
+    """「范围内」是第三个患者可见计数，由服务端给出，两个出域契约各带同一个数（#270）。
+
+    **判据**：`in_range` 数的是「判定为 `N`、且患者没有排除」的行。`N` 取自
+    `infer_abnormal_flag_for_metric`（「异常判定」的唯一入口），不是模型写下的原始标记：
+    模型标了 `H` 而值在范围内，判定是 `N`，它就该进这个数。
+
+    **与另外三个数的关系**（本用例逐条断言，因为它们是同一份判据的四个切面）：
+
+    - `abnormal`、`in_range`、`undecided` **两两不相交**：一行判定为 `H`/`L`/`A`、
+      判定为 `N`、判不出来，三者取其一。
+    - 患者 `excluded` 的行**四个数都不数**（`parsed` 除外）。
+    - 因此 `abnormal + in_range + undecided == parsed - excluded` —— 没有排除行时
+      三者恰好铺满已解析行数。这条等式是本用例的负控：把「已排除的 N 行」漏进
+      `in_range`，或者把「判不出来」并进 `in_range`，等式立刻不成立。
+    """
+    client, SessionLocal = subject_client
+    owner_id, cookie = _issue_subject_session(SessionLocal, "t1", "u1")
+    with SessionLocal() as db:
+        owned = MedicalReport(patient_id=owner_id, owner_id=owner_id, status="assessed")
+        db.add(owned)
+        db.flush()
+        db.add_all(
+            [
+                # 判定 H —— 异常。
+                MetricRecord(
+                    report_id=owned.id,
+                    metric_name="空腹血糖",
+                    metric_value="6.5",
+                    unit="mmol/L",
+                    reference_range="3.9-6.1",
+                    evidence_text="空腹血糖 6.5 mmol/L",
+                ),
+                # 判定 L —— 异常。
+                MetricRecord(
+                    report_id=owned.id,
+                    metric_name="高密度脂蛋白",
+                    metric_value="0.90",
+                    unit="mmol/L",
+                    reference_range=">1.00",
+                    evidence_text="高密度脂蛋白 0.90 mmol/L",
+                ),
+                # 判定 N —— 范围内。
+                MetricRecord(
+                    report_id=owned.id,
+                    metric_name="血红蛋白",
+                    metric_value="138",
+                    unit="g/L",
+                    reference_range="115-150",
+                    evidence_text="血红蛋白 138 g/L",
+                ),
+                # 定性阴性：判定同样是 N（「异常判定」对分类结果的判据是结果词本身）。
+                MetricRecord(
+                    report_id=owned.id,
+                    metric_name="尿亚硝酸盐",
+                    metric_value="Not Detected",
+                    unit=None,
+                    reference_range=None,
+                    evidence_text="尿亚硝酸盐 Not Detected",
+                ),
+                # 判定不出来（两个数值）—— 待核对，**不**是范围内。
+                MetricRecord(
+                    report_id=owned.id,
+                    metric_name="甘油三酯",
+                    metric_value="3.39 / 3.63",
+                    reference_range="0.45-1.7",
+                    abnormal_flag="H",
+                    evidence_text="甘油三酯 3.39 / 3.63 mmol/L",
+                    confirmation_status="pending",
+                ),
+                # 患者排除的 H —— 不数。
+                MetricRecord(
+                    report_id=owned.id,
+                    metric_name="已排除的血糖",
+                    metric_value="7.5",
+                    unit="mmol/L",
+                    reference_range="3.9-6.1",
+                    abnormal_flag="H",
+                    evidence_text="已排除的血糖 7.5 mmol/L",
+                    confirmation_status="excluded",
+                ),
+                # 患者排除的 N —— **不数**。这一行是 `in_range` 的负控：只看判定为 N
+                # 而不看排除，它会被静默算进「范围内」。
+                MetricRecord(
+                    report_id=owned.id,
+                    metric_name="已排除的血红蛋白",
+                    metric_value="138",
+                    unit="g/L",
+                    reference_range="115-150",
+                    evidence_text="已排除的血红蛋白 138 g/L",
+                    confirmation_status="excluded",
+                ),
+            ]
+        )
+        db.commit()
+        report_id = owned.id
+    client.cookies.update(cookie)
+
+    item = client.get("/api/auth/reports").json()[0]
+    detail = client.get(f"/api/health/report/{report_id}")
+    assert detail.status_code == 200, detail.text
+    counts = detail.json()["counts"]
+
+    # 两个出域契约给的是同一个数（历史摘要不做减法，也不自己再数一遍）。
+    assert item["in_range"] == counts["in_range"]
+
+    assert item["metric_count"] == 7
+    assert counts["parsed"] == 7
+    assert item["abnormal_count"] == counts["abnormal"] == 2
+    assert item["in_range"] == counts["in_range"] == 2
+    assert item["needs_review_count"] == counts["needs_review"] == 3
+    assert counts["undecided"] == 1
+
+    # 四个数各答各的问题：不相交，且（除已排除行外）铺满已解析行数。
+    excluded = 2
+    assert counts["abnormal"] + counts["in_range"] + counts["undecided"] == counts["parsed"] - excluded
+
+
 def test_report_endpoints_require_a_session_when_enabled(subject_client):
     client, _ = subject_client
     assert client.get("/api/health/report/1").status_code == 401

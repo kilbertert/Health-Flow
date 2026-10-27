@@ -752,6 +752,7 @@ def _report_response(
             abnormal=counts.abnormal,
             needs_review=counts.needs_review,
             undecided=counts.undecided,
+            in_range=counts.in_range,
         ),
         files=[
             {

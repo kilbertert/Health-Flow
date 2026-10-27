@@ -32,6 +32,14 @@
 - ``undecided`` —— **还没有判定的行数**：``infer_abnormal_flag_for_metric`` 为空、且患者
   没有排除它的行。它回答的是「这份报告里有没有我们没说清的行」，因此**结论句以它为前提**：
   有它的时候不许宣告「均在参考区间内」——那是一句假话，那些行是**没判出来**，不是「在区间内」。
+- ``in_range`` —— **判定在参考范围内的行数**：``infer_abnormal_flag_for_metric`` 为 ``N``、
+  且患者没有排除的行。它是患者摘要上「需关注 / 待核对 / 范围内」的第三个数（#270）。
+
+``abnormal``、``in_range``、``undecided`` 是**同一份判定的三个互斥出口**：判定为
+``H``/``L``/``A``、判定为 ``N``、判不出来。所以三者两两不相交，且
+``abnormal + in_range + undecided == parsed - 被排除的行数``。``in_range`` 因此**不是**
+``parsed - abnormal - undecided``：那条减法会把患者排除的行算成「范围内」，而患者说的是
+「这一行不要解读」，不是「这一项正常」。
 
 ``undecided`` 与 ``needs_review`` 刻意分开：一行 `two_values` 同时落进两桶（它没判出来、
 也要患者处理），而一行「模型没标异常、也没有参考范围」只落进 ``undecided``（没判出来，
@@ -104,12 +112,13 @@ def raw_flag_claims_abnormal(raw_flag: str | None) -> bool:
 
 @dataclass(frozen=True)
 class MetricCounts:
-    """一份报告的患者可见计数。四个数各有唯一判据，见模块 docstring。"""
+    """一份报告的患者可见计数。每个数各有唯一判据，见模块 docstring。"""
 
     parsed: int
     abnormal: int
     needs_review: int
     undecided: int
+    in_range: int
 
 
 def is_excluded(metric: Any) -> bool:
@@ -153,11 +162,28 @@ def undecided(metric: Any) -> bool:
     return infer_abnormal_flag_for_metric(metric) is None
 
 
+def in_range(metric: Any) -> bool:
+    """这一行**判定在参考范围内**（`N`），且患者没有排除它（#270）。
+
+    它与 `abnormal` 是同一个判定的两个出口，不是一个数的两种读法：判定返回 `N` 就是
+    这一条，返回 `H`/`L`/`A` 就是那一条，返回空则两边都不是。
+
+    **不拿减法求它**（ADR 0017 / #270）：`parsed - abnormal - undecided` 会把患者
+    **排除**的行算成「范围内」—— 患者说的是「这一行不要解读」，不是「这一项正常」。
+    异常判定今天已经对排除行返回空，显式先问 `is_excluded` 是把这条前提写下来：它若某天
+    变成对排除行也作答，这里不会静默地把「不要解读」说成「正常」。
+    """
+    if is_excluded(metric):
+        return False
+    return infer_abnormal_flag_for_metric(metric) == "N"
+
+
 def metric_counts(metrics: list[Any]) -> MetricCounts:
-    """**全仓库唯一**给出这四个数的地方。"""
+    """**全仓库唯一**给出这些数的地方。"""
     return MetricCounts(
         parsed=len(metrics),
         abnormal=sum(1 for metric in metrics if infer_abnormal_flag_for_metric(metric) in ABNORMAL_FLAGS),
         needs_review=sum(1 for metric in metrics if needs_review(metric)),
         undecided=sum(1 for metric in metrics if undecided(metric)),
+        in_range=sum(1 for metric in metrics if in_range(metric)),
     )
