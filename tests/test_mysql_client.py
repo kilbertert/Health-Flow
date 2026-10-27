@@ -233,3 +233,53 @@ def test_sqlite_foreign_keys_are_enabled_for_report_cleanup(tmp_path, monkeypatc
         ).scalar_one()
     client.close()
     assert remaining == 0
+
+
+def test_create_tables_adds_the_revocation_count_to_an_existing_consent_table(tmp_path):
+    """#269 的库没有 `health_data_consents.deleted_report_count`（#272 才加）。
+
+    部署宿主上的这张表是 `create_all` 建的，而 `create_all` **不会**改既有表 —— 没有这段
+    迁移，撤回会在写入那一列时撞上 `no such column`，而那时托盘上的报告已经被删了。
+    迁移必须幂等，并且不碰既有行（同意记录只追加，已有的表态原样保留）。
+    """
+    from app.data.mysql_client import MySQLClient
+
+    database_path = tmp_path / "legacy-consent.db"
+    engine = create_engine(f"sqlite:///{database_path}")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE health_data_consents ("
+                " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                " owner_id VARCHAR(128) NOT NULL,"
+                " consent_item VARCHAR(64) NOT NULL,"
+                " decision VARCHAR(16) NOT NULL,"
+                " text_version VARCHAR(64) NOT NULL,"
+                " source VARCHAR(32) NOT NULL,"
+                " created_at DATETIME NOT NULL"
+                ")"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO health_data_consents"
+                " (owner_id, consent_item, decision, text_version, source, created_at)"
+                " VALUES ('account:t:u', 'report_interpretation', 'granted', 'v1', 'seed', '2026-10-27 00:00:00')"
+            )
+        )
+    engine.dispose()
+
+    client = MySQLClient.__new__(MySQLClient)
+    client.engine = create_engine(f"sqlite:///{database_path}")
+    client.create_tables()
+    client.create_tables()  # 幂等：第二次启动不能因为列已存在而失败
+
+    with client.engine.begin() as connection:
+        columns = {column["name"] for column in inspect(connection).get_columns("health_data_consents")}
+        kept = connection.execute(
+            text("SELECT decision, text_version, deleted_report_count FROM health_data_consents WHERE id = 1")
+        ).one()
+    client.engine.dispose()
+
+    assert "deleted_report_count" in columns
+    assert tuple(kept) == ("granted", "v1", None), "历史行原样保留，新列为空"

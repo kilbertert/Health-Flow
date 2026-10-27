@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.api.deps import ACCESS_REASON_HEADER
 from app.config import get_settings
 from app.config_freshness import (
     FRESHNESS_STALE,
@@ -47,12 +48,22 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+# 跨源只按**最小面**放行（ADR 0026）。三处都是刻意的：
+#
+# - `allow_credentials=False`：跨源请求**不带凭据**。会话令牌由商城 H5 显式放进
+#   `Authorization`，浏览器不替它自动带 Cookie。带凭据的跨源等于把「白名单配错」的
+#   后果从「多一个能读令牌的页面」放大成「多一个浏览器会自动附上会话的页面」。
+# - `allow_headers` 显式列出，不再用 `*`：实际需要的只有这两个。`*` 让任何新加的
+#   自定义头自动获得放行，也就让「这个头该不该跨源」这个问题无人再问。
+# - 暴露 `X-Report-Access-Reason`：不暴露的话跨源的前端读不到那个响应头，「会话失效」
+#   与「报告不存在」就无法区分，ADR 0018 建立的具名归因会退回猜文本。
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_settings().cors_origins,
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
+    allow_headers=["Authorization", "Content-Type"],
+    expose_headers=[ACCESS_REASON_HEADER],
 )
 
 

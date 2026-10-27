@@ -3,11 +3,17 @@
 // 命中时渲染卡片,未命中时如实显示"暂无推荐"且区分原因;
 // 无论哪种情况,浏览器都不得对商城域名发起请求。
 import { test, expect, loginWithSeed } from './fixtures.js';
+import { PRODUCT_RECOMMENDATION, REPORT_INTERPRETATION } from './seed.mjs';
+
+// #271 之后推荐端点要求一条有效的「商品推荐」同意。这里的小节**不是**测同意本身
+// （那在 `consent.spec.js`），而是让推荐用例进入它们要测的那条链路：
+// 种子默认只给「报告解读」，所以每一处都要显式补上这一项。
+const CONSENT = [REPORT_INTERPRETATION, PRODUCT_RECOMMENDATION];
 
 const MALL_HOST = 'lkf.h5.mall.qushiyun.com';
 
 async function openAssessedReport(page, seed, reportId) {
-  const seeded = await seed({ reports: ['assessed'] });
+  const seeded = await seed({ reports: ['assessed'], consent: CONSENT });
   const id = reportId || seeded.reports[0].id;
   await loginWithSeed(page, seeded);
   await page.goto(`/#/report/${id}`);

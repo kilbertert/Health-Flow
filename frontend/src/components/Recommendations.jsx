@@ -17,6 +17,9 @@ export const EMPTY_REASONS = {
   no_published_card: '本次未能生成健康风险提示，因此没有可对应的商品。',
   no_label_data: '该健康方向暂无可推荐的已上架商品。',
   mall_unavailable: '商城暂时不可用，请稍后再试。',
+  // 没有对当前版本的「商品推荐」同意（#271）。它与「商城没货」是两件事：患者没允许
+  // 我们拿他的报告去推荐，所以这句话要指向**开启推荐**那个动作，而不是「稍后再试」。
+  product_recommendation_consent_required: '尚未开启商品推荐授权，开启后即可看到推荐商品。',
 };
 
 // 报告访问那一类：这份报告读不到（会话失效，或报告不存在/不属于你）。它们是**报告级访问
@@ -27,6 +30,9 @@ export const EMPTY_REASONS = {
 export const ACCESS_REASONS = {
   session_expired: '登录状态已失效，请从商城入口重新进入后查看推荐。',
   report_not_found: '这份报告打不开，请返回报告列表重新进入。',
+  // 没有对当前版本的「报告解读」同意（#269）。它**不**是「商城不可用」或「稍后再试」：
+  // 患者要做的是去完成授权，所以这句话指向那个动作。
+  report_interpretation_consent_required: '请先完成「报告解读」授权，再查看报告与推荐。',
 };
 
 // 加购失败的两个具名原因（服务端 `CartLinkResponse.reason`）。两件事、两句话。

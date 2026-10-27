@@ -39,6 +39,21 @@ class TicketExchangeRequest(BaseModel):
     ticket: str = Field(min_length=1)
 
 
+class TicketExchangeResponse(SessionSubjectResponse):
+    """兑换的响应体：主体，**外加会话令牌与过期时刻**。
+
+    票据兑换过去只写 Cookie —— 同源的旧前端不需要读令牌。商城 H5 在另一个源上，
+    浏览器不会替它带上本仓的 Cookie（ADR 0026），所以令牌必须**经响应体**交给它，
+    由模块自己放进 `Authorization: Bearer` 并存进 `sessionStorage`。
+
+    令牌与 Cookie 指向**同一条**服务端会话行：`session_expires_at` 就是那一行的过期时刻，
+    不是另算的第二份寿命。吊销（退出登录）对两者同时生效。
+    """
+
+    session_token: str
+    session_expires_at: datetime
+
+
 class ReportHistoryItem(BaseModel):
     id: int
     report_type: str | None = None
@@ -53,3 +68,9 @@ class ReportHistoryItem(BaseModel):
     # 但模型宣称异常」的行。它是**另一个谓词**，不是 `abnormal_count` 的第二种读法 ——
     # 两者在某份报告上可以不同，那是两个具名事实的差，不是一个数的两套算法。
     needs_review_count: int = 0
+    # 判定在参考范围内的行数（`N`，且患者没有排除）。
+    #
+    # **名字与同块的 `*_count` 不同，是刻意的**（#270）：报告详情的计数块叫这个字段
+    # `in_range`，而患者侧要在两个契约之间**对同一个数**，两处同名就不必在模块里翻译一次
+    # 键名 —— 翻译点就是下一次漂移点。这个名字由票面写定，不是随手省掉后缀。
+    in_range: int = 0

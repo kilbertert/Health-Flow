@@ -61,7 +61,7 @@ def test_the_four_counts_each_answer_their_own_question():
     rows = [
         # 判定为 H（值超范围）—— 异常、需要处理、已判定
         _Row(value="6.5"),
-        # 判定为 N —— 都不是
+        # 判定为 N —— 范围内
         _Row(value="5.2"),
         # 模型标 H，值判不出来（两个值）—— **不计入 abnormal**，但需要患者处理、且未判定
         _Row(value="3.39 / 3.63", unit=None, raw_flag="H", evidence="空腹血糖 3.39 / 3.63"),
@@ -70,8 +70,42 @@ def test_the_four_counts_each_answer_their_own_question():
     ]
     counts = metric_counts(rows)
 
-    # row1 判成 H；row3 判不出来（两个值）但仍要患者核对；row4 已排除、四个数都不数它。
-    assert counts == MetricCounts(parsed=4, abnormal=1, needs_review=2, undecided=1)
+    # row1 判成 H；row2 判定为 N、进「范围内」；row3 判不出来（两个值）但仍要患者核对；
+    # row4 已排除、除 parsed 外一个数都不数它。
+    assert counts == MetricCounts(parsed=4, abnormal=1, needs_review=2, undecided=1, in_range=1)
+
+
+def test_in_range_counts_only_judged_N_rows_that_the_patient_did_not_exclude():
+    """「范围内」的判据是**判定为 N 且未排除**，不是「其余的行」（#270）。
+
+    负控是那条**判定为 N、但被患者排除**的行：减法（`parsed - abnormal - undecided`）
+    会把它算成「范围内」，而患者说的是「这一行不要解读」—— 那句「正常」他没说过。
+    「判定不出来」的行也不进这里：它没有结论，不是「在区间内」。
+    """
+    from app.service.report_metric_counts import in_range
+
+    assert in_range(_Row(value="5.2")) is True, "判定为 N"
+    assert in_range(_Row(value="6.5")) is False, "判定为 H"
+    assert in_range(_Row(value="Not Detected", reference=None, evidence="空腹血糖 Not Detected")) is True, (
+        "定性阴性同样判定为 N"
+    )
+    assert in_range(_Row(value="3.39 / 3.63", unit=None, evidence="空腹血糖 3.39 / 3.63")) is False, (
+        "判不出来不是「在区间内」"
+    )
+    assert in_range(_Row(value="5.2", status="excluded")) is False, (
+        "患者排除的行不数 —— 减法会把它算进来，这正是本条负控"
+    )
+
+    counts = metric_counts(
+        [
+            _Row(value="5.2"),
+            _Row(value="5.2", status="excluded"),
+            _Row(value="6.5"),
+            _Row(value="3.39 / 3.63", unit=None, evidence="空腹血糖 3.39 / 3.63"),
+        ]
+    )
+    # 三个互斥的出口加总 == parsed - 已排除：一行落在且只落在一个数里。
+    assert counts.abnormal + counts.in_range + counts.undecided == counts.parsed - 1
 
 
 def test_the_two_predicates_are_not_the_same_read_of_one_number():

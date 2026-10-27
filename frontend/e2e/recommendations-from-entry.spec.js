@@ -6,6 +6,10 @@
 // 正好绕过了这条路径——所以它对这次的缺口是**瞎的**。
 // 本用例只能从首页按钮进入；一旦有人把推荐退回「只有详情页有」，它就变红。
 import { test, expect, loginWithSeed } from './fixtures.js';
+import { PRODUCT_RECOMMENDATION, REPORT_INTERPRETATION } from './seed.mjs';
+
+// 推荐端点要求有效的「商品推荐」同意（#271）。
+const CONSENT = [REPORT_INTERPRETATION, PRODUCT_RECOMMENDATION];
 
 const MALL_HOST = 'lkf.h5.mall.qushiyun.com';
 const TINY_PNG_BASE64 =
@@ -80,7 +84,7 @@ test('从首页入口上传并生成健康提示后，商品推荐出现在当�
     if (request.url().includes(MALL_HOST)) mallRequests.push(request.url());
   });
 
-  const seeded = await seed({ reports: [] });
+  const seeded = await seed({ reports: [], consent: CONSENT });
   // mock 本应用自己的同源端点；**绝不可以 mock 商城域名**，那会掩盖
   // 「浏览器不请求商城」这条要保护的契约。
   await page.route('**/api/health/report/*/recommendations', (route) =>
@@ -107,7 +111,7 @@ test('从首页入口上传并生成健康提示后，商品推荐出现在当�
 });
 
 test('未生成健康提示时，当前页不渲染推荐区', async ({ page, seed }) => {
-  const seeded = await seed({ reports: [] });
+  const seeded = await seed({ reports: [], consent: CONSENT });
   await page.route('**/api/health/report/upload', (route) => json(route, UPLOADED));
 
   await openUploadPageFromHome(page, seeded);

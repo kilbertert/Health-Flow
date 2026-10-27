@@ -16,8 +16,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.data.models import Base
+from app.data.models import Base, HealthDataConsent
 from app.data.models import MedicalReport as ReportModel
+from app.service.consent import required_text_version
+from app.service.consent_vocabulary import PRODUCT_RECOMMENDATION
 from app.service.mall_goods import (
     MallGoodsItem,
     MallGoodsResult,
@@ -296,8 +298,13 @@ async def test_successful_call_without_labels_reports_no_label_data():
 
 
 @contextlib.contextmanager
-def _report_client(evidence_result):
-    """一个只含报告的 SQLite 会话 + TestClient，报告已带 evidence_result。"""
+def _report_client(evidence_result, *, consent=(PRODUCT_RECOMMENDATION,)):
+    """一个只含报告的 SQLite 会话 + TestClient，报告已带 evidence_result。
+
+    `consent` 默认授予「商品推荐」：本文件绝大多数用例要测的是取货与归因，
+    推荐闸门（#271）本身由 `tests/test_recommendation_gate.py` 钉住。传 `()` 得到
+    「没有推荐同意」的主体。
+    """
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -318,6 +325,16 @@ def _report_client(evidence_result):
         # #172：访问必须带主体会话（报告令牌旁路已移除）。
         token, session_row = issue_session(owner_id)
         session.add(session_row)
+        for item in consent:
+            session.add(
+                HealthDataConsent(
+                    owner_id=owner_id,
+                    consent_item=item,
+                    decision="granted",
+                    text_version=required_text_version(item),
+                    source="seed",
+                )
+            )
         session.commit()
         report_id = report.id
 
@@ -354,6 +371,15 @@ def test_endpoint_returns_condition_reasons():
     fetch.assert_awaited_once()
     # 真的调了商城，且带上的是**这张表的取值**——不是空、也不是"全都要"。
     assert fetch.await_args.kwargs["labels"] == (("血脂异常风险评估", "血脂异常风险评估"),)
+    # 分组带健康问题的标识与名字，组内为空时带它自己的原因。
+    assert body["groups"] == [
+        {
+            "condition_code": "COND_DYSLIPIDEMIA",
+            "condition_name": "血脂异常",
+            "items": [],
+            "reason": "no_label_data",
+        }
+    ]
 
 
 def test_endpoint_reports_no_published_card_without_calling_mall():
@@ -368,7 +394,7 @@ def test_endpoint_reports_no_published_card_without_calling_mall():
         )
 
     assert response.status_code == 200
-    assert response.json() == {"items": [], "reason": "no_published_card"}
+    assert response.json() == {"items": [], "groups": [], "reason": "no_published_card"}
     fetch.assert_not_called()
 
 
@@ -494,17 +520,24 @@ def test_readiness_flags_missing_mall_config_in_production():
 
 
 def test_response_contract_matches_produced_reasons():
-    """`Literal` 是契约：这里断言它正好是端点会产生的四个值。
+    """`Literal` 是契约：这里断言它正好是端点会产生的那些值。
 
     之前它多带一个后端永不产生的 `no_labels`，等于对外承诺存在第四种空态。
     这条断言让新增/删除原因时两侧必须同时改。
+
+    **端点比商城模块多两个取值**，且两个都由端点判定、都不调用商城：
+
+    - `no_published_card`：报告没有可据以取货的健康风险；
+    - `product_recommendation_consent_required`：患者没有对当前版本的「商品推荐」同意
+      （#271）。把它并进商城模块那一组会让 `fetch_goods` 看起来能返回一个它永远不会
+      返回的值，而闸门恰恰在它之前。
     """
     from typing import get_args
 
     from app.schema.report import RecommendationReason
     from app.service.mall_goods import Reason
 
-    endpoint_only = {"no_published_card"}
+    endpoint_only = {"no_published_card", "product_recommendation_consent_required"}
     assert set(get_args(RecommendationReason)) == set(get_args(Reason)) | endpoint_only
 
 

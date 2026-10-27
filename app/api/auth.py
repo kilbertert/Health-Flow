@@ -7,13 +7,23 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import ACCESS_REASON_HEADER, db_dependency, session_owner_dependency
 from app.config import get_settings
 from app.data.models import MedicalReport
-from app.schema.auth import ReportHistoryItem, SessionSubjectResponse, TicketExchangeRequest
+from app.schema.auth import (
+    ReportHistoryItem,
+    SessionSubjectResponse,
+    TicketExchangeRequest,
+    TicketExchangeResponse,
+)
+from app.schema.consent import ConsentItemState, ConsentRecordRequest, ConsentStatusResponse
+from app.service.consent import commit_consent, record_consent, source_for_request, states
 from app.service.recommendation_empty_reason import REPORT_ACCESS_BY_STATUS
 from app.service.report_metric_counts import metric_counts
 from app.service.report_ownership import subject_storage_id
@@ -115,11 +125,12 @@ async def report_history(
             status=report.status,
             exam_date=report.exam_date,
             created_at=report.created_at,
-            # 四个数由**唯一**一处给出（GLOSSARY.md 的「报告指标计数」）：历史摘要、报告单
+            # 每个数都由**唯一**一处给出（GLOSSARY.md 的「报告指标计数」）：历史摘要、报告单
             # 与确认页读的是同一份判据，所以同一份报告不可能在三处给出互相矛盾的说法。
             metric_count=counts.parsed,
             abnormal_count=counts.abnormal,
             needs_review_count=counts.needs_review,
+            in_range=counts.in_range,
             finding_count=(
                 len(report.evidence_result.get("findings") or []) if isinstance(report.evidence_result, dict) else 0
             ),
@@ -128,7 +139,57 @@ async def report_history(
     ]
 
 
-@router.post("/ticket", response_model=SessionSubjectResponse, status_code=201)
+def _consent_status(db: Session, owner_id: str) -> ConsentStatusResponse:
+    """状态由 service 层单点给出，这里只做投影。
+
+    上传闸门读的是同一个 `has_valid()` → 同一个 `ConsentState.valid` —— 于是「状态说
+    已同意、上传却被拒」不可能发生：两处不是两份判据，是同一次判定。
+    """
+    return ConsentStatusResponse(
+        items=[ConsentItemState(**asdict(entry), valid=entry.valid) for entry in states(db, owner_id)]
+    )
+
+
+@router.get("/consent", response_model=ConsentStatusResponse)
+async def consent_status(
+    owner_id: str | None = Depends(session_owner_dependency),
+    db: Session = Depends(db_dependency),
+):
+    """当前主体对每一项同意的状态、当前要求的文本版本，以及每项是否有效。
+
+    两项**始终都在**（没有记录也是 `valid=false`），患者侧因此不必区分「没读过」
+    与「没同意」——那是同一种状态。
+    """
+    return _consent_status(db, _require_owner(owner_id))
+
+
+@router.post("/consent", response_model=ConsentStatusResponse)
+async def record_consent_decision(
+    request: Request,
+    payload: ConsentRecordRequest,
+    owner_id: str | None = Depends(session_owner_dependency),
+    db: Session = Depends(db_dependency),
+):
+    """记录一次表态（同意或撤回），返回写入后的完整状态。
+
+    **只追加**：撤回也是又一条记录，此前的行一条都不改写（`consent.record_consent`）。
+    文本版本取**此刻**配置里的要求版本，由服务端写定；来源按会话通道判定
+    （Bearer → `mall_h5`，Cookie → `legacy_web`），不由客户端声明。
+
+    返回整份状态而不是被改的那一项：患者侧要同时更新两项的显示，而「撤回推荐不影响
+    报告解读」这件事由响应本身说出来，不必让客户端记住哪些项没动。
+    """
+    storage_id = _require_owner(owner_id)
+    recorded = record_consent(
+        db, storage_id, payload.item, payload.decision, source=source_for_request(request)
+    )
+    # 撤回「报告解读」时，这次提交同时删掉该主体的全部报告；提交成功之后才删磁盘文件
+    # （先删库、后删文件）。别的表态走同一个入口，句柄为空。
+    commit_consent(db, recorded)
+    return _consent_status(db, storage_id)
+
+
+@router.post("/ticket", response_model=TicketExchangeResponse, status_code=201)
 async def exchange_ticket(
     request: Request,
     response: Response,
@@ -181,20 +242,24 @@ async def exchange_ticket(
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
     db.expire_all()
-    token, session_row = issue_session(
-        identity.storage_id,
-        days=get_settings().AUTH_SESSION_DAYS,
-    )
+    token, session_row = issue_session(identity.storage_id)
     db.add(session_row)
     db.commit()
 
+    # Cookie 与响应体里的令牌是**同一条会话行**（ADR 0026）。Cookie 的 `max_age` 因此从
+    # 那一行的过期时刻算，而不是另配一个天数——两处各算一次寿命，就是两份会漂移的答案。
     response.set_cookie(
         SESSION_COOKIE,
         token,
-        max_age=max(1, get_settings().AUTH_SESSION_DAYS) * 86400,
+        max_age=max(1, int((session_row.expires_at - datetime.now()).total_seconds())),
         httponly=True,
         secure=get_settings().auth_cookie_secure,
         samesite="lax",
         path="/",
     )
-    return _subject_response(db, identity.storage_id)
+    subject = _subject_response(db, identity.storage_id)
+    return TicketExchangeResponse(
+        **subject.model_dump(),
+        session_token=token,
+        session_expires_at=session_row.expires_at,
+    )

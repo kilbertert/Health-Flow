@@ -280,3 +280,41 @@ class TicketSubject(Base):
     display_name = Column(String(128), nullable=False, default="商城用户")
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, nullable=False, default=datetime.now)
+
+
+class HealthDataConsent(Base):
+    """健康数据同意的一次表态（GLOSSARY.md 的「健康数据同意」，#269）。
+
+    **只追加。** 这一列组没有 `updated_at`，代码里也没有任何 UPDATE 或 DELETE 的路径：
+    撤回是同一条链上的另一行（`decision="revoked"`），当前状态取每项最新一条。删掉旧行会
+    让「他曾经在哪一版文本下同意过」从历史里消失，而那是合规要举的证。
+
+    `text_version` 是**表态那一刻**服务端要求的版本，不是外键也不是指针：文本版本更新后
+    这一行原样留着，只是不再对当前版本有效。这正是「只追加」能同时回答两个问题的原因
+    —— 当时他对哪一版表的态，以及现在还有没有效。
+
+    `owner_id` 装的是主体的存储标识（`account:<tenant>:<sub>`），与 `medical_reports.
+    owner_id` 同一形状；没有外键，理由与 `user_sessions.account_id` 相同：它是身份而不是
+    一张表的键。撤回解读同意时删除该主体的报告，**不删这些行** —— 它们是那次撤回的留证。
+
+    `deleted_report_count` **只在 `report_interpretation` 的撤回记录上**有值：报告行已经被
+    删掉，那次删除的规模只能由这一行回答（#272）。它是**撤回这一刻**的事实快照，不是一份
+    要维护的计数；同意（`granted`）与「商品推荐」的撤回都留空 —— 「这一项撤回不删报告」
+    与「这一项撤回删了 0 份报告」是两件事，后者是一个会被读错的值。
+    """
+
+    __tablename__ = "health_data_consents"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    #: 主体存储标识。列宽与 `medical_reports.owner_id` 对齐（`OWNER_ID_MAX_LENGTH`）。
+    owner_id = Column(String(128), nullable=False, index=True)
+    #: 词表在 `app/service/consent_vocabulary.py`。
+    consent_item = Column(String(64), nullable=False)
+    decision = Column(String(16), nullable=False)
+    #: 表态那一刻要求的文本版本（草稿编号）。它决定这条表态现在还算不算有效。
+    text_version = Column(String(64), nullable=False)
+    #: 这条表态从哪个通道来（`mall_h5` / `legacy_web` / `seed`）。
+    source = Column(String(32), nullable=False)
+    #: 这次撤回删掉了多少份报告（#272）。空 = 这一条不是一次「删报告的撤回」。
+    deleted_report_count = Column(Integer)
+    created_at = Column(DateTime, nullable=False, default=datetime.now)

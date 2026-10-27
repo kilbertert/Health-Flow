@@ -642,7 +642,12 @@ def test_multi_file_confirmation_matches_published_card(tmp_path):
         with _ticket_public_key(), TestClient(app) as client:
             # #172 之后上传必须带主体会话（报告令牌旁路已移除）。这里直接用种子
             # 会话的 cookie，等价于「用户刚从商城跳进来兑换过一张票」。
-            with _subject_session(fake_db.SessionLocal) as cookie:
+            # 同意闸门（#269）在读取文件之前：这条用例走的是解析与确认链路，不是同意，
+            # 所以在此置为通过。闸门本身由 `tests/test_consent.py` 守住。
+            with (
+                _subject_session(fake_db.SessionLocal) as cookie,
+                patch("app.api.report.has_valid", return_value=True),
+            ):
                 response = client.post(
                     "/api/health/report/upload",
                     data={"patient_id": "P001"},

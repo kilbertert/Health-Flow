@@ -219,3 +219,45 @@ def test_main_rejects_duplicate_subject(database_url, capsys):
     assert main(args) == 0
     assert main(args) == 1
     assert "主体已存在" in capsys.readouterr().err
+
+
+def test_seed_grants_report_interpretation_consent_by_default(database_url):
+    """#269 之后上传要求一条有效的「报告解读」同意，种子代主体授予它。
+
+    来源记为 `seed`：它不是患者的表态，读记录的人必须能一眼分开。
+    """
+    from app.data.models import HealthDataConsent
+    from app.service.consent import required_text_version
+    from app.service.consent_vocabulary import PRODUCT_RECOMMENDATION, REPORT_INTERPRETATION
+
+    payload = seed_database(database_url, tenant_id="consent-tenant", external_subject="consent-user")
+
+    with _session(database_url) as session:
+        rows = session.scalars(
+            select(HealthDataConsent).where(HealthDataConsent.owner_id == payload["subject"]["owner_id"])
+        ).all()
+    assert [(row.consent_item, row.decision, row.source) for row in rows] == [
+        (REPORT_INTERPRETATION, "granted", "seed")
+    ]
+    assert rows[0].text_version == required_text_version(REPORT_INTERPRETATION)
+    assert PRODUCT_RECOMMENDATION not in {row.consent_item for row in rows}, "推荐同意是可选的一项，默认不种"
+
+
+def test_seed_can_leave_the_subject_without_consent(database_url):
+    """要证明「没有同意就上传不了」的用例需要这样的主体。"""
+    from app.data.models import HealthDataConsent
+
+    payload = seed_database(
+        database_url,
+        tenant_id="no-consent-tenant",
+        external_subject="no-consent-user",
+        consent=(),
+    )
+
+    with _session(database_url) as session:
+        assert (
+            session.scalars(
+                select(HealthDataConsent).where(HealthDataConsent.owner_id == payload["subject"]["owner_id"])
+            ).all()
+            == []
+        )

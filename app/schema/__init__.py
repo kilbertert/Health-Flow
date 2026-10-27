@@ -3,6 +3,7 @@
 from app.schema.auth import (
     ReportHistoryItem,
     SessionSubjectResponse,
+    TicketExchangeResponse,
 )
 from app.schema.chat import (
     ChatMessage,
@@ -42,6 +43,7 @@ __all__ = [
     "ReportConfirmationRequest",
     "ReportHistoryItem",
     "SessionSubjectResponse",
+    "TicketExchangeResponse",
     "ChatMessage",
     "ChatRequest",
     "ChatResponse",

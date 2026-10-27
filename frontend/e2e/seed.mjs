@@ -12,17 +12,26 @@ const execFileAsync = promisify(execFile);
 
 export const SEED_REPORT_STATUSES = ['assessed', 'pending_confirmation'];
 
+//: 与 `app/service/consent_vocabulary.py` 同一组字面量。这里**只用作参数**，不复制
+//: 另一份词表：种子脚本本身（`scripts/e2e_seed.py`）只认词表里的取值，给错会明确报错。
+export const REPORT_INTERPRETATION = 'report_interpretation';
+export const PRODUCT_RECOMMENDATION = 'product_recommendation';
+
 /**
  * 在本次运行的测试数据库中写入票据主体、会话与报告种子数据。
  *
  * @param {object} [options]
  * @param {string[]} [options.reports] 需要的报告状态,默认已完成 + 待确认各一份。
  * @param {string} [options.displayName] 账户昵称。
+ * @param {string[]} [options.consent] 代主体授予的同意项。默认给「报告解读」——
+ *   #269 之后没有它上传返回 403,而绝大多数用例要测的不是同意本身。
+ *   传 `[]` 得到「从未表过态」的主体,用来驱动闸门。
  * @returns {Promise<{subject: {owner_id: string, tenant_id: string, external_subject: string, display_name: string, session_token: string}, reports: Array<{id: number, status: string, report_type: string}>}>}
  */
 export async function seedTestData({
   reports = SEED_REPORT_STATUSES,
   displayName = '体检用户',
+  consent = [REPORT_INTERPRETATION],
 } = {}) {
   const repoRoot = process.env.HEALTHFLOW_E2E_REPO_ROOT;
   const databaseUrl = process.env.HEALTHFLOW_E2E_DATABASE_URL;
@@ -57,6 +66,15 @@ export async function seedTestData({
   ];
   if (reportFilesDir) {
     seedArgs.push('--report-files', reportFilesDir);
+  }
+  // 空数组是一个**显式请求**(「这个主体一项都没同意」),不是「用默认值」——
+  // 所以它有自己的开关,而不是靠「没传 --consent」来表达。
+  if (consent.length === 0) {
+    seedArgs.push('--no-consent');
+  } else {
+    for (const item of consent) {
+      seedArgs.push('--consent', item);
+    }
   }
   const { stdout } = await execFileAsync(command, seedArgs, {
     cwd: repoRoot,

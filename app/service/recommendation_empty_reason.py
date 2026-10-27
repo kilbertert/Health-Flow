@@ -24,15 +24,17 @@
 ## 三组取值，不是一个词表的三种读法
 
 - ``RECOMMENDATION_REASONS_ORDERED`` —— **取货端点**（`GET /report/{id}/recommendations`）
-  可能给出的原因。它比商城模块能产生的多一个 `no_published_card`：那一条是**本报告自身的
-  事实**，不调商城就能答（报告没有已确认的健康风险，就没有据以取货的标签）。
+  可能给出的原因。它比商城模块能产生的多两个，而那两条**都在调到商城之前**就能答：
+  `no_published_card`（本报告没有可据以取货的健康风险）与
+  `product_recommendation_consent_required`（患者没有对当前版本的「商品推荐」同意，#271）。
 - ``CART_LINK_REASONS_ORDERED`` —— **加购端点**的。它是另一对取值，与取货那三个**不重叠**：
   `report_not_ready`（这份报告还没确认/评估）与 `link_unavailable`（深链构造不出来）。
   两条路问的是不同的问题（「有没有货」与「能不能跳过去」），共用一个词表会把两件事混成一件。
 - ``REPORT_ACCESS_REASONS_ORDERED`` —— **报告访问**那一类：这份报告读不到（会话失效，
-  或报告不存在/不属于你）。它**不是**「取货为空」的原因之一，而是一个**报告级访问问题**
-  —— 患者侧要据此说「请从商城入口重新进入/这份报告打不开」，而不是「商城暂时不可用」。
-  它由服务端在响应体里具名，而不是让前端从一句人话里猜 HTTP 状态。
+  报告不存在/不属于你，或没有有效的报告解读同意）。它**不是**「取货为空」的原因之一，
+  而是一个**报告级访问问题** —— 患者侧要据此说「请从商城入口重新进入/这份报告打不开/
+  请先完成授权」，而不是「商城暂时不可用」。它由服务端在响应体里具名，而不是让前端从
+  一句人话里猜 HTTP 状态。
 
 三条路各自出域**自己**那一组。患者侧不允许产生服务端产生不了的取值 —— 这是本模块存在的
 理由，也是它与 #226（解读失败不再按自由文本子串决定重试）同一形状的地方。
@@ -52,6 +54,10 @@ RECOMMENDATION_REASONS_ORDERED: tuple[str, ...] = (
     "no_label_data",
     # 商城不可达 / 超时 / 返回业务错误 / 凭据未配置。
     "mall_unavailable",
+    # 主体对**当前版本**的「商品推荐」没有有效同意，服务端在调用商城之前就拒绝（#271）。
+    # 它与 `no_label_data` 是两件事：那是「商城没有货」，这是「患者没允许我们问商城」。
+    # 患者侧的动作也不同 —— 前者只能说暂无推荐，后者要指向「开启推荐」。
+    "product_recommendation_consent_required",
 )
 
 CART_LINK_REASONS_ORDERED: tuple[str, ...] = (
@@ -66,10 +72,15 @@ REPORT_ACCESS_REASONS_ORDERED: tuple[str, ...] = (
     "session_expired",
     # 报告不存在，或不属于当前主体 —— 两者对患者是同一件事，不分别暴露。
     "report_not_found",
+    # 主体对**当前版本**的「报告解读」没有有效同意，服务端拒绝接收上传（#269）。
+    # 它与上面两条同为**报告级访问问题**而不是「取货为空」：患者侧的动作是回到
+    # 「隐私与授权」完成同意，不是稍后重试，也不是去商城登录。
+    "report_interpretation_consent_required",
 )
 
-#: **商城模块能产生**的那个子集。`app/service/mall_goods.py` 从这里派生 `Reason`
-#: （端点自己判定的 `no_published_card` 不在其中 —— 它不调商城）。
+#: **商城模块能产生**的那个子集。`app/service/mall_goods.py` 从这里派生 `Reason`。
+#: 端点自己判定、**不调商城**的两个取值不在其中：`no_published_card`（没有取货依据）与
+#: `product_recommendation_consent_required`（患者没同意，闸门在调用之前）。
 MALL_GOODS_REASONS_ORDERED: tuple[str, ...] = ("no_label_data", "mall_unavailable")
 
 RECOMMENDATION_REASONS: frozenset[str] = frozenset(RECOMMENDATION_REASONS_ORDERED)
@@ -93,8 +104,10 @@ def vocabulary() -> frozenset[str]:
 #:
 #: `401` 是「会话失效」（`session_owner_dependency` 与 `_require_owner` 都给这个状态）；
 #: `404` 是「报告不存在或不属于你」（`_authorized_report` 三个分支都给这个状态，刻意不
-#: 分别暴露）。其余状态不属于这一类。
+#: 分别暴露）。`403` 是「没有有效的报告解读同意」，由上传闸门给出（#269）。
+#: 其余状态不属于这一类。
 REPORT_ACCESS_BY_STATUS: dict[int, str] = {
     401: "session_expired",
+    403: "report_interpretation_consent_required",
     404: "report_not_found",
 }

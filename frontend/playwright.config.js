@@ -26,6 +26,12 @@ const reportFilesDir =
 const frontendDist =
   process.env.HEALTHFLOW_E2E_FRONTEND_DIST || path.join(frontendDir, 'dist');
 
+// 「商城 H5」在 E2E 里的替身：**与 API 不同的源**。跨源行为只能由一个真的跨源请求证明，
+// 同源请求在浏览器里根本不经过 CORS 检查。仅绑回环，与 API 端口不同即可（源 = scheme +
+// host + port）。
+const mallOrigin =
+  process.env.HEALTHFLOW_E2E_MALL_ORIGIN || `http://127.0.0.1:${port + 1}`;
+
 // 运行期上下文:通过环境变量传给服务器启动器、种子工具、测试 worker 与收尾。
 const e2eEnv = {
   HEALTHFLOW_E2E_REPO_ROOT: repoRoot,
@@ -34,6 +40,8 @@ const e2eEnv = {
   HEALTHFLOW_E2E_PORT: String(port),
   HEALTHFLOW_E2E_DATABASE_URL: databaseUrl,
   HEALTHFLOW_E2E_REPORT_FILES_DIR: reportFilesDir,
+  HEALTHFLOW_E2E_MALL_ORIGIN: mallOrigin,
+  HEALTHFLOW_E2E_BASE_URL: baseURL,
 };
 for (const [key, value] of Object.entries(e2eEnv)) {
   process.env[key] ??= value;
@@ -51,7 +59,9 @@ const serverEnv = {
   REPORT_ACCOUNT_REQUIRED: 'true',
   AUTH_COOKIE_SECURE: 'false',
   HEALTHFLOW_BASIC_AUTH_ENABLED: 'false',
-  CORS_ORIGINS: baseURL,
+  // 服务端从**配置**读放行的源（ADR 0026）。这里把自己与服务都算上，是为了让
+  // `cors-bearer.spec.js` 能用第二个源真的发出跨源请求 —— 同源请求证明不了跨源。
+  CORS_ORIGINS: [baseURL, mallOrigin].join(','),
 };
 
 export default defineConfig({
@@ -79,5 +89,9 @@ export default defineConfig({
     stdout: 'pipe',
     env: serverEnv,
   },
+  // 「商城 H5」的那个源由 Setup **起一次、活一整趟**：跨源 spec 不止一条，而 Playwright
+  // 让不同的 spec 文件并行跑在不同的 worker 里 —— 各自 `listen` 同一个端口会撞成
+  // `EADDRINUSE`，红的原因与跨源无关。返回的回调就是 teardown，启停配对。
+  globalSetup: './e2e/mall-origin.mjs',
   globalTeardown: './e2e/teardown.mjs',
 });

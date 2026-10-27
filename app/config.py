@@ -53,9 +53,20 @@ class Settings(BaseSettings):
 
     API_HOST: str = "0.0.0.0"
     API_PORT: int = 8080
+    # 跨源放行的源**只来自配置**（ADR 0026）。生产里它是商城 H5 的源，一个逗号分隔的
+    # 白名单；开发里是本地 Vite 的两个端口。写死在代码里的源没法随商城域名调整，而
+    # 这个列表一旦配宽，多出来的每个源都是一个能带令牌访问患者报告的页面。
     CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
     ROUTER_CONFIDENCE_THRESHOLD: float = 0.55
     MAX_RECURSION: int = 3
+    # 健康数据同意的**当前要求的文本版本**（GLOSSARY.md 的「健康数据同意」）。
+    # 患者表的是对某一版文本的态度，版本一变，此前的表态不再有效、须重新征求。
+    # 它必须由配置给出而不是写死在代码里：法务定稿时改的是这里，不是一次发布。
+    # 两项分开是刻意的 —— 改「报告解读」的文本不该顺带作废患者对「商品推荐」的表态。
+    # 开发阶段用草稿版本号（PRD 的发布闸门：正式文本由法务定稿后替换）。
+    CONSENT_REPORT_INTERPRETATION_VERSION: str = "draft-2026-10-27"
+    CONSENT_PRODUCT_RECOMMENDATION_VERSION: str = "draft-2026-10-27"
+
     MAX_UPLOAD_BYTES: int = 20 * 1024 * 1024
     MAX_UPLOAD_TOTAL_BYTES: int = 50 * 1024 * 1024
     MAX_UPLOAD_FILES: int = 20
@@ -104,7 +115,6 @@ class Settings(BaseSettings):
     HEALTHFLOW_BASIC_USER: str = "healthflow"
     HEALTHFLOW_BASIC_PASSWORD: str = ""
     REPORT_ACCOUNT_REQUIRED: bool | None = None
-    AUTH_SESSION_DAYS: int = 30
     AUTH_COOKIE_SECURE: bool | None = None
 
     # 本进程加载的那份 env 文件在磁盘上的位置，**由 unit 显式声明**（unit 里同时有

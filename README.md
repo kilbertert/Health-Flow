@@ -131,7 +131,9 @@ tests/                        # pytest 测试（132 passed）
 | POST | `/api/auth/logout` | 注销当前会话 |
 | GET | `/api/auth/me` | 获取当前主体 |
 | GET | `/api/auth/reports` | 获取当前主体的报告历史 |
-| POST | `/api/health/report/upload` | 上传 PDF/图片并解析指标 |
+| GET | `/api/auth/consent` | 读取两项健康数据同意的状态与要求的文本版本 |
+| POST | `/api/auth/consent` | 记录一次同意或撤回（只追加） |
+| POST | `/api/health/report/upload` | 上传 PDF/图片并解析指标（要求有效的「报告解读」同意） |
 | GET | `/api/health/report/{id}` | 查询报告和坐标指标 |
 | GET | `/api/health/report/{id}/metrics` | 查询报告指标列表 |
 | DELETE | `/api/health/report/{report_id}` | 删除报告 |

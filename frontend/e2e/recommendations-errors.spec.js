@@ -10,9 +10,14 @@
 // 归因读的是服务端给的结构化事实（响应头 `X-Report-Access-Reason`），不是从消息文本里
 // 嗅探 HTTP 状态 —— 后者会随 `detail` 的措辞静默翻转。
 import { test, expect, loginWithSeed } from './fixtures.js';
+import { PRODUCT_RECOMMENDATION, REPORT_INTERPRETATION } from './seed.mjs';
+
+// 推荐端点要求有效的「商品推荐」同意（#271）；本文件测的是**失败分支**，不是同意，
+// 所以种子代主体把这一项给上。
+const CONSENT = [REPORT_INTERPRETATION, PRODUCT_RECOMMENDATION];
 
 async function openAssessedReport(page, seed) {
-  const seeded = await seed({ reports: ['assessed'] });
+  const seeded = await seed({ reports: ['assessed'], consent: CONSENT });
   await loginWithSeed(page, seeded);
   await page.goto(`/#/report/${seeded.reports[0].id}`);
   await expect(page.getByRole('heading', { name: '报告详情' })).toBeVisible();
@@ -86,4 +91,43 @@ test('加购失败按服务端的具名原因说话', async ({ page, seed }) => 
   await page.getByRole('button', { name: '加入购物车' }).click();
   await expect(page.locator('.ant-message')).toContainText('还没完成确认');
   await expect(page.locator('.ant-message')).not.toContainText('暂时无法跳转到商城');
+});
+
+// #271：没有「商品推荐」同意时，服务端在调用商城之前就返回「未同意」。旧前端只需要把
+// 这个新取值翻成一句话 —— 它要说的是**去开启推荐**，而不是「商城暂时不可用」或「稍后
+// 再试」，因为患者手里就有一个能解决它的动作。
+test('未同意商品推荐时，患者看到的是开启推荐的指引，不是商城故障', async ({ page, seed }) => {
+  const seeded = await seed({ reports: ['assessed'], consent: [REPORT_INTERPRETATION] });
+  await loginWithSeed(page, seeded);
+  await page.route('**/api/health/report/*/recommendations', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        items: [],
+        reason: 'product_recommendation_consent_required',
+        groups: [],
+      }),
+    }),
+  );
+  await page.goto(`/#/report/${seeded.reports[0].id}`);
+
+  const card = page.locator('.recommendations-card');
+  await expect(card).toContainText('暂无推荐');
+  await expect(card).toContainText('尚未开启商品推荐授权');
+  // 负控：这一条不是商城故障，也不是「没有可推荐的货」。
+  await expect(card).not.toContainText('商城暂时不可用');
+  await expect(card).not.toContainText('暂无推荐的商品');
+});
+
+// 真实端点契约（不 mock 推荐端点）：这个种子**没有**给「商品推荐」同意，服务端返回的
+// 就是那个具名原因。这条用例守的是「两端说的是同一个取值」——mock 只能证明前端认识它。
+test('真实端点下未同意推荐得到「未同意」，且一条商品都不会渲染', async ({ page, seed }) => {
+  const seeded = await seed({ reports: ['assessed'] });
+  await loginWithSeed(page, seeded);
+  await page.goto(`/#/report/${seeded.reports[0].id}`);
+
+  const card = page.locator('.recommendations-card');
+  await expect(card).toContainText('尚未开启商品推荐授权');
+  await expect(card.locator('.recommendation-item')).toHaveCount(0);
 });
