@@ -24,7 +24,7 @@ Feature: 体检报告健康风险提示
       Then 响应不含 `recommendations`、`recommendation_message` 或 `product_status`
       And 报告状态仍可进入 `assessed`
 
-  Rule: 检测页商品由服务端读取商城，前端只与同源通信
+  Rule: 检测页商品由服务端读取商城，浏览器不直接调商城
 
     Scenario: 命中商家商品时展示商品卡片
       Given 一份已完成报告含一个已确认健康风险

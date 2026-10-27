@@ -6,6 +6,12 @@
 `app/api/report.py`、`app/api/auth.py`、`app/schema/report.py`、
 `frontend/src/api.js`、`frontend/src/components/Recommendations.jsx`）
 
+> **（2026-10-27 加注，决定不变）** 本记录决定「成因由服务端具名、患者侧只映射」，
+> 这一条不变。变了的是 `session_expired` 的**患者侧动作**：患者界面迁入商城 H5 之后，
+> 客户端先静默换一张新令牌并重试一次，只有商城登录本身也失效时才去商城登录；它不再是
+> 一句「重新进入」。另有一组取值将在该模块上线时增加（取货为空里的「未同意」）。
+> 见 `docs/adr/0026-patient-ui-moves-into-mall-h5.md`。
+
 ## 背景
 
 「本次推荐为什么是空的」在本仓有**四份**答案，三份在服务端、一份只在浏览器里：
