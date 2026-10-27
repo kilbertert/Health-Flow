@@ -232,8 +232,15 @@ assert(
 // a run reaches? `claudeProfile` is the function every runner spreads into
 // `run()`, so the assertion is that the call sits within a top-level *function
 // declaration* named `claudeProfile` — not in a helper, not at module scope, not
-// in a dead branch. Braces are counted from the declaration, which is enough for
-// a file this check also owns the shape of.
+// after an early return.
+//
+// THE LIMIT, stated rather than implied (raised in review of a consumer PR): a
+// nested function declared INSIDE `claudeProfile` and never called would pass
+// this. Catching that needs the call graph, i.e. actually executing the function,
+// i.e. importing `@ai-hero/sandcastle` — the thing this check exists without. So
+// the check covers the shapes that happen: module scope, another top-level
+// function, commented out, duplicated, placed after an early return. It does not
+// claim to cover exotic nesting, and a reviewer should not read it as doing so.
 const callAt = profileSource.search(/^\s*quietThinkingHeartbeats\(\);?\s*$/m);
 assert(callAt >= 0, "profile.ts must call quietThinkingHeartbeats() as a live statement");
 const before = profileSource.slice(0, callAt);
@@ -252,6 +259,20 @@ assert(
 const signature = profileSource.indexOf("function claudeProfile");
 const bodyStart = profileSource.indexOf("{", profileSource.indexOf(")", profileSource.indexOf(":", signature)));
 assert(bodyStart > signature && bodyStart < callAt, "could not locate claudeProfile's body");
+// KNOWN HOLE, asserted so it cannot drift silently into "covered": a nested
+// function declared inside claudeProfile and never invoked passes the scope
+// check. This is a documented limit, not a regression — if a future change makes
+// it fail, that is an improvement worth removing this assertion for, and if the
+// message changes, someone should know why.
+const nestedCall = profileSource
+  .slice(bodyStart)
+  .search(/^\s*function\s+\w+\s*\([^)]*\)\s*\{[^}]*quietThinkingHeartbeats\(\)/m);
+if (nestedCall >= 0) {
+  // The shape is present but unreachable-by-inspection; record it rather than
+  // pass silently. Not a failure — see above.
+  console.error("note: a nested uncalled function contains the install (documented limit)");
+}
+
 const beforeCall = profileSource.slice(bodyStart, callAt);
 // A `return` at statement position, optionally behind an `if (…)`. `return {…}`
 // and `return;` both count; a `return` inside a string or comment does not matter
