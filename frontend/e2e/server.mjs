@@ -27,15 +27,19 @@ const reportFilesDir = requiredEnv('HEALTHFLOW_E2E_REPORT_FILES_DIR');
 // 票据验签是启动前置（未配置即拒绝启动，见 app/service/tickets.py）。E2E 不覆盖票据
 // 链路，但仍需要一个自造的密钥对让服务能起来——生成在这里而不是提交进仓库，
 // 因为它是一次性的测试夹具，不是配置。
+//
+// 私钥也留在同一个沙箱目录里：`e2e/cors-bearer.spec.js` 用它签一张真票据，证明
+// 「兑换 → Bearer」这条跨源链路端到端成立。沙箱由 `teardown.mjs` 整体删除。
 function ensureTicketKeypair(dir) {
   const keyPath = path.join(dir, 'e2e-ticket.pub.pem');
   if (!fs.existsSync(keyPath)) {
-    const { publicKey } = generateKeyPairSync('rsa', {
+    const { publicKey, privateKey } = generateKeyPairSync('rsa', {
       modulusLength: 2048,
       publicKeyEncoding: { type: 'spki', format: 'pem' },
       privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
     });
     fs.writeFileSync(keyPath, publicKey, { mode: 0o600 });
+    fs.writeFileSync(path.join(dir, 'e2e-ticket.key'), privateKey, { mode: 0o600 });
   }
   return keyPath;
 }

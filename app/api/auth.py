@@ -7,13 +7,20 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import ACCESS_REASON_HEADER, db_dependency, session_owner_dependency
 from app.config import get_settings
 from app.data.models import MedicalReport
-from app.schema.auth import ReportHistoryItem, SessionSubjectResponse, TicketExchangeRequest
+from app.schema.auth import (
+    ReportHistoryItem,
+    SessionSubjectResponse,
+    TicketExchangeRequest,
+    TicketExchangeResponse,
+)
 from app.service.recommendation_empty_reason import REPORT_ACCESS_BY_STATUS
 from app.service.report_metric_counts import metric_counts
 from app.service.report_ownership import subject_storage_id
@@ -128,7 +135,7 @@ async def report_history(
     ]
 
 
-@router.post("/ticket", response_model=SessionSubjectResponse, status_code=201)
+@router.post("/ticket", response_model=TicketExchangeResponse, status_code=201)
 async def exchange_ticket(
     request: Request,
     response: Response,
@@ -181,20 +188,24 @@ async def exchange_ticket(
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
     db.expire_all()
-    token, session_row = issue_session(
-        identity.storage_id,
-        days=get_settings().AUTH_SESSION_DAYS,
-    )
+    token, session_row = issue_session(identity.storage_id)
     db.add(session_row)
     db.commit()
 
+    # Cookie 与响应体里的令牌是**同一条会话行**（ADR 0026）。Cookie 的 `max_age` 因此从
+    # 那一行的过期时刻算，而不是另配一个天数——两处各算一次寿命，就是两份会漂移的答案。
     response.set_cookie(
         SESSION_COOKIE,
         token,
-        max_age=max(1, get_settings().AUTH_SESSION_DAYS) * 86400,
+        max_age=max(1, int((session_row.expires_at - datetime.now()).total_seconds())),
         httponly=True,
         secure=get_settings().auth_cookie_secure,
         samesite="lax",
         path="/",
     )
-    return _subject_response(db, identity.storage_id)
+    subject = _subject_response(db, identity.storage_id)
+    return TicketExchangeResponse(
+        **subject.model_dump(),
+        session_token=token,
+        session_expires_at=session_row.expires_at,
+    )

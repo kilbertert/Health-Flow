@@ -39,6 +39,21 @@ class TicketExchangeRequest(BaseModel):
     ticket: str = Field(min_length=1)
 
 
+class TicketExchangeResponse(SessionSubjectResponse):
+    """兑换的响应体：主体，**外加会话令牌与过期时刻**。
+
+    票据兑换过去只写 Cookie —— 同源的旧前端不需要读令牌。商城 H5 在另一个源上，
+    浏览器不会替它带上本仓的 Cookie（ADR 0026），所以令牌必须**经响应体**交给它，
+    由模块自己放进 `Authorization: Bearer` 并存进 `sessionStorage`。
+
+    令牌与 Cookie 指向**同一条**服务端会话行：`session_expires_at` 就是那一行的过期时刻，
+    不是另算的第二份寿命。吊销（退出登录）对两者同时生效。
+    """
+
+    session_token: str
+    session_expires_at: datetime
+
+
 class ReportHistoryItem(BaseModel):
     id: int
     report_type: str | None = None

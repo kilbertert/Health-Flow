@@ -57,6 +57,7 @@ await expect(page.getByText('点击或拖拽多张报告文件到此区域')).to
 | [paste-upload](paste-upload.md) | 粘贴图片上传 | `e2e/paste.spec.js` | 首页 → **体检报告解读**（导航按钮）→ 上传区 |
 | [mobile-navigation](mobile-navigation.md) | 移动端底部导航 | `e2e/mobile-nav.spec.js` | 375px 视口 |
 | [responsive-layout](responsive-layout.md) | 移动端布局与溢出 | `e2e/mobile-layout.spec.js`, `report-layout.spec.js` | 375px / 桌面视口 |
+| [cross-origin-bearer](cross-origin-bearer.md) | 跨源 Bearer 会话（商城 H5 调 API） | `e2e/cors-bearer.spec.js` | 从**另一个源**的页面调 API，不经过任何界面 |
 
 ## Not on this map
 
@@ -64,6 +65,7 @@ await expect(page.getByText('点击或拖拽多张报告文件到此区域')).to
   service. E2E substitutes seed data for their products. Drive it only against a live
   deployment, and say so.
 - **会话建立 / 登录** — there is no login page; the seed plants a subject session
-  cookie. See `loginWithSeed` in `e2e/fixtures.js`.
+  cookie. See `loginWithSeed` in `e2e/fixtures.js`. 跨源拿会话（Bearer）是一个例外：
+  它有 spec，见 [cross-origin-bearer](cross-origin-bearer.md)。
 - **商城侧商品可见性** — 商品读取发生在服务端，前端只与自身同源通信。The
   recommendations feature verifies the *client* contract, not mall state.

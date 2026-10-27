@@ -1,6 +1,6 @@
 ---
 name: verify-healthflow
-description: "Drive the HealthFlow patient report portal in a real browser and capture evidence that a change works. Use when you need to prove UI behavior on health-flow (report history, report detail, indicator confirmation, recommendations, paste upload, mobile nav) rather than assume it works from unit tests."
+description: "Drive the HealthFlow patient report portal in a real browser and capture evidence that a change works. Use when you need to prove UI behavior on health-flow (report history, report detail, indicator confirmation, recommendations, paste upload, mobile nav, cross-origin Bearer session) rather than assume it works from unit tests."
 ---
 
 # Verify HealthFlow
@@ -252,6 +252,10 @@ Environment switches: `HEALTHFLOW_E2E_PORT` (default `8137`),
 - The harness port `8137` is a transient per-run default, not an entry in
   `~/Projects/DEVELOPMENT-PORT-REGISTRY.md`. It binds loopback only.
 - Feature coverage lives in `features/` — see `features/README.md`.
+- **「跨源 Bearer 会话」没有界面。** It is proven by `e2e/cors-bearer.spec.js`, which
+  opens a page on a **second** origin and calls the API from there — see
+  `features/cross-origin-bearer.md`. There is nothing for a person to click; the
+  spec is the drive.
 - **This map rots.** When a change makes a feature file wrong — a moved route, a
   renamed control, a step that no longer works — update that file in the same
   change. For a periodic pass over the whole map, run the

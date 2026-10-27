@@ -53,6 +53,9 @@ class Settings(BaseSettings):
 
     API_HOST: str = "0.0.0.0"
     API_PORT: int = 8080
+    # 跨源放行的源**只来自配置**（ADR 0026）。生产里它是商城 H5 的源，一个逗号分隔的
+    # 白名单；开发里是本地 Vite 的两个端口。写死在代码里的源没法随商城域名调整，而
+    # 这个列表一旦配宽，多出来的每个源都是一个能带令牌访问患者报告的页面。
     CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
     ROUTER_CONFIDENCE_THRESHOLD: float = 0.55
     MAX_RECURSION: int = 3
@@ -104,7 +107,6 @@ class Settings(BaseSettings):
     HEALTHFLOW_BASIC_USER: str = "healthflow"
     HEALTHFLOW_BASIC_PASSWORD: str = ""
     REPORT_ACCOUNT_REQUIRED: bool | None = None
-    AUTH_SESSION_DAYS: int = 30
     AUTH_COOKIE_SECURE: bool | None = None
 
     # 本进程加载的那份 env 文件在磁盘上的位置，**由 unit 显式声明**（unit 里同时有

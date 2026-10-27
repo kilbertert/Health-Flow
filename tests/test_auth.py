@@ -585,3 +585,120 @@ def test_exchange_returns_the_stored_display_name(subject_client, tmp_path):
     assert response.status_code == 201
     exchanged = response.json()
     assert exchanged["display_name"] == client.get("/api/auth/me").json()["display_name"]
+
+
+# --- Bearer 会话（ADR 0026：商城 H5 在另一个源上）-------------------------------
+
+
+def _exchange_ticket(client, tmp_path):
+    with _ticket_keypair(tmp_path) as key:
+        response = client.post("/api/auth/ticket", json={"ticket": _make_ticket(key)})
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def test_ticket_exchange_returns_the_session_token_and_its_expiry(subject_client, tmp_path):
+    """响应体里必须有**会话令牌与过期时刻** —— 跨源的前端读不到 Cookie，只能从体里拿。"""
+    from datetime import datetime
+
+    from app.data.models import UserSession
+
+    client, SessionLocal = subject_client
+    body = _exchange_ticket(client, tmp_path)
+
+    assert body["session_token"]
+    expires_at = datetime.fromisoformat(body["session_expires_at"]).replace(tzinfo=None)
+    with SessionLocal() as db:
+        saved = db.query(UserSession).one()
+        assert saved.token_hash == session_hash(body["session_token"])
+        # **同一条会话行**：响应体里的过期时刻取自那一行，不是另算的第二份寿命。
+        assert saved.expires_at == expires_at
+        # Cookie 照常写，旧前端不受影响。
+        assert client.cookies.get(SESSION_COOKIE) == body["session_token"]
+
+
+def test_a_new_session_lasts_twelve_hours(subject_client, tmp_path):
+    """Cookie 与 Bearer 共用 12 小时（ADR 0026）。
+
+    此前是 30 天。这个数只有一处：两处各配一个天数，就是两份会漂移的答案。
+    """
+    from datetime import datetime, timedelta
+
+    client, _ = subject_client
+    body = _exchange_ticket(client, tmp_path)
+    lifetime = datetime.fromisoformat(body["session_expires_at"]).replace(tzinfo=None) - datetime.now()
+    assert timedelta(hours=11, minutes=55) < lifetime <= timedelta(hours=12, minutes=1)
+
+
+def test_bearer_and_cookie_resolve_to_the_same_subject(subject_client, tmp_path):
+    """同一张票据换出的主体，用 Bearer 与用 Cookie 调用必须是同一个。"""
+    client, _ = subject_client
+    body = _exchange_ticket(client, tmp_path)
+    token = body["session_token"]
+
+    cookie_subject = client.get("/api/auth/me").json()["subject_id"]
+    # 没有 Cookie 的请求（模拟跨源前端）：只有 Authorization 头。
+    bearer = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert bearer.status_code == 200, bearer.text
+    assert bearer.json()["subject_id"] == cookie_subject == body["subject_id"]
+
+    # 而且它真的是**同一个主体在别的接口上**也能用，不是 /me 的特例。
+    client.cookies.clear()
+    history = client.get("/api/auth/reports", headers={"Authorization": f"Bearer {token}"})
+    assert history.status_code == 200
+
+
+def test_logout_with_a_bearer_token_revokes_it_immediately(subject_client, tmp_path):
+    """退出登录对 Bearer 同样生效 —— 令牌与会话行是同一条。"""
+    client, _ = subject_client
+    token = _exchange_ticket(client, tmp_path)["session_token"]
+    client.cookies.clear()
+
+    assert client.post("/api/auth/logout", headers={"Authorization": f"Bearer {token}"}).status_code == 204
+    after = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert after.status_code == 401
+    assert after.headers["X-Report-Access-Reason"] == "session_expired"
+
+
+def test_an_expired_bearer_gets_401_with_the_named_reason(subject_client, tmp_path):
+    """失效的 Bearer 得到 401 与**具名原因头** —— 跨源的前端据此静默续期。"""
+    from app.service.report_ownership import subject_storage_id
+    from app.service.sessions import issue_session
+
+    client, SessionLocal = subject_client
+    owner_id = subject_storage_id("t1", "u1")
+    token, row = issue_session(owner_id, hours=-1)
+    with SessionLocal() as db:
+        db.add(TicketSubject(id=str(uuid.uuid4()), tenant_id="t1", external_subject="u1"))
+        db.add(row)
+        db.commit()
+
+    response = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 401
+    assert response.headers["X-Report-Access-Reason"] == "session_expired"
+
+
+def test_the_session_token_is_read_in_exactly_one_place(subject_client):
+    """`session_owner_id` 与 `revoke_session` 都调用同一个读取入口（票面要求）。
+
+    行为测试证明不了这一条：从 Cookie 里各取一次的实现**行为完全一致**，直到有人给
+    其中一处加 Bearer、另一处没加。所以这里守的是定义位置。
+    """
+    import inspect
+
+    from app.service import sessions
+
+    code = inspect.getsource(sessions)
+    # 除了 `request_session_token` 自己，没有第二处直接读 Cookie 或 Authorization。
+    readers = [
+        line.strip()
+        for line in code.splitlines()
+        if ("request.cookies.get" in line or 'headers.get("authorization"' in line)
+    ]
+    assert len(readers) == 2, f"读取会话令牌的地方不止一处：{readers}"
+    assert any("request.cookies.get" in line for line in readers)
+    assert any('request.headers.get("authorization"' in line for line in readers)
+    resolver = inspect.getsource(sessions.session_owner_id)
+    revoker = inspect.getsource(sessions.revoke_session)
+    assert "request_session_token(request)" in resolver
+    assert "request_session_token(request)" in revoker
