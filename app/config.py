@@ -59,6 +59,14 @@ class Settings(BaseSettings):
     CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
     ROUTER_CONFIDENCE_THRESHOLD: float = 0.55
     MAX_RECURSION: int = 3
+    # 健康数据同意的**当前要求的文本版本**（GLOSSARY.md 的「健康数据同意」）。
+    # 患者表的是对某一版文本的态度，版本一变，此前的表态不再有效、须重新征求。
+    # 它必须由配置给出而不是写死在代码里：法务定稿时改的是这里，不是一次发布。
+    # 两项分开是刻意的 —— 改「报告解读」的文本不该顺带作废患者对「商品推荐」的表态。
+    # 开发阶段用草稿版本号（PRD 的发布闸门：正式文本由法务定稿后替换）。
+    CONSENT_REPORT_INTERPRETATION_VERSION: str = "draft-2026-10-27"
+    CONSENT_PRODUCT_RECOMMENDATION_VERSION: str = "draft-2026-10-27"
+
     MAX_UPLOAD_BYTES: int = 20 * 1024 * 1024
     MAX_UPLOAD_TOTAL_BYTES: int = 50 * 1024 * 1024
     MAX_UPLOAD_FILES: int = 20

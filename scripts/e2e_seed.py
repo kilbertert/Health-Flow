@@ -21,6 +21,7 @@ import json
 import sys
 import uuid
 from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -33,8 +34,18 @@ from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.data.models import Base, MedicalReport, MetricRecord, ReportFile, TicketSubject, UserSession
+from app.data.models import (
+    Base,
+    HealthDataConsent,
+    MedicalReport,
+    MetricRecord,
+    ReportFile,
+    TicketSubject,
+    UserSession,
+)
 from app.schema.evidence import EvidenceMatchResponse
+from app.service.consent import required_text_version
+from app.service.consent_vocabulary import CONSENT_ITEMS_ORDERED, REPORT_INTERPRETATION
 from app.service.origin_location import source_id_for
 from app.service.report_ownership import subject_storage_id
 from app.service.sessions import issue_session
@@ -296,11 +307,17 @@ def seed_database(
     display_name: str | None = None,
     reports: Sequence[str] = SEED_REPORT_STATUSES,
     report_files_dir: str | None = None,
+    consent: Sequence[str] = (REPORT_INTERPRETATION,),
 ) -> dict[str, Any]:
-    """Seed one ticket subject, its session, and the requested reports.
+    """Seed one ticket subject, its session, its consent, and the requested reports.
 
     #172 之后不再有账号与密码：主体由「票据兑换」产生。种子脚本直接构造等价的
     主体标识与一条会话行，等价于「用户刚从商城跳进来兑换过一张票」的状态。
+
+    #269 之后上传还要求一条有效的「报告解读」同意，所以种子**代主体**授予它 ——
+    来源记为 `seed`，与患者的真实表态分开。这不是在测同意本身（那由
+    `tests/test_consent.py` 守住），而是让既有用例仍然进入它们要测的那条链路。
+    `consent=()` 用于那些要证明「没有同意就上传不了」的用例。
     """
     for status in reports:
         if status not in SEED_REPORT_STATUSES:
@@ -327,6 +344,18 @@ def seed_database(
             )
             token, session_row = issue_session(owner_id)
             session.add(session_row)
+            for item in consent:
+                session.add(
+                    HealthDataConsent(
+                        owner_id=owner_id,
+                        consent_item=item,
+                        decision="granted",
+                        # 版本取**此刻配置里的要求版本**，与真实写入同一处（service 层）。
+                        text_version=required_text_version(item),
+                        source="seed",
+                        created_at=datetime.now(),
+                    )
+                )
             seeded = [
                 _seed_report(session, owner_id, status, report_files_dir=report_files_dir)
                 for status in reports
@@ -361,7 +390,20 @@ def seed_database(
 
 
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="向 E2E 测试数据库写入票据主体、会话与指定状态的报告种子数据。")
+    parser = argparse.ArgumentParser(description="向 E2E 测试数据库写入票据主体、会话、同意与指定状态的报告种子数据。")
+    consent_group = parser.add_mutually_exclusive_group()
+    consent_group.add_argument(
+        "--consent",
+        action="append",
+        choices=CONSENT_ITEMS_ORDERED,
+        dest="consent",
+        help=f"代主体授予的同意项,可重复;缺省授予 {REPORT_INTERPRETATION}",
+    )
+    consent_group.add_argument(
+        "--no-consent",
+        action="store_true",
+        help="一项都不授予(要驱动「没有同意就上传不了」的用例时用)",
+    )
     parser.add_argument("--database", required=True, help="测试数据库 SQLAlchemy URL")
     parser.add_argument("--display-name", default=None, help="主体显示昵称")
     parser.add_argument("--tenant-id", default="e2e-tenant", help="主体所属租户标识")
@@ -392,6 +434,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             display_name=args.display_name,
             reports=args.reports or SEED_REPORT_STATUSES,
             report_files_dir=args.report_files,
+            # 三者互斥:显式「一项都不给」／显式列出／缺省授予报告解读。
+            consent=() if args.no_consent else (args.consent or [REPORT_INTERPRETATION]),
         )
     except IntegrityError as exc:
         print(f"e2e_seed: 主体已存在({args.external_subject}): {exc.orig}", file=sys.stderr)

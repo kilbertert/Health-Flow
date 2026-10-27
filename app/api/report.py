@@ -52,6 +52,8 @@ from app.service.admission_projection import (
     has_conclusion,
 )
 from app.service.confirmation_decision import is_excluded, request_decision, require_full_coverage
+from app.service.consent import has_valid
+from app.service.consent_vocabulary import REPORT_INTERPRETATION
 from app.service.deep_link import DeepLinkError, build_deep_link
 from app.service.evidence_bridge import (
     EvidenceBridgeError,
@@ -104,6 +106,11 @@ COMPLETED_FOR_LINK = frozenset({"confirmed", "assessed"})
 #: 词表的取值集合，供组装失败块时判「库里的成因是不是一个已知的成因」。历史行里可能
 #: 是缺失，也可能是别的形状 —— 两种都读成「没有成因」，不猜。
 FAILURE_SET = frozenset(FAILURES_ORDERED)
+
+#: 上传被同意闸门拒绝时给患者看的那句话。**成因**仍走 `X-Report-Access-Reason`
+#: （`REPORT_ACCESS_BY_STATUS[403]`），这句话只是给人读的；患者侧的动作是回到
+#: 「隐私与授权」完成授权，所以句子要指向那里，而不是让他在上传页反复重试。
+CONSENT_REQUIRED_DETAIL = "尚未同意「报告解读」授权，请先在商城模块完成同意后再上传报告"
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -329,6 +336,21 @@ async def upload_report(
     db: Session = Depends(db_dependency),
     owner_id: str | None = Depends(session_owner_dependency),
 ):
+    # **闸门在读取任何文件之前**（#269）。否则「没有同意」这件事会表现为「格式不对」
+    # ——服务端已经收下了字节、再挑毛病，而那正是「门槛只在界面上」的形状。
+    #
+    # 判据只有一处（`consent.has_valid`），与 `/api/auth/consent` 读取状态是**同一次**
+    # 判定：不可能出现「状态说已同意、上传却被拒」。
+    #
+    # 被问的是**这份报告将来的 owner**（`resolve_owner`，与下面落库用的是同一个值），
+    # 不是会话主体：一个还没有主体的请求（无主哨兵）因此落 403 —— 没有主体就无从同意，
+    # fail closed，而不是先收下再说。
+    if not has_valid(db, resolve_owner(request).storage_id, REPORT_INTERPRETATION):
+        raise HTTPException(
+            status_code=403,
+            detail=CONSENT_REQUIRED_DETAIL,
+            headers={ACCESS_REASON_HEADER: REPORT_ACCESS_BY_STATUS[403]},
+        )
     patient_id = (patient_id or "").strip()
     if not patient_id and owner_id:
         patient_id = owner_id

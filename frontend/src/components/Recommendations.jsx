@@ -27,6 +27,9 @@ export const EMPTY_REASONS = {
 export const ACCESS_REASONS = {
   session_expired: '登录状态已失效，请从商城入口重新进入后查看推荐。',
   report_not_found: '这份报告打不开，请返回报告列表重新进入。',
+  // 没有对当前版本的「报告解读」同意（#269）。它**不**是「商城不可用」或「稍后再试」：
+  // 患者要做的是去完成授权，所以这句话指向那个动作。
+  report_interpretation_consent_required: '请先完成「报告解读」授权，再查看报告与推荐。',
 };
 
 // 加购失败的两个具名原因（服务端 `CartLinkResponse.reason`）。两件事、两句话。

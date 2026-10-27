@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -21,6 +22,8 @@ from app.schema.auth import (
     TicketExchangeRequest,
     TicketExchangeResponse,
 )
+from app.schema.consent import ConsentItemState, ConsentRecordRequest, ConsentStatusResponse
+from app.service.consent import record_consent, source_for_request, states
 from app.service.recommendation_empty_reason import REPORT_ACCESS_BY_STATUS
 from app.service.report_metric_counts import metric_counts
 from app.service.report_ownership import subject_storage_id
@@ -133,6 +136,52 @@ async def report_history(
         )
         for report, counts in ((report, metric_counts(report.metrics)) for report in reports)
     ]
+
+
+def _consent_status(db: Session, owner_id: str) -> ConsentStatusResponse:
+    """状态由 service 层单点给出，这里只做投影。
+
+    上传闸门读的是同一个 `has_valid()` → 同一个 `ConsentState.valid` —— 于是「状态说
+    已同意、上传却被拒」不可能发生：两处不是两份判据，是同一次判定。
+    """
+    return ConsentStatusResponse(
+        items=[ConsentItemState(**asdict(entry), valid=entry.valid) for entry in states(db, owner_id)]
+    )
+
+
+@router.get("/consent", response_model=ConsentStatusResponse)
+async def consent_status(
+    owner_id: str | None = Depends(session_owner_dependency),
+    db: Session = Depends(db_dependency),
+):
+    """当前主体对每一项同意的状态、当前要求的文本版本，以及每项是否有效。
+
+    两项**始终都在**（没有记录也是 `valid=false`），患者侧因此不必区分「没读过」
+    与「没同意」——那是同一种状态。
+    """
+    return _consent_status(db, _require_owner(owner_id))
+
+
+@router.post("/consent", response_model=ConsentStatusResponse)
+async def record_consent_decision(
+    request: Request,
+    payload: ConsentRecordRequest,
+    owner_id: str | None = Depends(session_owner_dependency),
+    db: Session = Depends(db_dependency),
+):
+    """记录一次表态（同意或撤回），返回写入后的完整状态。
+
+    **只追加**：撤回也是又一条记录，此前的行一条都不改写（`consent.record_consent`）。
+    文本版本取**此刻**配置里的要求版本，由服务端写定；来源按会话通道判定
+    （Bearer → `mall_h5`，Cookie → `legacy_web`），不由客户端声明。
+
+    返回整份状态而不是被改的那一项：患者侧要同时更新两项的显示，而「撤回推荐不影响
+    报告解读」这件事由响应本身说出来，不必让客户端记住哪些项没动。
+    """
+    storage_id = _require_owner(owner_id)
+    record_consent(db, storage_id, payload.item, payload.decision, source=source_for_request(request))
+    db.commit()
+    return _consent_status(db, storage_id)
 
 
 @router.post("/ticket", response_model=TicketExchangeResponse, status_code=201)

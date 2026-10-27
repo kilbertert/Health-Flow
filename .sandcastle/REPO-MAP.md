@@ -41,8 +41,8 @@ no project argument. Both answer *where* something is; neither replaces reading 
 
 ## Tests
 
-- tests/ — 58 test file(s, recursive)
-- frontend/e2e/ — 17 test file(s, recursive)
+- tests/ — 60 test file(s, recursive)
+- frontend/e2e/ — 19 test file(s, recursive)
 - pytest (pyproject.toml / pytest.ini present)
 
 ## Docs
@@ -51,8 +51,8 @@ no project argument. Both answer *where* something is; neither replaces reading 
 - AGENTS.md
 - CLAUDE.md
 - README.md
-- docs/ — 32 markdown file(s)
-- docs/adr/ — 25 markdown file(s)
+- docs/ — 33 markdown file(s)
+- docs/adr/ — 26 markdown file(s)
 - docs/agents/ — 5 markdown file(s)
 
 ## Tree (depth 2, first 80 lines; dependencies, build
@@ -91,6 +91,7 @@ app/
     __init__.py
     auth.py
     chat.py
+    consent.py
     evidence.py
     report.py
     train.py
@@ -103,9 +104,9 @@ app/
     condition_tags.py
     confirmation_decision.py
     confirmation_vocabulary.py
-    data_augment.py
-    deep_link.py
-    ... (23 more)
+    consent_vocabulary.py
+    consent.py
+    ... (25 more)
   __init__.py
   config_freshness.py
   config.py
@@ -115,6 +116,8 @@ artifacts/
   qa/
     20261006-frontend-deploy.md
     20261010-config-freshness-rollout.md
+    20261027-cross-origin-bearer.md
+    20261027-health-consent-gate.md
 data/
   sft/
 deploy/
@@ -131,7 +134,7 @@ docs/
     0009-adr-check-scope-and-self-application.md
     0010-required-checks-on-self-hosted.md
     0011-interpretation-failure-is-a-named-conclusion.md
-    ... (15 more)
+    ... (16 more)
   agents/
     architecture-decisions.md
     domain.md

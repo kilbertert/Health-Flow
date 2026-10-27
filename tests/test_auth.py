@@ -22,6 +22,8 @@ from sqlalchemy.pool import StaticPool
 from app.config import get_settings
 from app.data.models import Base, MedicalReport, MetricRecord, ReportAuditEvent, TicketSubject
 from app.main import app
+from app.service.consent import record_consent
+from app.service.consent_vocabulary import REPORT_INTERPRETATION
 from app.service.report_ownership import subject_storage_id
 from app.service.sessions import SESSION_COOKIE, issue_session, session_hash
 
@@ -66,10 +68,20 @@ def subject_client(monkeypatch):
         engine.dispose()
 
 
-def _issue_subject_session(SessionLocal, tenant: str, subject: str) -> tuple[str, dict[str, str]]:
+def _issue_subject_session(
+    SessionLocal,
+    tenant: str,
+    subject: str,
+    *,
+    consent: bool = True,
+) -> tuple[str, dict[str, str]]:
     """建一条主体会话，返回 `(主体标识, cookie)`。
 
     没有「注册」这一步可调用了——主体由票据兑换创建，测试里直接构造等价状态。
+
+    #269 之后上传要求一条有效的「报告解读」同意，所以默认**一并**授予它（与
+    `scripts/e2e_seed.py` 同形：真实用户同样要先同意才能上传）。要证明「没有同意就
+    上传不了」的用例传 `consent=False`；那一条行为本身由 `tests/test_consent.py` 守住。
     """
     owner_id = subject_storage_id(tenant, subject)
     token, row = issue_session(owner_id)
@@ -84,6 +96,8 @@ def _issue_subject_session(SessionLocal, tenant: str, subject: str) -> tuple[str
             )
         )
         db.add(row)
+        if consent:
+            record_consent(db, owner_id, REPORT_INTERPRETATION, "granted", source="seed")
         db.commit()
     return owner_id, {SESSION_COOKIE: token}
 
@@ -230,6 +244,8 @@ def test_upload_is_owned_by_the_subject_and_invisible_to_a_second_one(subject_cl
     previous_dir = settings.REPORT_FILES_DIR
     settings.REPORT_FILES_DIR = str(tmp_path)
     try:
+        # 会话自带一条有效的「报告解读」同意（#269）：没有它就上传不了，而这条用例
+        # 问的是归属。
         owner_id, cookie = _issue_subject_session(SessionLocal, "t1", "u1")
         client.cookies.update(cookie)
         with patch("app.api.report.get_vision_encoder_service"):

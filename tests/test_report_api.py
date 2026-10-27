@@ -98,6 +98,7 @@ def test_upload_report_endpoint(client, tmp_path):
             return_value=SimpleNamespace(storage_id=owner_id, subject=f"account:{owner_id}"),
         ),
         patch("app.data.get_db", override_get_db),
+        _format_gate_only(),
     ):
         fake_image = b"fake png content"
         cookies = {SESSION_COOKIE: token}
@@ -187,17 +188,28 @@ def test_get_report_endpoint_not_found(client):
         assert response.status_code == 404
 
 
+def _format_gate_only():
+    """让格式相关的用例越过同意闸门（#269）。
+
+    这些用例问的是「这份材料受不受理」，不是「患者同不同意」，所以在这里把同意判定
+    置为通过，而不是为每条用例建一个真实主体与一行同意记录 —— 后者的行为由
+    `tests/test_consent.py` 的 HTTP 用例守住。
+    """
+    return patch("app.api.report.has_valid", return_value=True)
+
+
 def test_upload_rejects_an_extension_outside_the_accepted_set(client):
     """闸门的第一道：不受理的后缀返回 415。
 
     这条以前**完全没有请求级测试** —— `ALLOWED_EXTENSIONS` 是模块级常量，
     没有人从请求侧钉过它。
     """
-    response = client.post(
-        "/api/health/report/upload",
-        data={"patient_id": "P001"},
-        files={"file": ("报告.txt", io.BytesIO(b"hello"), "text/plain")},
-    )
+    with _format_gate_only():
+        response = client.post(
+            "/api/health/report/upload",
+            data={"patient_id": "P001"},
+            files={"file": ("报告.txt", io.BytesIO(b"hello"), "text/plain")},
+        )
 
     assert response.status_code == 415
     assert response.json()["detail"] == "仅支持 PDF 或常见图片格式"
@@ -207,11 +219,12 @@ def test_upload_rejects_content_that_contradicts_the_extension(client):
     """把 PNG 改名成 .pdf：按内容判定，闸门明确拒绝，而不是放行后查看原文才失败。"""
     png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 24
 
-    response = client.post(
-        "/api/health/report/upload",
-        data={"patient_id": "P001"},
-        files={"file": ("报告.pdf", io.BytesIO(png), "application/pdf")},
-    )
+    with _format_gate_only():
+        response = client.post(
+            "/api/health/report/upload",
+            data={"patient_id": "P001"},
+            files={"file": ("报告.pdf", io.BytesIO(png), "application/pdf")},
+        )
 
     assert response.status_code == 415
     detail = response.json()["detail"]
@@ -271,6 +284,7 @@ def test_upload_reports_an_unknown_page_count_instead_of_one(client, tmp_path):
         # 渲染路由走的是 `db_dependency`（不是上传那条 get_db 依赖），要一并指到
         # 这份内存库上，否则它会去开一个真的开发库。
         patch("app.api.deps.db_dependency", override_get_db),
+        _format_gate_only(),
     ):
         cookies = {SESSION_COOKIE: token}
         response = client.post(
@@ -306,6 +320,7 @@ def test_upload_reports_an_unknown_page_count_instead_of_one(client, tmp_path):
             return_value=SimpleNamespace(storage_id=owner_id, subject=f"account:{owner_id}"),
         ),
         patch("app.data.get_db", override_get_db),
+        _format_gate_only(),
     ):
         one_page = client.post(
             "/api/health/report/upload",
@@ -322,7 +337,7 @@ def test_upload_rejects_total_size_limit(client):
         MAX_UPLOAD_BYTES=10,
         MAX_UPLOAD_TOTAL_BYTES=3,
     )
-    with patch("app.api.report.get_settings", return_value=settings):
+    with patch("app.api.report.get_settings", return_value=settings), _format_gate_only():
         response = client.post(
             "/api/health/report/upload",
             data={"patient_id": "P001"},

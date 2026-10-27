@@ -58,6 +58,7 @@ await expect(page.getByText('点击或拖拽多张报告文件到此区域')).to
 | [mobile-navigation](mobile-navigation.md) | 移动端底部导航 | `e2e/mobile-nav.spec.js` | 375px 视口 |
 | [responsive-layout](responsive-layout.md) | 移动端布局与溢出 | `e2e/mobile-layout.spec.js`, `report-layout.spec.js` | 375px / 桌面视口 |
 | [cross-origin-bearer](cross-origin-bearer.md) | 跨源 Bearer 会话（商城 H5 调 API） | `e2e/cors-bearer.spec.js` | 从**另一个源**的页面调 API，不经过任何界面 |
+| [health-data-consent](health-data-consent.md) | 健康数据同意：状态读取与上传闸门 | `e2e/consent.spec.js` | 跨源调 `/api/auth/consent`；界面路径是首页 → **体检报告解读** → 上传 |
 
 ## Not on this map
 

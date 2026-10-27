@@ -4,31 +4,25 @@
 // 从页面自己的源发出的：同源请求在浏览器里根本不经过 CORS 检查，用它证明跨源等于没证明。
 //
 // 「商城 H5」这里是一个独立的源（API 端口 +1，服务端只从 `CORS_ORIGINS` 里放行它），
-// 由本文件起一个真的 HTTP 页面。**不能只 `route.fulfill` 一张空白页**：实测那样页面落在
-// 一个不受信任的地址空间里，Chromium 会以「Permission was denied for this request to
-// access the loopback address space」直接拒绝，测试红的原因与我们要证明的东西无关。
+// 由 `e2e/mall-origin.mjs` 的 globalSetup 起一个真的 HTTP 页面。**不能只 `route.fulfill`
+// 一张空白页**：实测那样页面落在不受信任的地址空间里，Chromium 会以「Permission was
+// denied for this request to access the loopback address space」直接拒绝，测试红的原因
+// 与我们要证明的东西无关。
+//
+// 监听**不在本文件里**起：跨源 spec 不止一条，而不同的 spec 文件并行跑在不同的 worker
+// 里，各自 `listen` 同一个端口会撞成 `EADDRINUSE`（实测：83 条用例里单条挂掉，报的是端口
+// 冲突而不是跨源行为）。它的生命周期是「一次运行」，见 globalSetup 的注释。
 import { createSign, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
-import http from 'node:http';
 import path from 'node:path';
 import process from 'node:process';
 
 import { test, expect } from './fixtures.js';
+import { startMallOrigin } from './mall-origin.mjs';
 
 const apiOrigin = process.env.HEALTHFLOW_E2E_BASE_URL;
 const mallOrigin = process.env.HEALTHFLOW_E2E_MALL_ORIGIN;
 const runDir = process.env.HEALTHFLOW_E2E_RUN_DIR;
-
-/** 在一个给定的源上起一张空白页，返回它的 origin 与关闭函数。 */
-async function serveOrigin(origin) {
-  const { hostname, port } = new URL(origin);
-  const server = http.createServer((request, response) => {
-    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    response.end('<!doctype html><title>h5</title>');
-  });
-  await new Promise((resolve) => server.listen(Number(port), hostname, resolve));
-  return () => new Promise((resolve) => server.close(resolve));
-}
 
 function b64url(value) {
   return Buffer.from(value).toString('base64url');
@@ -84,17 +78,18 @@ async function responseHeaders(page, requestPath, run) {
 }
 
 test.describe('跨源 Bearer 会话', () => {
-  let closeMall;
+  // 商城源由 globalSetup 起好并活到本次运行结束，本文件不碰它。
+  //
+  // 配置外的那个源是**本文件自己的**：它只被这条用例用来证明「白名单外的源不被放行」，
+  // 没有第二份 spec 会绑同一个端口，所以它仍然是 per-file 的。
   let closeOutsider;
   const outsider = `http://127.0.0.1:${Number(new URL(apiOrigin).port) + 2}`;
 
   test.beforeAll(async () => {
-    closeMall = await serveOrigin(mallOrigin);
-    closeOutsider = await serveOrigin(outsider);
+    closeOutsider = await startMallOrigin(outsider);
   });
 
   test.afterAll(async () => {
-    await closeMall?.();
     await closeOutsider?.();
   });
 

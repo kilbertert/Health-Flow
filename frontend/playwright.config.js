@@ -89,5 +89,9 @@ export default defineConfig({
     stdout: 'pipe',
     env: serverEnv,
   },
+  // 「商城 H5」的那个源由 Setup **起一次、活一整趟**：跨源 spec 不止一条，而 Playwright
+  // 让不同的 spec 文件并行跑在不同的 worker 里 —— 各自 `listen` 同一个端口会撞成
+  // `EADDRINUSE`，红的原因与跨源无关。返回的回调就是 teardown，启停配对。
+  globalSetup: './e2e/mall-origin.mjs',
   globalTeardown: './e2e/teardown.mjs',
 });
