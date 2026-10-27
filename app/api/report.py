@@ -43,6 +43,7 @@ from app.schema.report import (
     CartLinkResponse,
     MedicalReportResponse,
     MetricRecord,
+    RecommendationGroup,
     RecommendationResponse,
     ReportConfirmationRequest,
     ReportMetricCounts,
@@ -53,7 +54,7 @@ from app.service.admission_projection import (
 )
 from app.service.confirmation_decision import is_excluded, request_decision, require_full_coverage
 from app.service.consent import has_valid
-from app.service.consent_vocabulary import REPORT_INTERPRETATION
+from app.service.consent_vocabulary import PRODUCT_RECOMMENDATION, REPORT_INTERPRETATION
 from app.service.deep_link import DeepLinkError, build_deep_link
 from app.service.evidence_bridge import (
     EvidenceBridgeError,
@@ -72,7 +73,7 @@ from app.service.interpretation_failure import (
     patient_action,
     report_failure,
 )
-from app.service.mall_goods import fetch_goods, label_pairs_for, serialized
+from app.service.mall_goods import MallGoodsItem, fetch_goods, label_pairs_for, serialized
 from app.service.metric_effective_value import effective_value
 from app.service.metric_rows import deduplicate
 from app.service.origin_location import page_url, source_id_for
@@ -628,18 +629,97 @@ def _parse_report(
 
 
 
-def _confirmed_condition_codes(report: ReportModel) -> list[str]:
-    """已确认健康风险的 condition_code，按出现顺序去重。
+def _confirmed_conditions(report: ReportModel) -> list[tuple[str, str]]:
+    """已确认健康风险的 `(condition_code, condition_name)`，按出现顺序去重。
 
     商品按这些风险的方向取货；没有风险就没有取货依据，不是"默认给点推荐"。
+    名字取证据服务给的那个（`condition_name`），缺失时退回编码 —— 分组标题要有一个
+    可读的东西，而本服务不**编**一个名字出来。
     """
     evidence = report.evidence_result or {}
-    codes: list[str] = []
+    conditions: list[tuple[str, str]] = []
+    seen: set[str] = set()
     for finding in evidence.get("findings") or []:
         code = finding.get("condition_code") if isinstance(finding, dict) else None
-        if code and code not in codes:
-            codes.append(code)
-    return codes
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        name = finding.get("condition_name") or code
+        conditions.append((code, name))
+    return conditions
+
+
+async def _recommendation_groups(
+    conditions: list[tuple[str, str]],
+) -> tuple[list[RecommendationGroup], tuple[MallGoodsItem, ...], str | None]:
+    """按健康方向逐组取货，返回 (分组, 扁平并集, 整体原因)（#271）。
+
+    **一次并集取货回答不了「这件商品属于哪个健康问题」。** 商品的 `labels` 字段在商城的
+    列表/批量接口里不返回（ADR 0005 的 2026-09-30 修订），而按标签取货的接口本身就不带
+    「这条记录命中哪个标签」——它只回一个命中集合。用一次并集结果反推归属只能靠猜，而
+    猜错的方向不对称（把血脂的商品说成「针对血糖偏高」，是把一条不存在的关系写给患者）。
+
+    所以改为**每个有映射的健康方向问一次**商城（`label_pairs_for` + 按标签取货），那一次
+    的命中集合就是该组的商品，归属由商城的查询本身给出，不需要第二份商品-方向对应表。
+    代价是 N 次调用（N 是有映射的方向数，一份报告通常一两个），换来的是分组不是装饰。
+
+    没有映射的方向**不去问商城**，它的组如实说 `no_label_data`：患者看到的是「该方向
+    暂无可推荐商品」，而「没建映射」是内部事实。
+
+    扁平 `items` / `reason` 保持旧前端读到的口径，且与改动前**一次并集调用**的结论相同：
+    并集按首次出现去重；有商品时原因为空；没有任何商品时，只要有一次调用到达了商城就是
+    `no_label_data`，全都不可达才是 `mall_unavailable`。一组没货不影响另一组有货，所以
+    整体原因是并集上的结论，不是任何单组的。
+    """
+    groups: list[RecommendationGroup] = []
+    flat: dict[str, MallGoodsItem] = {}
+    claims: list[tuple[str, str, tuple[MallGoodsItem, ...], str | None]] = []
+    calls = 0
+    any_reachable = False
+    for code, name in conditions:
+        pairs = label_pairs_for(code)
+        if not pairs:
+            # 没有映射就**不发出这次取货**：命中集合不是「商城说没有」，是我们没问。
+            claims.append((code, name, (), "no_label_data"))
+            continue
+        calls += 1
+        result = await fetch_goods(labels=pairs)
+        if result.reason != "mall_unavailable":
+            any_reachable = True
+        for item in result.items:
+            flat.setdefault(item.id, item)
+        claims.append((code, name, result.items, result.reason))
+
+    # **一件商品只归一组。** 一件同时挂两个方向标签的商品会出现在两次取货里；在两个组里
+    # 各展示一遍是重复推荐，而从后一组里悄悄抹掉又会让后一组看起来「没货」。这里按组序
+    # 先到先得：某组的商品只保留**还没有被更靠前的一组认领**的那些。组序就是报告里健康
+    # 问题的出现顺序，与 `items` 的顺序一致。
+    claimed: set[str] = set()
+    for code, name, items, reason in claims:
+        mine = tuple(item for item in items if item.id not in claimed)
+        claimed.update(item.id for item in mine)
+        groups.append(
+            RecommendationGroup(
+                condition_code=code,
+                condition_name=name,
+                items=serialized(mine),
+                # 商城不可达是整次取货的事实，每一组都带它 —— 否则患者会把「打不开商城」
+                # 读成「这个方向没货」。
+                reason="mall_unavailable" if reason == "mall_unavailable" else (None if mine else "no_label_data"),
+            )
+        )
+
+    items = tuple(flat.values())
+    if items:
+        reason: str | None = None
+    elif calls and not any_reachable:
+        reason = "mall_unavailable"
+    else:
+        # 有调用到达商城但没货，或一个方向都没建映射（一次都没发出）——两者对患者都是
+        # 「这些健康方向暂无可推荐商品」，与改动前把空标签集交给一次 `fetch_goods`
+        # 得到的结论一致，旧前端看到同一句话。
+        reason = "no_label_data"
+    return groups, items, reason
 
 
 def _final_source_id(existing: str | None, file_index: int, page_number: int | None, fallback: int) -> str:
@@ -1091,10 +1171,16 @@ async def get_report_recommendations(
 
     为空时必须说明**为什么**为空，这些情况不得合并成一句「暂无推荐」：
 
+    - `product_recommendation_consent_required`：主体没有对当前版本的「商品推荐」同意
+      （#271）。闸门在**调用商城之前** —— 没同意就根本不去问商城，这是「门槛在服务端」
+      与「界面上一个勾」的区别。与 `no_published_card` 一样不调商城，但患者侧的话不同：
+      这一条要指向「开启推荐」。
     - `no_published_card`：报告没有可据以取货的健康风险（本报告自身的事实，不调商城）；
-    - `no_label_data`：商城调用成功，但按标签过滤后没有商品——今天映射本身为空，
-      所以这条同时覆盖"还没映射标签"与"映射了但没货"，两者的修复动作都在商城侧；
+    - `no_label_data`：商城调用成功，但没有商品命中这些健康方向；
     - `mall_unavailable`：商城不可达/超时/返回业务错误/凭据未配置。
+
+    响应同时带 `groups`（按健康问题分组，副状态见 `_recommendation_groups`）与旧前端仍在
+    读的扁平 `items` / `reason`。
 
     商城不可达**不报错**：返回空列表与原因，页面照常渲染「暂无推荐」。
     """
@@ -1104,19 +1190,29 @@ async def get_report_recommendations(
         owner_id=resolve_owner(request).storage_id,
     )
 
-    conditions = _confirmed_condition_codes(report)
-    if not conditions:
-        return RecommendationResponse(items=[], reason="no_published_card")
+    # 闸门在**读取报告数据与调用商城之前**：没有有效的推荐同意，服务端连商城都不问
+    # （PRD #266 的验收项正是「没有推荐同意时，不发出任何商城请求」）。判据与状态接口
+    # 是同一次判定（`consent.has_valid`，ADR 0027 的第 3 条）。
+    #
+    # 被问的是**会话主体**，与会话拿报告的那个主体是同一个（`_authorized_report` 刚用
+    # 它判过归属）；没有会话时 `_authorized_report` 已经先拒绝，所以这里拿到的永远是
+    # 一个真实的存储标识。
+    if not has_valid(db, resolve_owner(request).storage_id, PRODUCT_RECOMMENDATION):
+        return RecommendationResponse(
+            items=[],
+            reason="product_recommendation_consent_required",
+            groups=[],
+        )
 
-    labels: list[tuple[str, str]] = []
-    for condition_code in conditions:
-        labels.extend(label_pairs_for(condition_code))
-    # 无标签仍然**照常调用商城**（#174 的验收项就是"服务端经商城端点取货"）：
-    # 早起返回会让这条 AC 只剩测试里的 mock，且链路上最易失效的一段没有真实调用证据。
-    result = await fetch_goods(labels=tuple(labels))
+    conditions = _confirmed_conditions(report)
+    if not conditions:
+        return RecommendationResponse(items=[], reason="no_published_card", groups=[])
+
+    groups, items, reason = await _recommendation_groups(conditions)
     return RecommendationResponse(
-        items=serialized(result.items),
-        reason=result.reason,
+        items=serialized(items),
+        reason=reason,
+        groups=groups,
     )
 
 

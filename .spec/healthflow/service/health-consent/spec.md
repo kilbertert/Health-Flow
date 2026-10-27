@@ -30,3 +30,7 @@ related:
 - 没有有效的报告解读同意时，上传在**读取任何文件之前**返回 403，原因
   `report_interpretation_consent_required` 经 `X-Report-Access-Reason` 出域
   （[[recommendation-empty-reason]] 的「报告访问」那一组）。
+- 没有有效的商品推荐同意时，推荐在**调用商城之前**返回空的商品列表与原因
+  `product_recommendation_consent_required`（[[recommendation-empty-reason]] 的
+  「取货为空」那一组），且**一次商城请求都不发**。它是 200 而不是错误：页面照常渲染，
+  患者看到的是「开启推荐」而不是一次失败。

@@ -158,11 +158,38 @@ class CartLinkResponse(BaseModel):
     reason: CartLinkReasonLiteral | None = None
 
 
+class RecommendationGroup(BaseModel):
+    """按健康问题聚合的一组商品（#271）。
+
+    `condition_code` / `condition_name` 来自本报告的已确认健康风险，`name` 是证据服务
+    给出的患者可读名。**商品名称是商城目录数据，原样返回**（GLOSSARY 的「商品」），
+    本服务不为它的措辞负责，也不按名称过滤。
+
+    组为空时带**它自己**的原因，而不是继承整份响应的原因：一个健康方向没货不影响
+    另一个方向有货。取值有两个：`no_label_data`（这一组没有可推荐的商品——商城说没货，
+    或者这个方向压根没建标签映射）与 `mall_unavailable`（商城整体不可达；它是**整次
+    取货**的事实，所以每一组都带它，否则患者会把「打不开商城」读成「这个方向没货」）。
+    「未同意」不在这里：没有同意就没有取货，也就没有组。
+    """
+
+    condition_code: str
+    condition_name: str
+    items: list[RecommendationItem] = Field(default_factory=list)
+    reason: RecommendationReason | None = None
+
+
 class RecommendationResponse(BaseModel):
-    """检测页推荐结果。为空时 `reason` 必须说明是哪一种空。"""
+    """检测页推荐结果。为空时 `reason` 必须说明是哪一种空。
+
+    `items` 与 `reason` 是**旧前端仍在读**的扁平形状，`groups` 是本票新增的按健康问题
+    分组形状。两者同时出域：`items` 是各组商品按首次出现去重后的并集，旧前端因此完全
+    不必改动就仍能看到同样的商品。`items` 在旧前端退役时删除（另建单），`groups` 不会
+    被它取代之前先消失任何东西。
+    """
 
     items: list[RecommendationItem] = Field(default_factory=list)
     reason: RecommendationReason | None = None
+    groups: list[RecommendationGroup] = Field(default_factory=list)
 
 
 class ReportExtractionJobResponse(BaseModel):
