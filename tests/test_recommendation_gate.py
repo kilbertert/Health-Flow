@@ -351,6 +351,12 @@ def test_a_condition_without_a_label_mapping_gets_an_empty_group_without_calling
             cookie,
         ),
         patch("app.api.report.fetch_goods") as fetch,
+        # 商城**已配置**：这个用例问的是「没建映射」，不是「没配置」。未配置时的归因
+        # 由下面那个用例单独钉住（评审在 PR #273 指出两者曾被合并成一句）。
+        patch(
+            "app.api.report.get_settings",
+            return_value=SimpleNamespace(mall_webapi_configured=True),
+        ),
     ):
         body = _get(client, report_id, cookie)
 
@@ -364,6 +370,33 @@ def test_a_condition_without_a_label_mapping_gets_an_empty_group_without_calling
         }
     ]
     assert body["reason"] == "no_label_data"
+
+
+def test_no_mapped_condition_but_the_mall_unconfigured_is_an_outage_not_missing_goods():
+    """一次商城调用都没发出时，「没货」与「没问成」必须分开（评审在 PR #273 指出）。
+
+    改动前这里把空标签集交给一次 `fetch_goods`，它在调用前就因凭据缺失返回
+    `mall_unavailable`。新版不为没映射的方向发请求是对的，但它不能让「商城凭据没配」
+    变成 `no_label_data` —— 那是把一次配置缺失说成「这些方向没货」。
+    """
+    unconfigured = SimpleNamespace(mall_webapi_configured=False)
+    with (
+        _client(
+            evidence_result=_conditions(("COND_NOT_MAPPED_YET", "未映射的方向")),
+            consent=_granted(),
+        ) as (
+            client,
+            report_id,
+            cookie,
+        ),
+        patch("app.api.report.fetch_goods") as fetch,
+        patch("app.api.report.get_settings", return_value=unconfigured),
+    ):
+        body = _get(client, report_id, cookie)
+
+    fetch.assert_not_called()
+    assert body["reason"] == "mall_unavailable"
+    assert {group["reason"] for group in body["groups"]} == {"mall_unavailable"}
 
 
 def test_every_group_carries_the_outage_when_the_mall_is_unreachable():

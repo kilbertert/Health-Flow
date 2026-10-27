@@ -162,6 +162,19 @@ def _report_not_found() -> HTTPException:
     )
 
 
+def _discard_report_files(report_id: int) -> None:
+    """回滚之后收掉这次上传已经写下的原始文件。
+
+    先删库、后删文件的顺序在这里反过来用：事务回滚了，数据库里那份报告不存在，
+    磁盘上留下的字节没有任何一行指向它。不删它就是一次静默的残留，而被回滚的那次
+    上传恰好是「撤回之后不该存在的那一份」。
+    """
+    import shutil
+
+    report_dir = Path(get_settings().REPORT_FILES_DIR).expanduser().resolve() / str(report_id)
+    shutil.rmtree(report_dir, ignore_errors=True)
+
+
 def _persist_report_files(
     report_id: int,
     files: list[tuple[int, str, str, bytes]],
@@ -426,6 +439,22 @@ async def upload_report(
     )
     db.add(ReportExtractionJob(report_id=report.id, status="queued"))
 
+    # **同意的判定要在写事务里再问一次。** 上面那道闸门答的是「请求进来时有没有
+    # 同意」，而撤回可能刚好落在两者之间：撤回事务删掉了当时的全部报告，然后这个
+    # 请求把它自己那份写进来 —— 一次已经撤回的授权下多出一份新报告（评审在 PR #273
+    # 指出）。SQLite 的写锁让上一个读者崩溃不会让它「注定失败」：撤回的提交先落地，
+    # 这次写入照样成功。
+    #
+    # 所以把「判定」与「写入」收进同一次 `BEGIN IMMEDIATE`：这里再问一次同一条判据，
+    # 不等就回滚并删掉刚落的原始文件。判定仍然只有一处（`consent.has_valid`）。
+    if not has_valid(db, resolve_owner(request).storage_id, REPORT_INTERPRETATION):
+        db.rollback()
+        _discard_report_files(report.id)
+        raise HTTPException(
+            status_code=403,
+            detail=CONSENT_REQUIRED_DETAIL,
+            headers={ACCESS_REASON_HEADER: REPORT_ACCESS_BY_STATUS[403]},
+        )
     db.commit()
     db.refresh(report)
     return _report_response(
@@ -671,6 +700,7 @@ async def _recommendation_groups(
     `no_label_data`，全都不可达才是 `mall_unavailable`。一组没货不影响另一组有货，所以
     整体原因是并集上的结论，不是任何单组的。
     """
+    mall_configured = get_settings().mall_webapi_configured
     groups: list[RecommendationGroup] = []
     flat: dict[str, MallGoodsItem] = {}
     claims: list[tuple[str, str, tuple[MallGoodsItem, ...], str | None]] = []
@@ -704,8 +734,13 @@ async def _recommendation_groups(
                 condition_name=name,
                 items=serialized(mine),
                 # 商城不可达是整次取货的事实，每一组都带它 —— 否则患者会把「打不开商城」
-                # 读成「这个方向没货」。
-                reason="mall_unavailable" if reason == "mall_unavailable" else (None if mine else "no_label_data"),
+                # 读成「这个方向没货」。凭据未配置、一次都没发出时同理（见下方扁平原因的
+                # 说明）：它同样是「我们没问成」，不是「这个方向没货」。
+                reason=(
+                    "mall_unavailable"
+                    if reason == "mall_unavailable" or (not calls and not mall_configured)
+                    else (None if mine else "no_label_data")
+                ),
             )
         )
 
@@ -714,10 +749,19 @@ async def _recommendation_groups(
         reason: str | None = None
     elif calls and not any_reachable:
         reason = "mall_unavailable"
+    elif not calls and not mall_configured:
+        # **一次都没发出，不一定是「没货」。** 一个方向都没建映射时不问商城是正确的，
+        # 但那让「商城凭据没配」失去了一次本来会被看到的机会：改动前这里会把空标签集
+        # 交给一次 `fetch_goods`，它在调用前就因未配置返回 `mall_unavailable`。于是
+        # 旧前端看到的是「商城暂时不可用」，我们今天若说 `no_label_data`，就是把一次
+        # 配置缺失伪装成「这些方向没货」（评审在 PR #273 指出）。
+        #
+        # 只认**配置**这一种可判定的原因：真正的网络不可达在一次都没发出的情况下无从
+        # 观测，而凭据缺失不依赖任何调用就能回答。
+        reason = "mall_unavailable"
     else:
-        # 有调用到达商城但没货，或一个方向都没建映射（一次都没发出）——两者对患者都是
-        # 「这些健康方向暂无可推荐商品」，与改动前把空标签集交给一次 `fetch_goods`
-        # 得到的结论一致，旧前端看到同一句话。
+        # 有调用到达商城但没货，或商城已配置、只是这些方向没建映射 —— 两者对患者都是
+        # 「这些健康方向暂无可推荐商品」，旧前端看到同一句话。
         reason = "no_label_data"
     return groups, items, reason
 

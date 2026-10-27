@@ -30,6 +30,7 @@ from sqlalchemy.pool import StaticPool
 from app.config import get_settings
 from app.data.models import Base, HealthDataConsent, MedicalReport, TicketSubject
 from app.service.consent import record_consent, states
+from app.service.consent import required_text_version as real_required_version
 from app.service.consent_vocabulary import (
     CONSENT_DECISIONS_ORDERED,
     CONSENT_ITEMS_ORDERED,
@@ -378,6 +379,57 @@ def test_upload_without_consent_is_refused_with_a_named_reason(consent_client, t
     with SessionLocal() as db:
         assert db.query(MedicalReport).count() == 0, "被拒的上传不得留下任何报告行"
     assert not any(tmp_path.iterdir()), "被拒的上传不得落盘任何文件"
+
+
+def test_a_revocation_landing_between_the_gate_and_the_write_leaves_no_new_report(
+    consent_client, tmp_path
+):
+    """撤回落在「闸门通过」与「上传提交」之间时，不得多出一份新报告（评审在 PR #273 指出）。
+
+    请求进来时同意是有效的，所以第一道闸门放行；随后撤回提交、删掉了当时的全部报告
+    （那份上传自己的行**还没提交，删不到**）。若不再问一次，这次写入就会在一份已经
+    撤回的授权下落地。
+
+    这里用「第一次 `has_valid` 之后再把撤回记录写进去」来造出那个窗口：之后的那次判定
+    必须看到它，回滚掉新报告并删掉刚落的原始文件。
+    """
+    from app.service import consent as consent_service
+
+    client, SessionLocal = consent_client
+    owner_id, token = _subject(SessionLocal)
+    client.post(CONSENT_URL, headers=_bearer(token), json={"item": REPORT_INTERPRETATION, "decision": "granted"})
+
+    real_has_valid = consent_service.has_valid
+    calls = {"n": 0}
+
+    def has_valid_then_revoke_then_answer(db, owner_id_arg, item):
+        calls["n"] += 1
+        answer = real_has_valid(db, owner_id_arg, item)
+        if calls["n"] == 1:
+            with SessionLocal() as other:
+                other.add(
+                    HealthDataConsent(
+                        owner_id=owner_id_arg,
+                        consent_item=REPORT_INTERPRETATION,
+                        decision="revoked",
+                        text_version=real_required_version(REPORT_INTERPRETATION),
+                        source="seed",
+                    )
+                )
+                other.commit()
+        return answer
+
+    with (
+        patch("app.api.report.has_valid", side_effect=has_valid_then_revoke_then_answer),
+        patch("app.api.report.get_settings", return_value=_report_ready(str(tmp_path))),
+    ):
+        response = _upload(client, token)
+
+    assert response.status_code == 403, response.text
+    assert response.headers["X-Report-Access-Reason"] == "report_interpretation_consent_required"
+    with SessionLocal() as db:
+        assert db.query(MedicalReport).count() == 0, "撤回之后不得留下新报告"
+    assert not any(tmp_path.iterdir()), "回滚的上传不得留下原始文件"
 
 
 def test_upload_is_accepted_once_consent_is_valid(consent_client, tmp_path):
