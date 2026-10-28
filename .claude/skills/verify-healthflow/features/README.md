@@ -60,6 +60,8 @@ await expect(page.getByText('点击或拖拽多张报告文件到此区域')).to
 | [cross-origin-bearer](cross-origin-bearer.md) | 跨源 Bearer 会话（商城 H5 调 API） | `e2e/cors-bearer.spec.js` | 从**另一个源**的页面调 API，不经过任何界面 |
 | [health-data-consent](health-data-consent.md) | 健康数据同意：状态读取与上传闸门 | `e2e/consent.spec.js` | 跨源调 `/api/auth/consent`；界面路径是首页 → **体检报告解读** → 上传 |
 
+| [mall-module](mall-module.md) | 外部商城 H5 调用真实 HealthFlow | 外部消费者 spec | 提供已构建消费者并运行可选联调 |
+
 ## Not on this map
 
 - **上传 → VLM 解析 → 证据匹配** — needs an LLM key and the `genesis-evidence`

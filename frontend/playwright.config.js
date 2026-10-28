@@ -47,6 +47,18 @@ for (const [key, value] of Object.entries(e2eEnv)) {
   process.env[key] ??= value;
 }
 
+const upstreamEnv = JSON.parse(process.env.HEALTHFLOW_E2E_UPSTREAM_ENV || '{}');
+const upstreamKeys = new Set([
+  'GENESIS_EVIDENCE_METRICS_URL', 'GENESIS_EVIDENCE_API_URL', 'GENESIS_EVIDENCE_API_KEY',
+  'MALL_WEBAPI_BASE_URL', 'MALL_WEBAPI_LABELS_PATH', 'MALL_WEBAPI_APP_ID',
+  'MALL_WEBAPI_APP_SECRET', 'MALL_WEBAPI_TENANT_ID',
+  'VLLM_API_BASE', 'VLLM_API_KEY', 'OPENAI_API_KEY', 'MINIMAX_API_KEY',
+]);
+if (!upstreamEnv || Array.isArray(upstreamEnv) || typeof upstreamEnv !== 'object'
+  || Object.entries(upstreamEnv).some(([key, value]) => !upstreamKeys.has(key) || typeof value !== 'string')) {
+  throw new Error('HEALTHFLOW_E2E_UPSTREAM_ENV accepts only string-valued upstream settings');
+}
+
 // 显式覆盖关键开关,让本地 .env 的同名配置失效,保证 E2E 环境确定。
 const serverEnv = {
   ...process.env,
@@ -62,10 +74,11 @@ const serverEnv = {
   // 服务端从**配置**读放行的源（ADR 0026）。这里把自己与服务都算上，是为了让
   // `cors-bearer.spec.js` 能用第二个源真的发出跨源请求 —— 同源请求证明不了跨源。
   CORS_ORIGINS: [baseURL, mallOrigin].join(','),
+  ...upstreamEnv,
 };
 
 export default defineConfig({
-  testDir: './e2e',
+  testDir: process.env.HEALTHFLOW_E2E_CONSUMER_TEST_DIR || './e2e',
   timeout: 30_000,
   expect: { timeout: 10_000 },
   // `list` is what a person reads while it runs; `html` is what they open AFTER a

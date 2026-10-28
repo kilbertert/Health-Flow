@@ -14,6 +14,7 @@
 // Chromium 以 `Permission was denied for this request to access the loopback address space`
 // 拒绝跨源 fetch —— 那同样与本次要证明的东西无关。见 `cors-bearer.spec.js` 的同一段注释。
 import http from 'node:http';
+import { pathToFileURL } from 'node:url';
 import process from 'node:process';
 
 /**
@@ -41,7 +42,13 @@ export default async function globalSetup() {
   if (!origin) {
     throw new Error('缺少 HEALTHFLOW_E2E_MALL_ORIGIN;请通过 "npm run test:e2e" 运行(playwright.config.js 会注入)。');
   }
-  const stop = await startMallOrigin(origin);
+  let stop;
+  if (process.env.HEALTHFLOW_E2E_CONSUMER_FIXTURE) {
+    const { startConsumer } = await import(pathToFileURL(process.env.HEALTHFLOW_E2E_CONSUMER_FIXTURE).href);
+    stop = await startConsumer({ origin, apiOrigin: process.env.HEALTHFLOW_E2E_BASE_URL, runDir: process.env.HEALTHFLOW_E2E_RUN_DIR });
+  } else {
+    stop = await startMallOrigin(origin);
+  }
   // `globalSetup` 的返回值是 teardown 回调 —— 监听的关闭与它的启动配对，不靠"进程退出时
   // 顺带收掉"（那会让端口在 teardown 之后仍然被占，下一次运行撞上）。
   return async () => {
