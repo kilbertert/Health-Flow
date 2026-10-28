@@ -30,7 +30,8 @@ def test_upstream_override_keeps_the_sandbox_database():
             "node",
             "--input-type=module",
             "-e",
-            "const {default:c}=await import('./frontend/playwright.config.js'); console.log(JSON.stringify(c.webServer.env));",
+            "const {default:c}=await import('./frontend/playwright.config.js');"
+            "console.log(JSON.stringify(c.webServer.env));",
         ],
         cwd=ROOT,
         capture_output=True,
