@@ -62,10 +62,11 @@ const serverEnv = {
   // 服务端从**配置**读放行的源（ADR 0026）。这里把自己与服务都算上，是为了让
   // `cors-bearer.spec.js` 能用第二个源真的发出跨源请求 —— 同源请求证明不了跨源。
   CORS_ORIGINS: [baseURL, mallOrigin].join(','),
+  ...(process.env.HEALTHFLOW_E2E_UPSTREAM_ENV ? JSON.parse(process.env.HEALTHFLOW_E2E_UPSTREAM_ENV) : {}),
 };
 
 export default defineConfig({
-  testDir: './e2e',
+  testDir: process.env.HEALTHFLOW_E2E_CONSUMER_TEST_DIR || './e2e',
   timeout: 30_000,
   expect: { timeout: 10_000 },
   // `list` is what a person reads while it runs; `html` is what they open AFTER a
