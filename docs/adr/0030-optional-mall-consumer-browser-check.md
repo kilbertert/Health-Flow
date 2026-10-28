@@ -9,7 +9,7 @@ The patient interface moves into an external mall H5 under ADR 0026. A browser t
 
 ## Decision
 
-The existing Playwright harness optionally imports a caller-supplied fixture and test directory. The external fixture serves its build at the separate mall origin. It keeps the real HealthFlow service, ephemeral signing keys and throwaway database. The caller supplies synthetic upstream environment overrides for evidence and goods. Company interface fixtures remain in the private consumer repository; none are copied into this repository. Ordinary runs retain their current mall-origin behavior and do not require an external checkout.
+The existing Playwright harness optionally imports a caller-supplied fixture and test directory. The external fixture serves its build at the separate mall origin. It keeps the real HealthFlow service, ephemeral signing keys and throwaway database. The caller supplies synthetic upstream environment overrides for evidence and goods. A closed list permits only string-valued upstream settings; database, file storage, identity and origin isolation cannot be overridden through this input. Company interface fixtures remain in the private consumer repository; none are copied into this repository. Ordinary runs retain their current mall-origin behavior and do not require an external checkout.
 
 ## Alternatives considered
 

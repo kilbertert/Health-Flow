@@ -41,7 +41,7 @@ no project argument. Both answer *where* something is; neither replaces reading 
 
 ## Tests
 
-- tests/ — 62 test file(s, recursive)
+- tests/ — 63 test file(s, recursive)
 - frontend/e2e/ — 19 test file(s, recursive)
 - pytest (pyproject.toml / pytest.ini present)
 
