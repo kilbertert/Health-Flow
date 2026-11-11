@@ -1,0 +1,44 @@
+---
+description: "指标确认与生效值：full-coverage 422、request 里 pending 的服务端解析、subject_consistency 闸门、corrected/excluded 语义、metric_code 目录仲裁、确认后自动 assess"
+kind: architecture
+relations:
+  related:
+    - report-pipeline/status-audit.mdx
+    - report-pipeline/extraction-queue.mdx
+    - interpretation/admission-counts.mdx
+    - interpretation/evidence-bridge.mdx
+code:
+  paths:
+    - app/service/confirmation_vocabulary.py
+    - app/service/confirmation_decision.py
+    - app/service/report_subject.py
+    - app/service/metric_effective_value.py
+    - app/api/report.py
+    - app/schema/report.py
+---
+
+# 指标确认与生效值
+
+## 闸门与状态前提
+
+`POST /api/health/report/{id}/confirm` 要求状态 ∈ `{pending_confirmation, confirmed}`（否则 409），且 `subject_consistency` 必须为 `same`：单文件报告初始即 `same`，多文件为 `uncertain`；显式声明非 `same` 是**停止**而非警告（422），一致性闸门与所有权判定相互独立。
+
+## 请求语义的三条不变量
+
+- **全覆盖**：请求必须覆盖每一条已解析指标——漏掉一行是**点名 422**，不是静默排除。旧行为里"没提交的行"与"显式排除的行"在审计里无法区分。
+- **`pending` 是诚实输入**：客户端对它没决定的行交字面 `pending`，服务端解析——已定的行保留原决定、未定的行**保持 pending**（#195：客户端不得替患者编造默认值）。前端 `suggestedDecision` 只是展示默认，草稿从不预填 `decision`。
+- **词汇缺失即抛错**：`confirmation_vocabulary` 是纯 stdlib 封闭集，读不出决定比猜错决定安全（fail-open 的伤害不对称）。
+
+## 决定词汇与生效值
+
+`pending / confirmed / corrected / excluded` 四值。`corrected` 必须带有限数值 + 单位。生效值由 `metric_effective_value` 单点决定：**`excluded` 行的生效值是四个 None**，不是"回落到模型值"——排除是患者陈述，不是数据修正。
+
+`metric_code` 在确认时对照指标目录**重新仲裁**：目录里查不到就清掉、保持 `unmatched`；目录暂时不可达时保留别名归一化后的候选、清空 code——绝不编造一个 canonical code。目录是标准编码的唯一真相，别名表只是归一化辅助，候选必须回目录验证。
+
+## 提交后的链式行为
+
+一次确认写**恰好一条** `confirmed` 审计事件（细节完整）；确认提交后自动进入 assess——此时若证据桥不可用返回 503，但确认已提交、报告留在 `confirmed`，可经 `POST .../assess` 幂等重试。`assess` 要求状态 ∈ `{confirmed, assessed}` 且 `subject_consistency == "same"`，in-flight 的部分文件以失败明细 409 拒绝。
+
+## 锚点
+
+`GLOSSARY.md`「指标确认」「指标确认决策」「指标生效值」「报告主体一致性」「一行两个值」；准入判定见 [admission-counts](../interpretation/admission-counts.mdx)。

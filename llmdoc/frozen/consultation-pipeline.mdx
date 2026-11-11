@@ -1,0 +1,63 @@
+---
+description: "问诊流水线（冻结）：dynamic_router 分诊顺序、V-*/G-* 证据编号与 <evidence> 注入边界、safety_guard 规则、self-correction 终止、未挂载即 404 与解冻危险清单"
+kind: architecture
+relations:
+  requires:
+    - identity/ownership-boundary.mdx
+  related:
+    - runtime-boundary.mdx
+    - frozen/training-pipeline.mdx
+code:
+  paths:
+    - app/agent/**
+    - app/service/medical_rag.py
+    - app/service/safety_guard.py
+    - app/api/chat.py
+    - app/api/kg.py
+    - app/api/metric.py
+    - app/data/milvus_client.py
+    - app/data/neo4j_client.py
+    - app/model/embedding.py
+    - app/schema/chat.py
+    - scripts/init_milvus.py
+    - scripts/init_neo4j.py
+---
+
+# 问诊流水线（冻结）
+
+## 冻结状态
+
+`chat`/`kg`/`metric` 三个 router **未挂载**——命中即原生 404，没有 shim。chat 表仍由 `create_all` 创建，模块仍有测试钉住。本文是"设计记忆 + 解冻危险清单"，描述的是上一代管线的真实实现，不是 live 契约。
+
+## 分诊顺序（与 ARCHITECTURE §2 一致）
+
+关键词计数评分 → **只有零命中**才走 LLM JSON 意图分布 → 归一化（未知 key 经 `DEPARTMENT_ALIASES` 丢弃，全零 → 全科）→ confidence/margin（`<0.15` → `low_confidence`）；`HIGH_RISK_TERMS` → `high`；`human_review = low_confidence or high`；high+low 同时出现**强制全科**。`medical_graph` 每个节点有具名降级（route→全科+review、retrieval→空、generation→`FallbackSafetyAgent`）。
+
+## 证据编号与注入边界
+
+- 向量命中 `V{index}`（代码发 `V1`/`V2`——文档与 prompt 写 `[V-1]`，**形状漂移但引用匹配仍工作**：`[{source_id}]` 按实际发出的 id 匹配）；图谱命中 `G-{entity}`/`G-symptom-*`/`G-drug-*`/`G-diagnosis-*`。
+- 双层注入防御是**有意**的：`medical_rag` 用 `<evidence>…</evidence>` 包"untrusted data"前言，`specialist_agents` 再加第二层"仅数据"包裹 + 系统指令要求引 `[V-1]`/`[G-x]` 或答"无法确认"。
+- 加权 RRF 是**变体**：`weight/(30+rank) + weight·score·0.1`，权重 0.6 向量 / 0.4 图谱——不是标准 `1/(60+rank)`。
+- Milvus/Neo4j/embedding 失败一律返回空，**绝不编造证据**；`EMBEDDING_OFFLINE` 默认 True → blake2b 哈希嵌入（确定性但语义为空）。
+
+## Neo4j 本体（与文档的出入）
+
+运行时查询用了 `(Disease)-[:DIAGNOSED_BY]->(Examination)`——**ARCHITECTURE §3 没列且 init_neo4j 不 seed**；`TREATED_BY` 定义了也没 seed。init 只建 Department/Symptom/Disease 节点 + `HAS_SYMPTOM` + 两条 `BELONGS_TO`。KG 问答在真实数据上是空骨架。
+
+## 安全护栏与自纠
+
+- `safety_guard.RULES` = dosage / diagnosis / single_metric 三条确定性规则（post-model）；另有急症词无处置动作→block、缺免责声明→只 warn 不 block。**拦截从不原样返回**——替换为固定保守文本 + `仅供参考，请咨询专业医生。`；±12/+30 字符否定窗口保住"无法确诊"这类安全措辞。`SafetyCheckResult` 保英文字段名（中文别名序列化曾搞坏客户端）。
+- `recursive_feedback`：先确定性数值声明 diff（`_METRIC_HINTS` 白名单 + 防数字后缀正则），再冲突窗口（正常 vs 偏高、无需就医 vs 尽快就医），都不中才 LLM 辅助；深度钳制 [0,5]；耗尽追加固定"请咨询医生"尾句。
+- chat 契约：`sess_<int>` 服务端分配（畸形 400、未知 404）；每条 assistant 消息存 `safety_check_result`；`/chat/stream` 是伪 SSE——完整管线跑完后按 80 字符重切，错误是显式 `{"type":"error"}` 事件。
+
+## 冻结面内部的死代码
+
+`consistency_manager.py` 无生产调用方（只有测试）；`recursive_feedback.get_feedback_graph()`/`create_feedback_graph()` 从未被调用——`validate_and_refine` 跑的是手写 detect/refine 循环。**改动这两处不会改任何行为**，别按"图谱编排"理解。
+
+## 解冻危险清单（重挂前必读）
+
+1. **全部冻结端点先于所有权模型**：`api/metric.py` 收裸 `patient_id`、无 auth/同意/legacy 闸门；`api/kg.py` 完全没有 auth；`api/chat.py` 默认 `patient_id="anonymous"`。**原样重挂 = 绕过 report_ownership、ADR-0018、同意闸门**——解冻必须先过 [ownership-boundary](../identity/ownership-boundary.mdx) 与 [consent](../identity/consent.mdx)。
+2. 证据 id 文档形状（`[V-1]`）与发出形状（`V1`）不一致——契约文档先对齐再谈前端。
+3. `DIAGNOSED_BY` 未 seed：KG 端点挂载后查询会静默返回空。
+4. `consistency_manager`/`create_feedback_graph` 是死代码，不能当可用组件规划。
+5. README/ARCHITECTURE 的数据流图描述的是本管线端到端——作为设计记忆引用，不作 live 契约。

@@ -1,0 +1,50 @@
+---
+description: "运行边界：哪些路由挂载了、哪些 API 是 404 冻结代码、为什么 chat/kg/metric/train 存在但不可用；live router mount 与冻结阶段的判断入口"
+kind: architecture
+relations:
+  related:
+    - identity/tickets-sessions.mdx
+    - report-pipeline/upload-material.mdx
+    - frozen/consultation-pipeline.mdx
+    - frozen/training-pipeline.mdx
+    - operations/config-readiness.mdx
+code:
+  paths:
+    - app/main.py
+    - app/data/models.py
+    - README.md
+    - ARCHITECTURE.md
+---
+
+# 运行边界
+
+本仓代码库里同时存在两代产品：现行的是「商城票据 → 同意 → 报告解读」链路，上一代的问诊/知识图谱/训练代码原样保留在树里但不在运行契约内。判断任何一段代码是否活的第一证据是 <CodeRef path="app/main.py" /> 的 router 挂载，而不是文件是否存在。
+
+## 挂载与 404
+
+- `app/main.py` 恰好挂载两个 router：`app/api/auth.py`（`/api/auth`）与 `app/api/report.py`（`/api/health`）。
+- `app/api/{chat,kg,metric,train}.py` 存在但从未 `include_router`——命中即 FastAPI 原生 404。是**缺席**而非降级：没有 mounted-but-frozen 的 shim，也没有 deprecation 响应。解冻方法见 [frozen/ 两篇](frozen/consultation-pipeline.mdx)的危险清单，直接重挂会绕过整个所有权/同意模型。
+- `/` 按 `SERVE_FRONTEND` 二选一：`false` 返回 JSON 信息桩，`true` 在两个 router 之后挂载 `frontend/dist` 静态文件（API 路由仍优先）。
+- 冻结表（`chat_sessions`/`chat_messages`/`routing_logs`）仍由 `create_all` 在每次启动创建——schema 残留不等于功能存活。
+- 冻结模块仍有测试钉住（`tests/test_dynamic_router.py` 等），测试通过不代表路由存活。
+
+## 哪些"共享模块"其实是活的
+
+- `app/model/llm.py`：live 链路依赖（`vision_encoder` 的 `get_llm_client`/`get_vlm_client`），归 [extraction-queue](report-pipeline/extraction-queue.mdx) 所有。
+- `app/api/deps.py`：live 与冻结 router 共用的 DB 依赖。
+- `app/model/embedding.py`、`app/data/{milvus,neo4j}_client.py`：只有冻结面引用，且均为 lazy 降级客户端——它们缺席不影响 live 启动。
+
+## 阶段边界
+
+现行链路的顺序固定：票据换会话 → 同意 → 上传 → 解析队列 → 患者确认 → 证据桥评估 → 商城推荐 → 删除/撤销。每一步的 owner 文档按 topic 进入：
+
+- `identity/`：票据身份、所有权边界、健康数据同意。
+- `report-pipeline/`：上传验收、状态机与审计、解析队列、确认、原文定位、删除。
+- `interpretation/`：准入判定与计数、证据桥投影。
+- `mall/`：商品推荐与 deep link。
+- `patient-spa/`、`persistence/`、`operations/`、`frozen/` 各自单一 owner。
+
+## 已知文档漂移（锚点以代码为准）
+
+- `README.md`：顶部 banner 正确声明了冻结状态，但接口表缺约 8 个 live 端点（confirm/assess/metrics/files-pages/recommendations/cart-link/metric-catalog/upload-policy），"132 passed" 过时，快速上手端口 8080 与 vite 代理 8127 不一致，功能表仍把聊天特性当卖点。**接口清单以 `app/main.py` 挂载 + `app/api/report.py` 为准，README 接口表是 stale 锚点。**
+- `ARCHITECTURE.md`：头部注明冻结是诚实的，但 §1–§6 数据流大多描述冻结代码；§3 的 Milvus+Neo4j+Redis 均不在 live 链路（证据与商城是 HTTP 桥，队列是 SQL 表）。引用时先对照本篇。

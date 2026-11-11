@@ -1,0 +1,49 @@
+---
+description: "商城票据身份与会话：ticket JWT 如何兑换成 12h session、jti 一次性消费防重放、account:<tenant>:<sub> 存储身份、为什么没有登录页、cookie vs Bearer"
+kind: architecture
+relations:
+  related:
+    - identity/ownership-boundary.mdx
+    - identity/consent.mdx
+code:
+  paths:
+    - app/service/tickets.py
+    - app/service/ticket_sessions.py
+    - app/service/sessions.py
+    - app/api/auth.py
+    - app/schema/auth.py
+    - app/config.py
+    - app/main.py
+---
+
+# 票据身份与会话
+
+## 边界与职责
+
+患者身份只有一个来源：商城签发的 ticket JWT。本服务**没有也不得有**登录页——#172 退役了邮箱密码体系后，"解析失败回退到登录页"是被明确禁止的契约；前端无会话时只能显示"请从商城入口进入"。唯一建立身份的端点是 `POST /api/auth/ticket`。
+
+## 兑换流程与不变量
+
+1. RS256 验签，算法由服务端白名单固定，不信任票据自带的 `alg`。
+2. `aud` 必须等于配置值，但接受字符串**或数组**——商城侧 hutool `.setAudience(...)` 实际发出 `"aud": ["health-flow"]`，2026-10-01 验收时 str-only 比较拒掉了所有真票据。验证后的 audience 由配置回填，不回显 payload（`str(list)` 会得到 Python 字面量）。
+3. 允许 60s 时钟偏移；`MALL_TICKET_MAX_TTL_SECONDS`（默认 600）给票据 `exp` 设硬顶——3 年期的票据照样被烧掉。
+4. `jti` 一次性消费由 `ticket_redemptions` 的**数据库唯一约束**裁决（先查再写必输竞态），且**消费提交先于 subject 创建提交**——后一步回滚不得把票据"退回来"重放。接受的方向是"票已烧但主体没建成"（用户重新从商城跳入），反向就是可重放漏洞。
+5. `ensure_subject` 并发撞 `(tenant_id, external_subject)` 唯一键时重读解决，两个请求都成功。
+6. redemption 行在兑换路径上按 `purge_after = exp + skew` 顺手清理——没有后台任务，"以后再清"永远不来。
+
+`subject_storage_id(tenant, sub)` 生成 `account:<tenant>:<sub>` 存储身份；`OWNER_ID_MAX_LENGTH`（128）在兑换**之前**检查，超长 subject 不会白烧一张票。
+
+## 会话模型
+
+- cookie 与 Bearer 指向**同一行** `user_sessions`（ADR-0026：跨域商城 H5 用 Bearer，同源 SPA 用 HttpOnly `healthflow_session` cookie，SameSite=Lax）。两个通道共享 12h 固定时长——两个生命期会漂移，旧 cookie-only 会话直接并入新时长而不是引入第二套策略。
+- `session_owner_id` 每次请求 Bearer 优先、cookie 次之解析，并检查 `expires_at`、`revoked_at`、`TicketSubject.is_active`：停用 subject 立即杀掉其会话；#172 之前的 `account:<uuid>` 旧会话没有 subject 行，自然过期而不是强制清除。
+- 浏览器只见随机 token，库里存 `token_hash`。`user_sessions.account_id` 列装的是 storage id 而非 account PK——列名故意不改（改名是迁移）。
+
+## 失败语义
+
+- verifier 建不起来（公钥或 audience 缺失）→ lifespan 抛错**拒绝启动**。一个验不了签却照常运行的网关，看起来就是"没在守的门"。
+- 400 subject-id 非法 / 401 票据无效或已用 / 503 verifier 未构建。logout 幂等，无会话也 204。
+
+## 锚点
+
+术语「会话存储不等于身份源」与「报告所有权」见 `GLOSSARY.md`（注意其无主报告段落已被 #172 改写——真实状态见 [ownership-boundary](ownership-boundary.mdx)）；跨域会话决策见 `docs/adr/0026`。

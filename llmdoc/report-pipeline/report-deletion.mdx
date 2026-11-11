@@ -1,0 +1,35 @@
+---
+description: "报告删除与封存历史：单一删除路径 DB先行文件殿后、consent 撤销级联、audit 随报告删除、legacy_unclaimed 启动迁移封存的语义与边界"
+kind: architecture
+relations:
+  related:
+    - identity/consent.mdx
+    - report-pipeline/status-audit.mdx
+    - persistence/schema-evolution.mdx
+code:
+  paths:
+    - app/service/report_deletion.py
+    - app/api/report.py
+    - app/data/mysql_client.py
+    - app/data/models.py
+---
+
+# 报告删除与封存历史
+
+## 一条路径、两种规模
+
+`delete_reports`（`app/service/report_deletion.py`）同时服务单个 `DELETE /report/{id}` 与撤销同意的批量删除——同一套排序只实现一次，两个实现会漂移。
+
+- **先 DB、提交成功后再删文件**：commit 失败不会留下"行指向已删文件"；unlink 失败只记日志不报错——残留字节没有行指向它们，交给运维留存策略清扫。
+- 审计事件随报告**级联删除**（ADR-0029）：审计可追溯到主体，属于个人数据，留下它与删除请求矛盾。删除规模留下的唯一证据是撤销行上的 `deleted_report_count`（见 [consent](../identity/consent.mdx)）。
+
+## `legacy_unclaimed`：阶段边界的封存
+
+#172 之前的报告用逐报告访问令牌而非主体所有权；让这些旧行在新模型下被认领或读取，要么伪造所有权要么泄露数据，所以选择**封存**：数据按运维留存策略保留，患者 API 永远够不到。
+
+- 机制：`mysql_client._add_report_columns` 启动迁移执行一条 UPDATE，把 `access_token_hash IS NULL AND (owner_id IS NULL OR 'anonymous')` 的行打上 `status='legacy_unclaimed'`。**范围限定**是有血泪的：早期未限定范围的 UPDATE 每次启动都重写 live 报告（confirmed/assessed 被抹成封存态 → 409）。
+- 封存是双重的：`_authorized_report` 对一切无主行一律 404（与状态无关），`legacy_unclaimed` 又不在 `PATIENT_STATUSES` 内——`transition` 会拒绝它，响应契约也不会承认它。不可达且不可迁移是**设计**，不是缺陷。
+
+## 已知锚点漂移
+
+`ARCHITECTURE.md` 的 legacy_unclaimed 段说"没有逐报告访问令牌的记录被标记封存"——机制描述停在旧模型：**stale**。真实状态：封存判定基于 `owner_id`，UPDATE 只落在同时缺 token 与 owner 的行上。

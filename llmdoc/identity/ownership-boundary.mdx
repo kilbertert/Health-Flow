@@ -1,0 +1,48 @@
+---
+description: "报告所有权与访问边界：resolve_owner 优先级、UNOWNED anonymous 哨兵、缺失/他人/无主统一 404、X-Report-Access-Reason、operator basic auth"
+kind: architecture
+relations:
+  requires:
+    - identity/tickets-sessions.mdx
+  related:
+    - identity/consent.mdx
+    - report-pipeline/report-deletion.mdx
+code:
+  paths:
+    - app/service/report_ownership.py
+    - app/api/deps.py
+    - app/api/report.py
+    - app/service/recommendation_empty_reason.py
+    - app/main.py
+---
+
+# 报告所有权与访问边界
+
+## 单一解析点
+
+`resolve_owner`（`app/service/report_ownership.py`）是全仓唯一的"这次请求算谁"的判定，优先级固定 **account > operator > unowned**，自 #172 身份退役以来未变：
+
+- **account**：会话解析出的 subject storage id（`account:<tenant>:<sub>`）。
+- **operator**：basic-auth 中间件写入 `request.state.owner_id` 得到的 `OwnerKind.OPERATOR`。`HEALTHFLOW_BASIC_AUTH_ENABLED` 是运维兼容门，默认关，豁免 `/health`+`/ready`；**它不是患者认证**。
+- **unowned**：哨兵 `UNOWNED_SENTINEL = "anonymous"`。新代码路径不再产出它（同意闸门在 403 处 fail-closed——没有主体就无从同意），保留只为给历史行分类，并且被**显式拒绝**：#172 之前 `X-Report-Token` 旁路删除后，若不明确拒绝该哨兵，未认证请求反而会比被删掉的旁路**更宽**地匹配到无主报告。
+
+## 404 合一的访问判定
+
+`_authorized_report`（`app/api/report.py`）对"不存在 / 别人的 / 无主的"三种情况返回**同一个** 404，存在性不可探测；`owner_id` 比较用 `hmac.compare_digest`。`owner_id` 为空或等于 `"anonymous"` 一律封存。`access_token_hash` 列自 #172 起**不参与**任何判定。
+
+`session_owner_dependency` 只在 `REPORT_ACCOUNT_REQUIRED`（prod 默认 true）下对无会话请求抛 401；`auth.py` 内 `_require_owner` 对任何解析不出 owner 的请求一律 401。
+
+## 具名访问原因
+
+原因不藏在人类可读的 `detail` 里，而是走结构化响应头 `X-Report-Access-Reason`（在 CORS `expose_headers` 中显式放出），词汇由 `REPORT_ACCESS_BY_STATUS`（`app/service/recommendation_empty_reason.py`）单点定义：401→`session_expired`，403→`report_interpretation_consent_required`，404→`report_not_found`。
+
+**为什么**：前端曾经对 `detail` 做 `\b(401|404)\b` 正则归因——任何措辞调整都会静默翻转语义。同一反模式后来在解读失败分类里又坑过一次（按文件名子串嗅探翻转重试决策），教训都是"结构化成因走结构化通道"。
+
+## 出域边界
+
+- `patient_id` 在上传时仍是客户端可填的 `Form` 字段（"兼容旧客户端"）：认证客户端可以写任意标签。**不影响隔离**——`owner_id` 才是访问依据——但读代码时不要把它误当身份字段。
+- `/api/health/metric-catalog` 与 `/api/health/upload-policy` 在 prod 也是公开端点（确认页目录查询不能卡在会话边角上），属有意放行而非疏漏。
+
+## 已知锚点漂移
+
+`GLOSSARY.md`「报告所有权」条仍把无主报告描述为"凭报告访问令牌可用"——自 #172 起为 **stale**：令牌旁路已删，无主行对所有请求 404。术语的"账户 > 运维 > 无主"优先级部分仍准确。

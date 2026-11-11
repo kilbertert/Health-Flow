@@ -1,0 +1,38 @@
+---
+description: "证据桥与患者投影：evidence_result 出域形状、只有 admitted 行跨界、EvidenceBridgeError 503、PatientNotices 唯一外发形状、correlation_id、v2→v3 归一化"
+kind: architecture
+relations:
+  requires:
+    - interpretation/admission-counts.mdx
+  related:
+    - report-pipeline/confirmation.mdx
+    - mall/recommendations.mdx
+    - operations/config-readiness.mdx
+code:
+  paths:
+    - app/service/evidence_bridge.py
+    - app/schema/evidence.py
+    - app/api/report.py
+    - app/migrate_evidence_payloads.py
+    - app/config.py
+---
+
+# 证据桥与患者投影
+
+## 跨界规则
+
+只有**通过准入的行**才能越过边界进 genesis-evidence：`SourceObservation` 强制 `value: float` + `unit: str`——定性阳性行被判定（`A`）但无法跨界。`observation_id = health-flow-metric-{id}`；源页 URL、bbox、`evidence_text` 随每条 observation 一起走（原文定位契约见 [origin-location](../report-pipeline/origin-location.mdx)）。`correlation_id` 贯穿本次评估。
+
+## 失败语义
+
+- 服务不可达/HTTP 错/形状非法 → `EvidenceBridgeError` → 端点 **503**（fail loud：宁报错不编造结果）。
+- 指标目录不可达则退化为 `catalog=None`——confirm/assess 里 code 保持未解析、`unmatched` 照实报告，绝不猜测 canonical code。两个方向不对称是有意的：知识卡请求要响，编码仲裁可以等。
+- 响应用 `extra="forbid"` 严格模型校验——对方改形状就**当场炸**，不静默吞字段。这也是 `health-flow-migrate-evidence`（`app/migrate_evidence_payloads.py`）存在的原因：响应模型删字段前必须先用它剥掉存量 `evidence_result` JSON 里的退役字段，否则旧 payload 让读取路径 500。存量的 v2 形状在**读取时**归一化（`_patient_notices_from_stored`），永不回写。
+
+## 患者可见投影
+
+`PatientNotices` 是**唯一**离开本域的外发形状：排序、epidemiology_background、published_at 等内部层永不泄出。summary 由一个函数无条件计算——`qualitative_positive` 措辞压过"全部正常"句式。`evidence_result` JSON 存上报告，历史 v2 payload 读时归一化为 v3。
+
+## 锚点
+
+`docs/adr/0001`→`0003`→`0005` 的证据边界演进（商品不是证据输出）；`GLOSSARY.md`「知识卡」「健康风险提示」；`docs/analysis-2026-10-17-vocabulary-ownership.md`。配置键 `GENESIS_*` 与降级矩阵见 [config-readiness](../operations/config-readiness.mdx)。

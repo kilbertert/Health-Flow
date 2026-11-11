@@ -1,0 +1,50 @@
+---
+description: "持久化与无 Alembic 演进：11 张表三代身份模型、create_all+幂等 ALTER+SQLite 重建、append-only 表、legacy_unclaimed UPDATE、死列与冻结表"
+kind: architecture
+relations:
+  related:
+    - identity/ownership-boundary.mdx
+    - identity/consent.mdx
+    - report-pipeline/report-deletion.mdx
+    - report-pipeline/status-audit.mdx
+code:
+  paths:
+    - app/data/models.py
+    - app/data/mysql_client.py
+    - app/migrate_evidence_payloads.py
+    - scripts/e2e_seed.py
+---
+
+# 持久化与无 Alembic 演进
+
+## 演进机制（没有 Alembic）
+
+`Base.metadata.create_all` **不会改已有表**，所以演进靠三层：
+
+1. `mysql_client._add_report_columns`：启动时 inspect 驱动的**幂等 ALTER**，面向账户化之前的库；`legacy_unclaimed` 封存 UPDATE 也在这里（范围已限定，见 [report-deletion](../report-pipeline/report-deletion.mdx)）。
+2. SQLite 表重建：SQLite 不能 ALTER 的场景（`user_sessions` 去 FK + 加宽、`report_files.page_count` 改可空）按**列名对齐拷贝**重建。
+3. 一次性 console script `health-flow-migrate-evidence`（`app/migrate_evidence_payloads.py`）：剥掉存量 `evidence_result` JSON 里的退役字段——响应模型 `extra="forbid"`，不先迁移旧 payload 会让读取路径 500。幂等、`--dry-run`、退出码 0/1/2。
+
+## 一张 schema 里的三代身份
+
+`user_accounts`（#172 退役、只读到自然死亡——删表是数据操作不是代码操作）、`user_sessions.account_id`（现在装的是 `account:<tenant>:<sub>` storage id，列名故意不改）、`ticket_subjects`+`ticket_redemptions`（票据代）。
+
+## 不变量字段 vs 附带字段
+
+**改动这些 = 语义决定，不许随手改**：
+
+- `health_data_consents`：只追加流，`text_version` 绑定文本版本，`deleted_report_count` 只在删除型撤销行上。
+- `medical_reports.status`：封闭状态机 + `legacy_unclaimed` 封存标记；一切写经 `transition`。
+- `medical_reports.owner_id` / `user_sessions.account_id` / `ticket_subjects(tenant_id, external_subject)`：身份三元组；`UNOWNED_SENTINEL="anonymous"` 是实载值（存量行带着它）。
+- `metric_records.confirmation_status`/`confirmed_*`：患者决定记录；`pending` = "没决定"，永远不是默认。
+- `metric_records.source_id`/`page_number`/`bbox*`/`evidence_text`/`source_file_index`：原文证据绑定，缺一件即空，不猜测。
+- `report_files.page_count`：NULL = 未知（#170），列上必须**没有**默认值（SQLAlchemy default 会吃掉显式 None）。
+- `report_audit_events`：只追加、封闭 action 词汇、随报告级联删除。
+- `ticket_redemptions.jti` UNIQUE：一次性消费的真正载体。
+- `report_extraction_jobs`：持久化队列，`status`/`attempt_count` 驱动重试与 stale 恢复。
+
+**附带/可防御读取的**：`parsed_content`、`evidence_result` JSON 内部（读取处到处是 `isinstance` 防御）、`extraction_*` trace、`file_url`（未用）、`patient_id`（上传时回填 owner，兼容字段）、`access_token_hash`（#172 起死列，只为历史行存在）、`chat_*`/`routing_logs`/`user_accounts`（冻结/退役，create_all 仍建表）。
+
+## 锚点
+
+`docs/adr/0027`（同意只追加）、`docs/adr/0029`（删除语义）；`GLOSSARY.md`「报告原始材料」「审计事件」「健康数据同意」。

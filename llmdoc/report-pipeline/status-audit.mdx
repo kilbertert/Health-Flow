@@ -1,0 +1,39 @@
+---
+description: "报告状态机与审计流：processing→pending_confirmation→confirmed→assessed 合法迁移、transition vs audit-only 两类具名事件、单点产出、迁移同事务写一条审计"
+kind: architecture
+relations:
+  related:
+    - report-pipeline/extraction-queue.mdx
+    - report-pipeline/confirmation.mdx
+    - report-pipeline/report-deletion.mdx
+code:
+  paths:
+    - app/service/report_status.py
+    - app/service/audit_vocabulary.py
+    - app/data/models.py
+---
+
+# 报告状态机与审计流
+
+## 状态图
+
+患者可见状态五个：`processing → pending_confirmation → confirmed → assessed`，外加 `failed`。`_ALLOWED`（`app/service/report_status.py`）是唯一的合法迁移图，特点是**不回退**：没有回到更早阶段的迁移——重解析会删掉重插全部 metric 行，患者已做的确认决定会被抹掉。`legacy_unclaimed` 是迁移写入的封存标记，不在 `PATIENT_STATUSES` 内（不可达也不可迁移，见 [report-deletion](report-deletion.mdx)）。
+
+## 审计流的两类具名事件（ADR-0016）
+
+- **transition 事件**：每次状态迁移在**同一事务**里恰好写一条。"恰好一条"是硬约束——重复或缺失都是事故。
+- **audit-only 事件**：状态没动但要记一笔，是名字上就可区分的独立类：`uploaded`、`extraction_committed_unacked`、`extraction_dropped_for_settled_report`。
+
+两类之所以必须具名分开：曾经一个"恢复"事件冒名顶替了一次从未发生的迁移；"状态变了"和"状态没变但记录此事实"共用过名字。历史行的旧 action 名**永不改写**——审计是证据，不改写证据。
+
+## 结构性单点产出
+
+`_write_event` 是全仓唯一构造 `ReportAuditEvent(` 的地方——单点产出是**结构性**的，不靠约定。action 列是普通 String，所以词汇在**写入时**重新校验（`audit_vocabulary.py` 封闭集）；历史词汇保留可读。actor 字符串如 `system:report-worker`、`system:report-assessor`、`ai:report-extractor`。
+
+## 解析任务子状态
+
+`report_extraction_jobs` 是 SQL 持久化单 worker 队列（`queued/running/completed/failed`，`attempt_count`，唯一 FK + CASCADE）。worker 的 stale-running 恢复区分两种真相："解析已提交、ack 丢了"（标 completed + `extraction_committed_unacked`）与"还在跑"（重新入队）。`REPORT_JOB_STALE_SECONDS` 默认 1200、`MAX_ATTEMPTS` 默认 3。
+
+## 锚点
+
+`docs/adr/0016`（单点产出、两类具名）、`GLOSSARY.md`「报告状态」「审计事件」。

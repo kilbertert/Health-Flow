@@ -1,0 +1,47 @@
+---
+description: "报告上传与原始材料验收：consent 双重闸门、413/415/422 各限制、magic bytes 对扩展名、page_count NULL 语义、文件落盘与回滚"
+kind: architecture
+relations:
+  requires:
+    - identity/consent.mdx
+    - identity/ownership-boundary.mdx
+  related:
+    - report-pipeline/status-audit.mdx
+    - report-pipeline/extraction-queue.mdx
+code:
+  paths:
+    - app/service/report_material.py
+    - app/service/upload_policy.py
+    - app/api/report.py
+    - app/config.py
+    - app/data/models.py
+---
+
+# 上传与原始材料验收
+
+## 闸门顺序即契约
+
+`POST /api/health/report/upload`（202）的拒绝顺序固定，每档对应独立语义：
+
+1. `has_valid(report_interpretation)` 同意检查——**读任何字节之前**一次、写事务内（BEGIN IMMEDIATE）再查一次，封堵"检查时同意、提交前撤销"的竞态（PR #273）。403 带 `X-Report-Access-Reason: report_interpretation_consent_required`。
+2. `resolve_owner().storage_id` 定未来 owner（不走会话依赖）——解析不出 owner 直接 fail-closed 403。
+3. `patient_id` 默认回填 owner storage id，两者皆无 → 422。
+4. ≥1 文件（400）→ ≤`MAX_UPLOAD_FILES`（413）→ 扩展名白名单（415）→ 每文件/总大小流式 1MB 分块检查（413）→ 空文件（400）→ 魔数嗅探与声明扩展名不符（415）。
+
+## 材料类型判定的不变量
+
+- **内容嗅探优先于扩展名**，但嗅探不出的类型回落到声明后缀——一个截断的 PDF 仍然是 PDF。声明与内容不符是 415 **拒绝**，不是静默纠正（悄悄纠正会让患者以为上传成功的是另一个文件）。
+- 未知材料永远不猜类型。`GET /api/health/upload-policy` 公开返回验收规则（扩展名 + 三条上限），前端直接镜像服务端口径而不是自带一份。
+
+## 落盘与回滚
+
+- 文件先写 `tmp` 再 rename 落位 `REPORT_FILES_DIR/<report_id>/<file_index><ext>`——半成品文件不可能被下游读到。
+- 上传事务回滚时 `_discard_report_files` 在 `db.rollback()` **之后**清文件——与删除路径的"先 DB 后文件"正好相反方向，各自保证行与文件不同时处于半提交态。
+
+## `page_count` NULL 语义
+
+`report_files.page_count` 可空**且无默认值是有意的**（#170）：NULL = "没能读出页数"（未知），与"1 页"是两个事实。页码端点对 NULL 只放行第 1 页；SQLAlchemy 列默认值会在显式 `None` 时误触发，所以必须没有 default。公开值保持 NULL，不落成 1。
+
+## 成功后
+
+状态 → `processing`，写一条 audit-only `uploaded` 事件（不是状态迁移），`ReportExtractionJob(status=queued)` 入队——web 进程只入队，解析由独立 worker 进程消费（见 [extraction-queue](extraction-queue.mdx)）。

@@ -1,0 +1,43 @@
+---
+description: "健康数据同意：append-only 声明流、text_version 有效性、revoking report_interpretation 同事务删除全部报告、deleted_report_count、consent 闸门位置"
+kind: architecture
+relations:
+  related:
+    - identity/ownership-boundary.mdx
+    - report-pipeline/report-deletion.mdx
+code:
+  paths:
+    - app/service/consent.py
+    - app/service/consent_vocabulary.py
+    - app/schema/consent.py
+    - app/api/auth.py
+    - app/service/report_deletion.py
+    - app/data/models.py
+---
+
+# 健康数据同意
+
+## 为什么是只追加流
+
+合规要能证明主体**何时、对哪个文本版本、经哪个渠道**做出过同意——一个布尔字段证明不了。撤销也只是再写一行 `revoked`：删掉 grant 行等于抹掉"曾经同意过"这个事实。`health_data_consents` 全表没有 UPDATE/DELETE 路径（ADR-0027）。报告删除后这些行仍在——它们就是撤销行为本身的证据。
+
+## 有效性判定
+
+当前状态 = 每个 `consent_item` 取**最新一行**，且其 `text_version` 等于服务端当前配置版本，两条件在 `has_valid` 一个判定点里完成。状态端点与所有闸门共用同一判定，不可能分叉。
+
+- `text_version` 由服务端在写入时盖章（`CONSENT_*_VERSION`）——客户端不能声称同意了一段它没见过的文本；版本升级即旧同意失效，必须重新签署。
+- `source` 由渠道推导（Bearer→`mall_h5`，cookie→`legacy_web`），不信请求体自报。
+- 词汇模块 `consent_vocabulary.py` 是纯 stdlib 声明：词汇缺失时**抛错而非放行**——把拼错的 `revoked` 读成 `granted` 等于让同意从未发生，fail-open 的伤害是不对称的。
+
+## 两个独立项与闸门位置
+
+- `report_interpretation`（必需）：上传闸门在执行体**读取任何字节之前**先查一次，又在写事务内（BEGIN IMMEDIATE）复查一次——封堵"检查时同意、提交前撤销"的竞态（PR #273）。
+- `product_recommendation`（可选）：商城商品拉取前的具名闸门，返回 `product_recommendation_consent_required` 这一**原因而非错误**，且不发任何商城请求。
+
+## 撤销 = 删除
+
+撤销 `report_interpretation` 在**同一个 commit** 里删除该主体的全部报告（ADR-0029，`Deletion.commit`：先 DB、提交成功后再删文件）。`deleted_report_count` 只出现在这条删除型撤销行上，是删除规模留下的唯一证据；**NULL 与 0 是两个不同事实**——"本次撤销不涉及删除" 与 "删了 0 份" 不可混写。
+
+## 锚点
+
+`docs/adr/0027`（只追加流）、`docs/adr/0029`（撤销即删除）、`GLOSSARY.md`「健康数据同意」。

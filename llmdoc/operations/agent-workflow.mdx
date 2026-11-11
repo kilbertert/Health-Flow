@@ -1,0 +1,46 @@
+---
+description: "Agent 工作流约定：agent:* label 即授权、ticket 可实施条件、何时欠 ADR、GRILLING_COMPLETE、可信控制面 ADR-0002、模板托管文件勿手改、路由到 docs/agents 与 afk-workflow"
+kind: reference
+relations:
+  related:
+    - operations/test-acceptance.mdx
+code:
+  paths:
+    - docs/afk-workflow.md
+    - docs/agents/**
+    - CLAUDE.md
+    - AGENTS.md
+    - .afk-bootstrap.json
+    - .sandcastle/consensus-contract.json
+    - .sandcastle/policy-check.mjs
+    - .github/workflows/afk-policy.yml
+    - .github/workflows/spec-tree.yml
+    - .github/workflows/agent-review.yml
+    - .github/workflows/agent-implement.yml
+    - .github/workflows/agent-implement-pr.yml
+    - .github/workflows/agent-implement-prd.yml
+    - .github/workflows/agent-update-branch.yml
+    - .github/workflows/agent-promote-queued.yml
+    - .github/workflows/architecture-review.yml
+    - .spec/healthflow/spec.md
+---
+
+# Agent 工作流约定
+
+**本文只做路由与不变量命名**，规则全文以 `docs/afk-workflow.md`、`docs/agents/`、`CLAUDE.md`/`AGENTS.md` 为准——这些文件多数是 **afk-bootstrap 模板托管**（`<!-- afk-bootstrap:managed -->` 标记，版本见 `.afk-bootstrap.json`），不手改，升级走模板。
+
+## 强制执行的不变量
+
+- **可信控制面**（ADR-0002）：`agent-*` workflow 只接 owner 提交的同仓分支；controller 从 `main` checkout，candidate 在 Docker 沙箱内用只读 token 跑，经校验的 git bundle 进干净 delivery checkout，`AGENT_PAT` 只在 push 一步注入；凭据缺失 → `agent:blocked` 而非降级。
+- **label = 授权，不是规格**：`agent:review`/`agent:implement`/`agent:queued` 等标签触发对应 mutation 面；`GITHUB_TOKEN` 打的 label 不会再触发 workflow，所以 `agent-promote-queued` 用 `AGENT_PAT`。
+- **ticket 可实施条件**由 `docs/agents/ticket-contract.md` + `.sandcastle/ticket-check.mjs` 判：缺验收标准、缺具体落点、有未决选项即不合格；`No-ADR:`/`No-acceptance:` 豁免会被检查而非信任。
+- **确定性与非例外**：`consensus-contract.json` 里 `deterministic-ci` 不可豁免；AFK 检查住 CI（`afk-policy.yml` 是 required check）不住 git hook。
+- **spec 树只管 `app/`**（ADR-0020，`spexcode.json governedRoots`）：`.spec/` 是意图侧真值，`spec-tree.yml` lint 需要 `fetch-depth: 0`（漂移规则读 git 历史）。
+- **阶段门**：`/grill-with-docs` → `GRILLING_COMPLETE` → 等用户显式 `/to-spec` → `/to-tickets` → `/implement`；多会话工作先 spec 后 ticket。
+- **审查者是对抗方**（ADR-0022/0023）：复现失败才算证据，全绿不算。
+- ADR 欠账规则见 `docs/agents/architecture-decisions.md`；`docs/adr/0007/0008/0009` 是同一记录的**字节级三胞胎**（编号撞车，引用时认准 0007）。
+
+## 路由
+
+- issue/spec 流程 → `docs/agents/issue-tracker.md`、`docs/afk-workflow.md`；triage label → `docs/agents/triage-labels.md`；domain docs 约定 → `docs/agents/domain.md`。
+- 患者可见行为验证 → `.claude/skills/verify-healthflow/`（features 地图优先，blocked 不得报 pass）。

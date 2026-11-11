@@ -1,0 +1,46 @@
+---
+description: "商城商品推荐与购物车 deep link：product_recommendation consent 闸门、no_published_card/no_label_data/mall_unavailable 具名空因、按 condition 分组、为什么服务端代理、签名细节"
+kind: architecture
+relations:
+  related:
+    - identity/consent.mdx
+    - interpretation/evidence-bridge.mdx
+    - identity/ownership-boundary.mdx
+code:
+  paths:
+    - app/service/mall_goods.py
+    - app/service/condition_tags.py
+    - app/service/deep_link.py
+    - app/service/recommendation_empty_reason.py
+    - app/api/report.py
+    - app/config.py
+    - app/schema/report.py
+---
+
+# 商品推荐与购物车 deep link
+
+## 闸门顺序（PRD #266 验收）
+
+`GET .../recommendations` 在任何商城调用**之前**先查 `product_recommendation` 同意——不同意返回具名原因 `product_recommendation_consent_required` 而非错误，且不发商城请求。其后依次可能得到：`no_published_card`（无已发布知识卡）→ 按 condition 查标签 → `groups` + 扁平 `items`/`reason`（`no_label_data` / `mall_unavailable`）。空的原因**永远具名**（ADR-0018），不允许合成一句"暂无推荐"。
+
+## 为什么是服务端代理（ADR-0005）
+
+浏览器不直连商城：商城网关的 CORS 是规范非法组合（`Allow-Origin: *` + credentials），浏览器会拒绝带凭证请求。HealthFlow 只代理**只读**商品数据，不持有、不决定、不回写任何商城状态。
+
+## 分组语义
+
+- **按 condition 标签查询 = 权威分组**：商城标签端点返回命中集合但不说哪个标签命中，列表端点也不回传逐项 `labels`——把并集结果归因到 condition 只能靠猜，猜错就写出一条不存在的"商品-病情"关系。N 个小查询买来权威分组。
+- 一个商品只属于一个组（按报告 condition 顺序先到先得）。
+- condition 未映射 → 不调商城，`no_label_data`；配置不全 → `mall_unavailable`，且**不发未签名请求**。
+- condition→tag 映射的真相在 genesis-evidence `docs/condition-to-mall-tag.md`；`condition_tags.py` 是本地投影，`tests/test_condition_tags.py` 防漂移（无 genesis-evidence checkout 时静默 skip）。
+
+## 签名与 deep link 的实测细节
+
+- 商品 API 签名是 **MD5 双大写**（内层小写会"signature error"，实测）；缺任一 `MALL_WEBAPI_*` 配置即判 unconfigured。
+- deep link = HMAC-SHA256 对**含 `path` 在内**的排序参数签名（签名绑定入口路由），TTL 10 分钟。payload 故意非机密（`detection_id` 患者可见、被转发、进日志），所以靠签名而非加密。
+- `spu_id` 与 `id` **两个都发**——商城 H5 详情页只认 `id`（实测）。配置不全拒绝构造，没有"尽力而为"的 URL。
+- `create_cart_link` 认证报告但**不绑定** `spu_id` 到该报告的推荐集——已知限制（`qa-plan.md`「已知限制」）：启用归因前必须先补这个闸门，顺序不能反；归因决定不做的依据在 genesis-evidence `docs/deep-link-contract.md`。
+
+## 锚点
+
+`docs/adr/0005`（服务端代理）、`docs/adr/0018`（具名空因）、`docs/adr/0028`（同意闸门与按问题分组）；`GLOSSARY.md`「商品」「推荐为空的原因」；外部契约 `docs/mall-module/`。
