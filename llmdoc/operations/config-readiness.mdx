@@ -1,0 +1,51 @@
+---
+description: "配置、就绪与降级语义：env vars、启动 fail-closed 项、/ready 报告什么、config_freshness stale vs unknown、哪些依赖可选哪些降级、APP_ENV 不是 DB 开关"
+kind: reference
+relations:
+  related:
+    - operations/release-deploy.mdx
+    - identity/tickets-sessions.mdx
+code:
+  paths:
+    - app/config.py
+    - app/config_freshness.py
+    - app/main.py
+    - .env.example
+    - ops/examples/health-flow.env.example
+    - ops/service-host/examples/health-flow.env.example
+---
+
+# 配置、就绪与降级语义
+
+权威清单是 `app/config.py` + `.env.example` + `ops/*/examples/health-flow.env.example`；本篇只记**语义与判定**，字段全集以文件为准。
+
+## 环境与默认值
+
+- `APP_ENV` **不是数据库开关**：prod/production 无 `DATABASE_URL` 时由 `MYSQL_*` 拼 `mysql+pymysql://`，否则 `sqlite:///./data/healthflow.db`。prod 默认 `REPORT_ACCOUNT_REQUIRED=true` + `AUTH_COOKIE_SECURE=true`，ops README 要求这两个值**显式写出**而不是靠推导。
+- env 文件永不入库；`HEALTHFLOW_ENV_FILE` 指认加载源，缺席时 `/ready` 报 `config_freshness: unknown`（不假装 `current`）。
+
+## `/ready` 报告什么
+
+本地信号投影：`database`（ok/unavailable）、`evidence_service`、`report_provider`、`mall`、`report_owner`（account/configured/unconfigured——**故意不用枚举名**）、`config_freshness`。**就绪是便宜的本地信号，绝不探测第三方**：商城不可达不会把服务踢出 LB，真实可达性以按需的 `mall_unavailable` 原因出现。
+
+## `config_freshness` 的非对称降级（ADR-0006，#201）
+
+`current / stale / unknown` 三值。**stale 降级，unknown 故意不降级**——否则部署顺序就成死结（unit 安装必然落在触发部署的 merge 之后）。这个机制存在是因为 2026-10-10 的事故：env 文件在启动后被替换，进程握着旧 provider key，`/ready` 报 `configured` 而每次解析都 401。
+
+## 依赖降级矩阵
+
+| 依赖 | 缺席语义 |
+|---|---|
+| 票据 verifier（`MALL_TICKET_PUBLIC_KEY_PATH`/`MALL_TICKET_AUDIENCE`） | **启动 fail-closed**：建不出 verifier 即拒绝启动——验不了签却运行 = 没在守的门 |
+| DB | 必需；SQLite 开 FK pragma |
+| Milvus / Neo4j | lazy client，失败 → `client=None`、操作返回 `[]`/`False`；**只有冻结面用** |
+| 证据服务（`GENESIS_*`） | assess/metric-catalog 的硬依赖 → 503；目录查询退化为 `catalog=None`（unmatched 照实报）；`unconfigured` → degraded |
+| VLM provider（`VLLM_*`/`OPENAI_*`） | 解析硬依赖：失败入五类成因、retryable 重试 ≤3 → `failed`；`unconfigured` → degraded |
+| 商城商品（`MALL_WEBAPI_*` 四件） | 唯一真正"安静降级"：缺一件/超时/业务错 → `mall_unavailable` + 空 items（200） |
+| Deep link（`MALL_STOREFRONT_*`/`MALL_DEEP_LINK_SECRET`） | 缺一件 → `url=None, reason="link_unavailable"`，不造半成品 URL |
+| Basic auth（`HEALTHFLOW_BASIC_AUTH_ENABLED`） | 默认关；开了也只豁免 `/health`+`/ready` |
+| MiniMax | 仅数据生成脚本 |
+
+## 已知锚点漂移
+
+`README.md`「可选依赖降级」声称"模型服务、向量库、图谱全部可选，缺失照常启动并降级"——**stale**：只对 Milvus/Neo4j（冻结面）成立。vLLM 缺席 → degraded + 全解析失败；证据服务挂 → 503；verifier 缺 → 拒绝启动。

@@ -1,0 +1,40 @@
+---
+description: "原文定位契约：bbox 与 bbox_normalized [0,1000] 归一化、source_id file-N/p{page}-m{idx} 格式、page_url、缺组件返回 null 不猜测、写入严格读取宽容"
+kind: reference
+relations:
+  related:
+    - report-pipeline/extraction-queue.mdx
+    - interpretation/evidence-bridge.mdx
+code:
+  paths:
+    - app/service/origin_location.py
+    - app/schema/report.py
+    - app/schema/evidence.py
+    - app/api/report.py
+    - app/service/vision_encoder.py
+---
+
+# 原文定位契约
+
+## 权威定义
+
+唯一实现 `app/service/origin_location.py`；校验器在 `app/schema/report.py`（`validate_bboxes`）与 `app/schema/evidence.py`（`validate_bbox`）。
+
+## 字段契约
+
+- `source_id` 格式：`file-{file_index}/p{page}-m{position}`，由 `source_id_for` 单点生成；提取器自带的 id 保留、只加前缀。
+- `bbox` 为像素坐标，`bbox_normalized` 为 `[0,1000]` 归一化空间——一套高亮模型跨页分辨率工作。恰好给出一侧时 cross-fill 另一侧。
+- **任一组件缺失（page/bbox/source_id/evidence_text）→ 定位整体为 null，从不猜测**。前端和证据桥消费同一规则。
+
+## 写入严格、读取宽容
+
+- 创建边界 `strict=True`：零面积框**拒绝**——指向虚无的框比没有框更糟。
+- 存储行读出时宽容：历史行里的退化框读成 `None` 而不是让接口 500——契约不能在自己的历史上崩溃。denormalize 侧对舍入塌陷的退化框同样防护。
+
+## 页图端点
+
+`GET /api/health/report/{id}/files/{fi}/pages/{pn}`：图片文件只认第 1 页；PDF 经 fitz 2× 渲染为 PNG；`page_count NULL`（未知页数，见 [upload-material](upload-material.mdx)）只放行第 1 页；渲染失败 422。
+
+## 锚点
+
+`GLOSSARY.md`「原文定位」「原文证据」。

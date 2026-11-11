@@ -1,0 +1,67 @@
+---
+description: "测试与验收模型：pytest 全量跑为什么排队等待（主机级 flock 并发槽上限）、uv sync --extra dev、npm ci 顺序陷阱、静态形状守卫、Playwright e2e 证明什么、skipif 静默跳过、QA-EV 记录状态"
+kind: architecture
+relations:
+  related:
+    - operations/release-deploy.mdx
+    - operations/agent-workflow.mdx
+code:
+  paths:
+    - tests/conftest.py
+    - pytest.ini
+    - pyproject.toml
+    - tests/test_ci_workflow.py
+    - tests/test_cd_workflow.py
+    - tests/test_cd_deploy_scripts.py
+    - tests/test_systemd_units.py
+    - tests/test_e2e_consumer.py
+    - tests/test_condition_tags.py
+    - tests/test_contract_vocabulary_ownership.py
+    - frontend/playwright.config.js
+    - frontend/e2e/README.md
+    - frontend/e2e/fixtures.js
+    - frontend/e2e/seed.mjs
+    - frontend/e2e/server.mjs
+    - frontend/e2e/mall-origin.mjs
+    - scripts/e2e_seed.py
+    - acceptance.feature
+    - qa-plan.md
+    - docs/mall-module/qa-plan.md
+    - docs/mall-module/acceptance.feature
+---
+
+# 测试与验收模型
+
+## 入口陷阱（每个都钉着一次实测事故）
+
+- `uv sync --locked --extra dev`——**不是 `--dev`**：`--dev` 装的是空的默认组、退出码却是 0，随后 `ModuleNotFoundError: app`。
+- `npm ci` 必须先于 pytest：前端契约测试在 `frontend/node_modules` 缺席时 `skipif` 静默跳过，"445 passed, 4 skipped" 曾被当成绿。
+- 没有 `ruff format --check`；pytest 无 xdist，默认串行。
+- `train` extra 是 **CUDA-only**（torch/transformers/trl/vllm），CPU 机器不要装。
+
+## 主机级并发槽（ADR-0024）
+
+`tests/conftest.py` 的 flock 门：`/tmp/aiops-host-test-slots/host-test-slot-N.lock`，`MAX_CONCURRENT_RUNS=2`，`WAIT_SECONDS=1800`。锁名**故意跨仓共享**（槽是主机属性，不是仓库属性）；目录固定主机路径并挂进 AFK 沙箱；`0o666` 文件模式是实载的（沙箱 `agent` UID ≠ 宿主 UID）。**重命名锁文件 = 静默取消上限**。
+
+## 静态形状守卫
+
+`test_ci_workflow.py` / `test_cd_workflow.py` / `test_systemd_units.py` 读取 workflow/unit 文本**剥注释后**断言字面量——每个断言钉一个实测过的静默失败形状（剥注释是因为反例就写在注释里）。`test_cd_deploy_scripts.py` 用假 systemctl + 本地 http.server 对 scratch APP_ROOT **真跑** `deploy-36.sh --dry-run` 的远端块。
+
+## E2E 模型（Playwright）
+
+- 真实 `vite build` + 真实 FastAPI（`SERVE_FRONTEND=true`）对 **TMPDIR 下一次性 SQLite**——永不碰 `data/healthflow.db`。
+- seed 经 `scripts/e2e_seed.py` 调**应用自己的模型与哈希**——不养平行契约。
+- 375px 移动基线；`mall-origin.mjs` 起**第二个 loopback origin** 才能证明 CORS/Bearer 契约；`HEALTHFLOW_E2E_UPSTREAM_ENV` 是闭集白名单（拒绝 DATABASE_URL/REPORT_FILES_DIR/RUN_DIR/CORS_ORIGINS 这类隔离键，ADR-0030）。
+- 浏览器套件是**唯一**对患者可见行为的自动断言（ADR-0025，required check 一部分）。
+- 已知缺口：`webServer` 起不来会遗留 `/tmp/healthflow-e2e-*` 沙箱（verify-healthflow skill 记了清扫法）；`frontend/e2e/README.md` 的种子账户描述是 **stale**（实际用 ticket subject + session，不是邮箱密码）。
+
+## 静默 skip 与验收记录
+
+- `test_condition_tags.py` 读 genesis-evidence 真相文档的**硬编码绝对路径** `/home/claude/Projects/genesis-evidence/docs/condition-to-mall-tag.md`——checkout 缺席即静默 skip（单 checkout CI 上等于没跑），QA-EV-009 记了这一性质。
+- `tests/unit/test_train.py`、`test_init_scripts.py` 走 `importorskip`——可选依赖缺席时不是失败是跳过。
+- `test_e2e_consumer.py` 钉 `HEALTHFLOW_E2E_UPSTREAM_ENV` 闭集；`HEALTHFLOW_E2E_CONSUMER_FIXTURE` 挂外部商城模块验收（`docs/mall-module/`）。
+- 验收以 `qa-plan.md` + `acceptance.feature` + `artifacts/qa/` 为准：**状态如实记录**——QA-EV-008 blocked、QA-EV-009 可执行未跑、QA-EV-010 partial。不会失败的探针不算验证，负例是强制的（`ops/service-host/upload-probe.sh` 先测无会话被拒）。
+
+## 锚点
+
+`docs/adr/0024`（并发槽）、`docs/adr/0025`（浏览器门禁）、`docs/adr/0030`（消费者检查）、`qa-plan.md` 用例编号。患者侧验证走 `.claude/skills/verify-healthflow/` 的 features 地图。

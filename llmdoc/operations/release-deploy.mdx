@@ -1,0 +1,58 @@
+---
+description: "发布与部署完整性：唯一部署路径 deploy-36.sh、cd.yml 触发与路径白名单、部署修订身份三件套、atomic swap、PartOf=/path watcher、rollback、mirror、绑定漂移只报不修"
+kind: architecture
+relations:
+  related:
+    - operations/config-readiness.mdx
+    - operations/test-acceptance.mdx
+code:
+  paths:
+    - deploy/deploy-36.sh
+    - .github/workflows/cd.yml
+    - .github/workflows/ci.yml
+    - .github/workflows/gitlab-mirror.yml
+    - .github/workflows/sandbox-image.yml
+    - .dev-host.toml
+    - ops/README.md
+    - ops/service-host/**
+    - ops/systemd/health-flow.service
+    - ops/systemd/health-flow-report-worker.service
+    - tests/test_cd_workflow.py
+    - tests/test_cd_deploy_scripts.py
+    - tests/test_ci_workflow.py
+    - tests/test_systemd_units.py
+---
+
+# 发布与部署完整性
+
+## 一条部署路径
+
+`deploy/deploy-36.sh`（`--commit` / `--rollback-to` / `--dry-run`）同时被 `cd.yml` 与人工紧急回滚使用——**两条路径会漂移，所以只有一条**。`workflow_dispatch` 故意没有 commit 选择器：挑一个没过检查的 commit 等于绕过 Ruleset。
+
+## 修订身份与写入闸门
+
+- 部署修订身份三件套：full-40-char `deployed-revision` marker + `MANIFEST.sha256` + 运行中 bundle sha256——**从不从 API 形状推断**（GLOSSARY「部署修订」）。
+- 写 service host 只走已识别产物：`dev-host cp --artifact-sha256`（`.dev-host.toml` 声明主机逻辑名与路径，地址/凭据在仓外）。exec 需 `--allow-service-exec`，主机指纹先断言。
+- 远端块 `set -u` 而**故意不 `set -e`**：每个变更步骤累积 `step_failed`，保证控制流到达自检/回滚。
+
+## 部署序列的不变量
+
+幂等（marker 相同即跳）→ **任何写入前**先建回滚快照（建不出就拒绝）→ manifest 校验 → `frontend/` **原子目录交换**（extract-over 留陈旧资源，实测过）→ `pip install --no-deps --force-reinstall` + `pip check`（依赖漂移是门而不是 500）→ 写 marker → **只报告**绑定漂移（仓库 unit 声明 127.0.0.1 vs live 0.0.0.0——暴露面变更必须由观测流量决定，不是部署副作用）→ `systemctl restart`（`PartOf=` 传播到 worker）→ 自检（`/ready` 形状 + bundle sha256 相等）→ 失败恢复快照并回滚 marker（连"原本没有 marker"也会恢复成没有）。退出码 0/1/64/65/77/124。
+
+## systemd 语义（#201 事故形状）
+
+`EnvironmentFile=` 只在启动读一次。`health-flow-env.path` 监视 env 文件 → oneshot `try-restart` 两个读者（web + worker，同一事务）：`try-restart` 而非 `restart`，**被故意停掉的 worker 不会被复活**——"解析暂停"是合法运营态。worker unit 装而未 enable 同理。
+
+unit 变更不走部署：`cd.yml` paths 不含 `ops/service-host/systemd/**`，`deploy-36.sh` 不装 unit——合并了 unit 改动**什么都不会发生**，安装是运维手工步骤（`ops/service-host/README.md`）。`ops/systemd/` 是 dev-host 用户级 unit，硬编码主 checkout 路径，worktree 里不可直接用。
+
+## 触发与周边
+
+- `cd.yml`：push main + `paths` 白名单。**白名单漏路径 = 零信号**（改了但没部署）；`deploy-36.sh` 消费的任何东西都必须在 `paths:` 里。job 级 `concurrency`（workflow 级锁实测死锁）；`environment: production-36` 提供部署台账 + 仅 main 限制，**无 required reviewer**（owner 决定，回滚方案=重新加 reviewer）。
+- `ci.yml`：required check "Tests"。**头部注释声称 self-hosted runner 是 stale**——#243 起回到 `ubuntu-latest`（ADR-0010 文件内更新）。
+- `gitlab-mirror.yml`：bare clone（剥 `refs/pull/*`）→ `push --mirror` 到公司 GitLab，`http.sslVerify=false`（自签名）；delete 事件是独立触发。单向镜像，永不是源。
+- `data/` ≠ `var/`：代码无视 `DATABASE_URL` 总会建相对路径 `data/`（SQLite），必须在 `ReadWritePaths` 且存在，否则 unit crash-loop。
+- 服务身份按项目隔离（health-flow 与 genesis-evidence 无共享组）——共享身份意味着一个缺陷交出全部凭据。
+
+## 锚点
+
+`ops/service-host/README.md`（安装/环境/迁移 runbook，过程以它为准）、`.dev-host.toml`、`docs/adr/0006`（长驻读者与配置新鲜度）、`docs/adr/0010`（runner 放置）。`/ready` 降级语义见 [config-readiness](config-readiness.mdx)。

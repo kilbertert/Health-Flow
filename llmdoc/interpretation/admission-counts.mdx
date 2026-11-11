@@ -1,0 +1,46 @@
+---
+description: "解读准入、异常判定与指标计数：admission_reason 词汇、skipped/unmatched/two_values 成因、定性词判定、inferred_abnormal_flag、五项 counts 服务端唯一计算"
+kind: architecture
+relations:
+  related:
+    - report-pipeline/confirmation.mdx
+    - interpretation/evidence-bridge.mdx
+code:
+  paths:
+    - app/service/admission.py
+    - app/service/admission_vocabulary.py
+    - app/service/admission_projection.py
+    - app/service/report_metric_counts.py
+    - app/service/evidence_bridge.py
+---
+
+# 解读准入、异常判定与指标计数
+
+## 一个词汇、一个判定点
+
+`admission_vocabulary.py` 是准入原因的封闭集唯一主人（ADR-0019 的"封闭取值集只能有一位主人"）。准入判定与异常判定**共用同一套 value/reference 判断**（`value_level_reason`）——同一行不能为同一事实挂两个名字。
+
+## 为什么这些类各按自己的真相判（ADR-0013）
+
+"系统能判但患者没法行动"的三类准入，各按自己的证据判，不套同一规则：
+
+- **带值判据短路**：数值落在印刷边界外，符号化边界在两个格子里都写出来；词域如 `(Negative)` 直接定结论。
+- **定性结果按词判**（ADR-0014，HL7 v2 OBX-8 的依据）：`Detected`/`Not Detected`/`Nil` 等封闭词表**整值匹配**——子串匹配会撞上假朋友（`AB Rh(D) POSITIVE` 是血型不是阳性结果）。定性阳性判为 `A`（无方向异常），计数并展示，但**不跨越证据边界**（`SourceObservation` 要求 float 值）。
+- **物理上无单位的项目**跳过单位检查但不做其他豁免：比值类按名字正则、pH/SG 按有界表，出 `unit=""`。
+- 描述/记录类项目 → `no_reference_concept`。
+
+## 两个容易混的事实
+
+- `awaiting_confirmation` ≠ 决定 `pending`：前者是"患者还没看"，后者是"这行没法判"——两者曾共用一个字符串，需要的动作却相反。
+- `in_range` 判定为 `N` 且**只做加法**：`parsed - abnormal - undecided` 的减法会把 excluded 行算成正常（ADR-0017）。`undecided` 存在时不出"全部正常"句式——判不了 ≠ 在范围内。
+
+## 计数与投影
+
+- `metric_counts`（`report_metric_counts.py`）是五项计数的**唯一服务端计算点**，出口互不相交；客户端只渲染不推导。
+- 逐行 `admission_reason=None` 表示通过准入，但只在报告到达 `assessed` 后才有意义——在那之前账本为空，绝不编造全零假账本。
+- `inferred_abnormal_flag` 是服务端在读取时算出的判定，覆盖模型原始的 `abnormal_flag`（原始值只是模型的主张，不落库）。
+- `metric_code` 解析：genesis-evidence 指标目录是唯一真相；`METRIC_ALIASES` 别名表只是归一化辅助，别名候选必须回目录验证，目录不可达时保持 `unmatched` 不编造。
+
+## 锚点
+
+`docs/adr/0013`、`docs/adr/0014`、`docs/adr/0017`、`docs/adr/0019`；`GLOSSARY.md`「解读准入」「异常判定」「报告指标计数」「标准指标编码解析」「一行两个值」。前端镜像文本见 `frontend/src/admissionText.js`（等值由契约测试钉住）。

@@ -1,0 +1,47 @@
+---
+description: "患者 SPA 契约：前端实际调用的端点、无登录页 NoSessionScreen、hash 路由、vocabulary 镜像映射而非推导、confirm 页 full-coverage 承诺、X-Report-Access-Reason 消费"
+kind: architecture
+relations:
+  related:
+    - identity/ownership-boundary.mdx
+    - identity/tickets-sessions.mdx
+    - interpretation/admission-counts.mdx
+    - report-pipeline/confirmation.mdx
+code:
+  paths:
+    - frontend/src/api.js
+    - frontend/src/App.jsx
+    - frontend/src/admissionText.js
+    - frontend/src/interpretationFailure.js
+    - frontend/src/reportStatus.js
+    - frontend/src/uploadPolicy.js
+    - frontend/src/pasteImage.js
+    - frontend/src/pages/Upload.jsx
+    - frontend/src/pages/ReportDetail.jsx
+    - frontend/src/components/Recommendations.jsx
+    - frontend/vite.config.js
+---
+
+# 患者 SPA 契约
+
+## 身份前提
+
+没有登录页、也不得有——无会话时只能渲染 `NoSessionScreen`（"请从商城入口进入"），票据规范禁止回退到登录页。`App.jsx` 从 URL 读 `?ticket=` 调 `POST /auth/ticket` 一次性兑换（sessionStorage 去重抵消 StrictMode 双 effect），随即将 ticket 从 URL 抹掉。所有请求 `credentials: 'include'` 走同源 cookie；跨域商城 H5 走 `Authorization: Bearer`。
+
+## 服务端是词汇的唯一主人
+
+前端对**封闭取值集只映射、不推导**（ADR-0017/0018/0019）：`admissionText.js`、`interpretationFailure.js`、`reportStatus.js` 是服务端词汇的镜像层，等值由 `tests/test_contract_vocabulary_ownership.py` 等契约测试钉住。`uploadPolicy.js` 镜像 `GET /upload-policy`，服务端不可达时用内置默认。错误归因读 `X-Report-Access-Reason` 头（`parseError` 产出 `.status`+`.accessReason`），**不再**从 `detail` 正则归因。
+
+## 确认页的 UX 承诺
+
+草稿从不预填 `decision`（有草稿 = "患者碰过这行"）；`suggestedDecision` 只是展示默认，只对实际展示给患者的行提交；未触碰的行交字面 `pending` = "我没决定"，由服务端解析。双值行（`two_values`）必须显式选。subject-consistency 声明非 `same` 即停。确认页要求全覆盖——少一行就是 422。重新进入已确认报告经 `serverDecision` 复用先前决定（幂等倾向）。processing 期 2s 轮询盯 `extraction_job`。
+
+## 调用面与死管道
+
+SPA 实际调用面 = `api.js` 里那一组函数；`GET/POST /auth/consent` **不被本 SPA 调用**（同意 UI 住在商城 H5，只由 `consent.spec.js` 跨端测）。`api.js` 里 `X-Report-Token`/`access_token` 残留是 #172 前的死管道——服务端既不返回也不接受，**保留但无任何语义**，看到勿当凭证通道。
+
+路由是无库的 hash 路由：`home` / `report`（上传+确认+证据+推荐）/ `#/report/{id}` / `profile`。开发态 vite 代理 `127.0.0.1:8127`（README 快速上手的 8080 是 **stale**）。
+
+## 锚点
+
+`docs/adr/0026`（患者界面并入商城 H5）；端点语义见各 owner 文档：上传 [upload-material](../report-pipeline/upload-material.mdx)、确认 [confirmation](../report-pipeline/confirmation.mdx)、推荐 [recommendations](../mall/recommendations.mdx)。

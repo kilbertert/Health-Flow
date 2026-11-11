@@ -1,0 +1,54 @@
+---
+description: "解析流水线与重试队列：材料路由、vision_encoder 提取、report_worker 单进程队列、解读失败五类成因与 retryable、同一观测 dedup、extraction trace"
+kind: architecture
+relations:
+  requires:
+    - report-pipeline/status-audit.mdx
+  related:
+    - report-pipeline/upload-material.mdx
+    - report-pipeline/origin-location.mdx
+    - interpretation/admission-counts.mdx
+code:
+  paths:
+    - app/service/vision_encoder.py
+    - app/service/report_worker.py
+    - app/service/interpretation_failure.py
+    - app/service/metric_rows.py
+    - app/model/llm.py
+    - app/config.py
+---
+
+# 解析流水线与重试队列
+
+## 进程拓扑
+
+解析在**独立进程**里跑：`python -m app.service.report_worker`（`ops/service-host/systemd/health-flow-report-worker.service`，fcntl flock 单实例，`REPORT_WORKER_POLL_SECONDS` 默认 2s）。web 进程只入队 `ReportExtractionJob`。队列是 SQL 表，不是 Redis——任何"队列在哪"的猜测以 `report_extraction_jobs` 表为准。
+
+## 材料路由（唯一来源）
+
+文件类型只由 `report_material` 判定，没有第二张类型表：
+
+- 文本 PDF → pdfplumber 抽文本 → LLM JSON 抽取；
+- 扫描件/图片 → fitz 渲染 → VLM + 严格 JSON prompt（`temperature=0`）。
+
+prompt 版本 `health-flow-report-extraction-v2` 与 `PROMPT_HASH`、provider/model/run id 一起进 `extraction_*` trace 列持久化在报告上。注意 ARCHITECTURE.md §1 把坐标前缀归给 `vlm_tuner`——那是冻结 SFT 序列化路径，**stale**；live 提取器是 `vision_encoder`（`IMAGE_EXTRACTION_PROMPT`/`TEXT_EXTRACTION_PROMPT`）。
+
+## 解读失败：成因在抛出点分类（ADR-0011/0012）
+
+- 五类封闭成因：`material_unreadable / service_unavailable / provider_rejected / provider_unavailable / content_unrecognized`。
+- **分层（material/service/provider）只能由调用方供给**——只有抛出点知道是哪一层挂了；provider 失败先按结构化事实判（HTTP 状态、异常类名——httpx/openai/stdlib 没有公共基类），文本只是兜底。
+- **文件名永不参与分类**：旧实现按文件名子串嗅探，改个文件名就翻转重试决策。
+- `ParseOutcome.failure` 是重试判定的唯一输入。retryable = `{service_unavailable, provider_unavailable}`（时间会治好）；`provider_rejected` 永不重试——同一把凭证原样再交是徒劳（ADR-0006 事故形状：把 401 当可重试真出过事）。
+- 报告级成因取 `FAILURES_ORDERED` 里**最上游**的失败。
+- 失败记录本身失败也不能逃出解析路径——一次 DB 抖动不该杀死整个队列循环。
+
+## 行级不变量
+
+- 部分文件出指标：报告停在 `processing`（部分成功）或进 `pending_confirmation`。
+- **worker 永不碰已离开 `processing` 的报告**：重试会全删重插 metric 行为 `pending`，患者确认决定会被抹掉。两种"什么也没做"各有具名 audit-only 事件（`extraction_committed_unacked` vs `extraction_dropped_for_settled_report`）。
+- `_carried_forward` 跨轮保留 trace 但**丢弃** `file_results`——过期的文件清单会把本轮失败错怪到上一轮的文件上。
+- 同一观测 dedup key（`metric_rows.row_key`）：file+page+name+evidence-or-name+value+unit+range——同一观测重复出现只留一行。
+
+## 锚点
+
+`docs/adr/0006`（不可重试的形状）、`docs/adr/0011`（失败是有成因的结论）、`docs/adr/0012`（失败逐报告出域）、`GLOSSARY.md`「结构化指标」「解读失败」「同一观测」。
