@@ -114,3 +114,19 @@ def test_the_cors_policy_is_not_wildcarded(client):
     assert set(cors.kwargs["allow_headers"]) == {"Authorization", "Content-Type"}
     assert cors.kwargs["allow_credentials"] is False
     assert ACCESS_REASON_HEADER in cors.kwargs["expose_headers"]
+
+
+@pytest.mark.parametrize(('origin', 'expected'), [(ALLOWED_ORIGIN, 200), (DISALLOWED_ORIGIN, 400)])
+def test_questionnaire_put_preflight_preserves_origin_boundary(client, origin, expected):
+    response = client.options('/api/health/report/1/questionnaire', headers={
+        'Origin': origin,
+        'Access-Control-Request-Method': 'PUT',
+        'Access-Control-Request-Headers': 'authorization,content-type',
+    })
+    assert response.status_code == expected
+    if expected == 200:
+        assert 'PUT' in response.headers['access-control-allow-methods']
+        assert response.headers['access-control-allow-origin'] == origin
+        assert 'access-control-allow-credentials' not in response.headers
+    else:
+        assert 'access-control-allow-origin' not in response.headers

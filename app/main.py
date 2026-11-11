@@ -57,11 +57,13 @@ app = FastAPI(
 #   自定义头自动获得放行，也就让「这个头该不该跨源」这个问题无人再问。
 # - 暴露 `X-Report-Access-Reason`：不暴露的话跨源的前端读不到那个响应头，「会话失效」
 #   与「报告不存在」就无法区分，ADR 0018 建立的具名归因会退回猜文本。
+# - `allow_methods` 列的是实际用到的方法集：PUT 是生活问卷保存的动词，少了它浏览器
+#   预检直接拦截（同域部署测不出来，只有真实跨源才暴露）。
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_settings().cors_origins,
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
     expose_headers=[ACCESS_REASON_HEADER],
 )
