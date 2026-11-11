@@ -23,13 +23,14 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import FileResponse
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import ACCESS_REASON_HEADER, db_dependency, session_owner_dependency
 from app.config import get_settings
 from app.data.models import MedicalReport as ReportModel
 from app.data.models import MetricRecord as MetricModel
-from app.data.models import ReportExtractionJob
+from app.data.models import ReportExtractionJob, ReportQuestionnaireResponse
 from app.data.models import ReportFile as ReportFileModel
 from app.schema.evidence import (
     EvidenceMatchResponse,
@@ -42,6 +43,8 @@ from app.schema.report import (
     CartLinkResponse,
     MedicalReportResponse,
     MetricRecord,
+    QuestionnaireState,
+    QuestionnaireSubmission,
     RecommendationGroup,
     RecommendationResponse,
     ReportConfirmationRequest,
@@ -78,6 +81,7 @@ from app.service.mall_goods import MallGoodsItem, fetch_goods, label_pairs_for, 
 from app.service.metric_effective_value import effective_value
 from app.service.metric_rows import deduplicate
 from app.service.origin_location import page_url, source_id_for
+from app.service.questionnaire_vocabulary import QUESTIONNAIRE_VERSION
 from app.service.recommendation_empty_reason import REPORT_ACCESS_BY_STATUS
 from app.service.report_deletion import delete_reports
 from app.service.report_material import (
@@ -92,6 +96,12 @@ from app.service.report_material import (
 )
 from app.service.report_metric_counts import MetricCounts, metric_counts
 from app.service.report_ownership import UNOWNED_SENTINEL, resolve_owner
+from app.service.report_questionnaire import (
+    is_same_answer_set,
+    state_for,
+    status_for,
+    validate_submission,
+)
 from app.service.report_status import record_event, transition
 from app.service.report_subject import (
     SubjectGateError,
@@ -320,6 +330,22 @@ def _partial_files_in_flight(report: ReportModel) -> bool:
     """
     parsed = report.parsed_content or {}
     return any(isinstance(item, dict) and item.get("status") == "failed" for item in parsed.get("file_results") or [])
+
+
+def _questionnaire_summary(report: ReportModel) -> dict | None:
+    """问卷状态摘要：只复述**落库的事实**，不推断。
+
+    没有答案行 → `None`（从未作答，含功能上线前的旧报告）。`unanswered`
+    不建行，所以摘要的状态只会是 `skipped`/`partial`/`answered` 之一——
+    服务端不替患者宣布他「没答」，那只是一种没有记录。
+    """
+    row = getattr(report, "questionnaire_response", None)
+    if row is None:
+        return None
+    return {
+        "status": row.status,
+        "questionnaire_version": row.questionnaire_version,
+    }
 
 
 @dataclass(frozen=True)
@@ -951,6 +977,7 @@ def _report_response(
             if assessed
             else None
         ),
+        questionnaire=_questionnaire_summary(report),
     )
 
 
@@ -1379,6 +1406,95 @@ async def delete_report(
     # 有两份实现就一定有一份会漂，而漂丢的那一半是「报告行指向不存在的文件」。
     delete_reports(db, [report]).commit(db)
     return {"message": "报告已删除", "report_id": report_id}
+
+
+def _questionnaire_row(db: Session, report_id: int) -> ReportQuestionnaireResponse | None:
+    return db.query(ReportQuestionnaireResponse).filter(ReportQuestionnaireResponse.report_id == report_id).first()
+
+
+@router.get("/report/{report_id}/questionnaire", response_model=QuestionnaireState)
+async def get_questionnaire(
+    report_id: int,
+    request: Request,
+    db: Session = Depends(db_dependency),
+    owner_id: str | None = Depends(session_owner_dependency),
+):
+    """问卷状态：题目定义 + 已保存的答案事实 + 由答案派生的个性化提示。
+
+    没有答案行 → `unanswered`（含功能上线前的旧报告）；旧题目版本的行如实
+    按「未答」读出 —— 行保留、等重答覆盖，不拿旧答案套新题。
+    """
+    report = _authorized_report(
+        db,
+        report_id,
+        owner_id=resolve_owner(request).storage_id,
+    )
+    return QuestionnaireState(**state_for(_questionnaire_row(db, report.id)))
+
+
+@router.put("/report/{report_id}/questionnaire", response_model=QuestionnaireState)
+async def put_questionnaire(
+    report_id: int,
+    submission: QuestionnaireSubmission,
+    request: Request,
+    db: Session = Depends(db_dependency),
+    owner_id: str | None = Depends(session_owner_dependency),
+):
+    """提交问卷：可跳过、可部分回答、可重答（UPDATE 原行，不追加历史版本）。
+
+    裁决顺序即责任顺序：先词表校验（422），再并发凭据（409）。`base_revision`
+    与当前不同且内容不同的提交被拒绝 —— 那是并发旧请求，不能覆盖新答案；
+    与已保存内容**相同**的重放则幂等返回现状（重试安全）。
+    """
+    report = _authorized_report(
+        db,
+        report_id,
+        owner_id=resolve_owner(request).storage_id,
+    )
+    detail = validate_submission(submission)
+    if detail is not None:
+        raise HTTPException(status_code=422, detail=detail)
+    row = _questionnaire_row(db, report.id)
+    current_revision = row.revision if row is not None else 0
+    if is_same_answer_set(row, submission):
+        return QuestionnaireState(**state_for(row))
+    if submission.base_revision != current_revision:
+        raise HTTPException(status_code=409, detail="问卷已被更新，请刷新后重试")
+    values = {
+        "questionnaire_version": QUESTIONNAIRE_VERSION,
+        "status": status_for(submission.answers, submission.skipped),
+        "answers": {} if submission.skipped else dict(submission.answers),
+        "revision": current_revision + 1,
+    }
+    try:
+        if row is None:
+            db.add(
+                ReportQuestionnaireResponse(report_id=report.id, owner_id=resolve_owner(request).storage_id, **values)
+            )
+        else:
+            changed = (
+                db.query(ReportQuestionnaireResponse)
+                .filter(
+                    ReportQuestionnaireResponse.report_id == report.id,
+                    ReportQuestionnaireResponse.revision == submission.base_revision,
+                )
+                .update(values, synchronize_session=False)
+            )
+            if changed != 1:
+                db.rollback()
+                latest = _questionnaire_row(db, report_id)
+                if is_same_answer_set(latest, submission):
+                    return QuestionnaireState(**state_for(latest))
+                raise HTTPException(status_code=409, detail="问卷已被更新，请刷新后重试")
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        latest = _questionnaire_row(db, report_id)
+        if is_same_answer_set(latest, submission):
+            return QuestionnaireState(**state_for(latest))
+        raise HTTPException(status_code=409, detail="问卷已被更新，请刷新后重试") from exc
+    db.expire_all()
+    return QuestionnaireState(**state_for(_questionnaire_row(db, report_id)))
 
 
 @router.post("/report/{report_id}/recommendations/{spu_id}/cart-link", response_model=CartLinkResponse)
