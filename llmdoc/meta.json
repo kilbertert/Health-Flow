@@ -1,0 +1,78 @@
+{
+  "schema": "llmdoc.meta/v3",
+  "baseline": {
+    "revision": "2c2d63147fc111aa07bd6978f855b0cb9eda0080",
+    "verifiedAt": "2026-11-11T04:17:58.151Z"
+  },
+  "documents": {
+    "frozen/consultation-pipeline.mdx": {
+      "validatedRevision": "2c2d63147fc111aa07bd6978f855b0cb9eda0080"
+    },
+    "frozen/training-pipeline.mdx": {
+      "validatedRevision": "2c2d63147fc111aa07bd6978f855b0cb9eda0080"
+    },
+    "identity/consent.mdx": {
+      "validatedRevision": "2c2d63147fc111aa07bd6978f855b0cb9eda0080"
+    },
+    "identity/ownership-boundary.mdx": {
+      "validatedRevision": "2c2d63147fc111aa07bd6978f855b0cb9eda0080"
+    },
+    "identity/tickets-sessions.mdx": {
+      "validatedRevision": "2c2d63147fc111aa07bd6978f855b0cb9eda0080"
+    },
+    "interpretation/admission-counts.mdx": {
+      "validatedRevision": "2c2d63147fc111aa07bd6978f855b0cb9eda0080"
+    },
+    "interpretation/evidence-bridge.mdx": {
+      "validatedRevision": "2c2d63147fc111aa07bd6978f855b0cb9eda0080"
+    },
+    "mall/recommendations.mdx": {
+      "validatedRevision": "2c2d63147fc111aa07bd6978f855b0cb9eda0080"
+    },
+    "operations/agent-workflow.mdx": {
+      "validatedRevision": "2c2d63147fc111aa07bd6978f855b0cb9eda0080"
+    },
+    "operations/config-readiness.mdx": {
+      "validatedRevision": "2c2d63147fc111aa07bd6978f855b0cb9eda0080"
+    },
+    "operations/release-deploy.mdx": {
+      "validatedRevision": "2c2d63147fc111aa07bd6978f855b0cb9eda0080"
+    },
+    "operations/test-acceptance.mdx": {
+      "validatedRevision": "2c2d63147fc111aa07bd6978f855b0cb9eda0080"
+    },
+    "patient-spa/spa-contract.mdx": {
+      "validatedRevision": "2c2d63147fc111aa07bd6978f855b0cb9eda0080"
+    },
+    "persistence/schema-evolution.mdx": {
+      "validatedRevision": "2c2d63147fc111aa07bd6978f855b0cb9eda0080"
+    },
+    "report-pipeline/confirmation.mdx": {
+      "validatedRevision": "2c2d63147fc111aa07bd6978f855b0cb9eda0080"
+    },
+    "report-pipeline/extraction-queue.mdx": {
+      "validatedRevision": "2c2d63147fc111aa07bd6978f855b0cb9eda0080"
+    },
+    "report-pipeline/origin-location.mdx": {
+      "validatedRevision": "2c2d63147fc111aa07bd6978f855b0cb9eda0080"
+    },
+    "report-pipeline/report-deletion.mdx": {
+      "validatedRevision": "2c2d63147fc111aa07bd6978f855b0cb9eda0080"
+    },
+    "report-pipeline/status-audit.mdx": {
+      "validatedRevision": "2c2d63147fc111aa07bd6978f855b0cb9eda0080"
+    },
+    "report-pipeline/upload-material.mdx": {
+      "validatedRevision": "2c2d63147fc111aa07bd6978f855b0cb9eda0080"
+    },
+    "runtime-boundary.mdx": {
+      "validatedRevision": "2c2d63147fc111aa07bd6978f855b0cb9eda0080"
+    }
+  },
+  "convergence": {
+    "capturedAt": "2026-11-11T04:13:22Z",
+    "source": "init",
+    "documentCount": 21,
+    "totalEstimatedTokens": 8363
+  }
+}
