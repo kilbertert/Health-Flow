@@ -56,6 +56,7 @@ AdmissionReason = Literal[
     "missing_source_page",
     # 参考范围缺失 —— 值本身完全正常，修正数值救不了它。
     "missing_reference_range",
+    "unsupported_reference_boundary",
     # 判定过了，在参考区间内。这一条是「正常」，**不是**「未能解读」。
     "within_reference_range",
     # 这一项**没有「是否异常」这个概念**：描述项（血型、尿液外观与透明度、检验日期这类
@@ -106,6 +107,7 @@ SKIPPED_REASONS_ORDERED: tuple[str, ...] = (
     "missing_source_evidence",
     "missing_source_page",
     "missing_reference_range",
+    "unsupported_reference_boundary",
     "within_reference_range",
     "no_reference_concept",
     "qualitative_positive",

@@ -62,6 +62,7 @@ export const ADMISSION_TEXT = Object.freeze({
   two_values: '这一项页面上有两个值，需要选一个',
   // 参考范围这一类：**值本身没问题**，所以不说「数值无法识别」。
   missing_reference_range: '缺少参考范围，无法判断是否异常',
+  unsupported_reference_boundary: '数值位于不含端点的参考界限，暂未纳入证据解读，请核对原报告',
   // 证据不完备。
   missing_unit: '缺少单位，未进入解读',
   missing_source_evidence: '缺少原文证据，未进入解读',
