@@ -22,7 +22,7 @@ code:
 
 ## 字段契约
 
-- `source_id` 格式：`file-{file_index}/p{page}-m{position}`，由 `source_id_for` 单点生成；提取器自带的 id 保留、只加前缀。
+- `source_id` **生成**格式：`file-{file_index}/p{page}-m{position}`，由 `source_id_for` 单点产出；但 `_final_source_id` 对提取器自带的 id 原样保留（最多补 `file-{i}/` 前缀）——**消费方不能按该模式解析所有 id**，提取器 id 可能根本没有页码/位次段。
 - `bbox` 为像素坐标，`bbox_normalized` 为 `[0,1000]` 归一化空间——一套高亮模型跨页分辨率工作。恰好给出一侧时 cross-fill 另一侧。
 - **任一组件缺失（page/bbox/source_id/evidence_text）→ 定位整体为 null，从不猜测**。前端和证据桥消费同一规则。
 

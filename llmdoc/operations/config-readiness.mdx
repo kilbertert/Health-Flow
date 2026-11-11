@@ -26,7 +26,7 @@ code:
 
 ## `/ready` 报告什么
 
-本地信号投影：`database`（ok/unavailable）、`evidence_service`、`report_provider`、`mall`、`report_owner`（account/configured/unconfigured——**故意不用枚举名**）、`config_freshness`。**就绪是便宜的本地信号，绝不探测第三方**：商城不可达不会把服务踢出 LB，真实可达性以按需的 `mall_unavailable` 原因出现。
+本地信号投影：`database`（ok/unavailable）、`evidence_service`、`report_provider`、`mall_goods`、`report_owner`（account/configured/unconfigured——**故意不用枚举名**）、`config_freshness`（字段名是 `mall_goods` 不是 `mall`，探针别抄错）。**就绪是便宜的本地信号，绝不探测第三方**：商城不可达不会把服务踢出 LB，真实可达性以按需的 `mall_unavailable` 原因出现。
 
 ## `config_freshness` 的非对称降级（ADR-0006，#201）
 
