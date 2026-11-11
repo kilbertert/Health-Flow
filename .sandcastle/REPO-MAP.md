@@ -41,7 +41,7 @@ no project argument. Both answer *where* something is; neither replaces reading 
 
 ## Tests
 
-- tests/ — 68 test file(s, recursive)
+- tests/ — 71 test file(s, recursive)
 - frontend/e2e/ — 19 test file(s, recursive)
 - pytest (pyproject.toml / pytest.ini present)
 
@@ -106,7 +106,7 @@ app/
     confirmation_vocabulary.py
     consent_vocabulary.py
     consent.py
-    ... (29 more)
+    ... (30 more)
   __init__.py
   config_freshness.py
   config.py
