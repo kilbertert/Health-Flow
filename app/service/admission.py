@@ -39,6 +39,7 @@ __all__ = [
     "AdmissionTally",
     "admission_reason",
     "infer_abnormal_flag",
+    "parse_reference_bounds",
     "parse_reference_range",
     "reference_reason",
     "signed_value_reason",
@@ -51,8 +52,11 @@ __all__ = [
 
 _number_re = re.compile(r"(?<![\d.])-?\d+(?:\.\d+)?(?![\d.])")
 _range_re = re.compile(r"(?P<low>-?\d+(?:\.\d+)?)\s*(?:-|~|至|到)\s*(?P<high>-?\d+(?:\.\d+)?)")
-_upper_re = re.compile(r"(?:<|<=|≤)\s*(?P<high>-?\d+(?:\.\d+)?)")
-_lower_re = re.compile(r"(?:>|>=|≥)\s*(?P<low>-?\d+(?:\.\d+)?)")
+# `cmp` 组保留比较符本身：`<`/`>` 是**不含**界，`<=`/`≥` 是**含**界 —— 丢掉它等于
+# 把判据换掉（FHIR R4 `Quantity.comparator`：比较符是值的一部分）。长的写法排前面。
+_upper_re = re.compile(r"(?P<cmp><=|≤|<)\s*(?P<high>-?\d+(?:\.\d+)?)")
+_lower_re = re.compile(r"(?P<cmp>>=|≥|>)\s*(?P<low>-?\d+(?:\.\d+)?)")
+
 _SIGN_MARKERS = ("<", ">", "≤", "≥")
 # 出现它们时，「两个数」不是「用哪个」的问题：`0 x 10^6/L`（单位被抽进值）与 `10:00`
 # （时间）都会抽成恰好两个数字，但患者在那两个数之间没有可做的选择。
@@ -142,17 +146,17 @@ def reference_reason(reference: str | None) -> str | None:
 _SIGNED_BOUND_RE = re.compile(r"(?P<sign><=|>=|≤|≥|<|>)\s*(?P<number>-?\d+(?:\.\d+)?)")
 
 
-def _bound_key(text: str) -> str | None:
-    """文本里那个「界」的规范写法（方向 + 数值），没有界时返回 ``None``。
+def _bound_parts(text: str) -> tuple[str, str] | None:
+    """文本里那个「界」的（规范方向, 数值），没有界时返回 ``None``。
 
-    `≤`/`>=` 这类同一个关系的不同写法归一成一种（`<=` / `>=`），空白不参与比较 ——
+    `≤`/`>=` 这类同一个关系的不同写法归一成 `<=` / `>=`，空白不参与比较 ——
     报告与抽取器对同一件事的排版不必逐字相同，而**方向与数值**必须。
     """
     match = _SIGNED_BOUND_RE.search(text or "")
     if match is None:
         return None
     sign = {"≤": "<=", "≥": ">="}.get(match["sign"], match["sign"])
-    return f"{sign}{match['number']}"
+    return sign, match["number"]
 
 
 def _is_exactly_one_bound(value_text: str | None, unit: str | None) -> bool:
@@ -179,15 +183,32 @@ def _is_exactly_one_bound(value_text: str | None, unit: str | None) -> bool:
     return unit is not None and "".join(tail.split()).casefold() == "".join(unit.split()).casefold()
 
 
-def _reference_is_exactly_this_bound(reference: str | None, key: str) -> bool:
-    """参考范围里**只有这一个界**，没有第二个界或另一个数。
+# 值的界被参考界**蕴含**时的允许方向（同一数值上）：严格界是宽松界的子集 ——
+# `<x` 必在 `≤x` 之内，`>x` 必在 `≥x` 之内。反向不成立：宽松界的界上值在严格界之外。
+_BOUND_SUBSUMED_BY: dict[str, tuple[str, ...]] = {
+    "<": ("<", "<="),
+    "<=": ("<=",),
+    ">": (">", ">="),
+    ">=": (">=",),
+}
 
-    `(<20)`、`< 20` 都算；而 `>20, <30` 不是 —— 那说明这一行有上下两个判据，光看其中
-    一个就下「正常」会在另一个上错（评审在 #237 指出）。判据是数值字面量的个数：参考
-    范围里恰好一个数，且它就是这个界。
+
+def _reference_bound_subsumes(reference: str | None, value_sign: str, value_number: str) -> bool:
+    """参考范围里**只有这一个界**，且它**蕴含**值的那个界。
+
+    「同一句话印在两处」的判据比逐字相同宽一格（#293）：同一数值上 `<0.1` 与 `≤0.1`
+    不是同一个写法，但值 `<0.1` 仍**必**在参考 `≤0.1` 之内 —— 与逐字相同一样判得出。
+    其余边界不放宽（#237）：`>20, <30` 有两个判据、`<0.1` 对 `≤0.05` 是两个数（跨数的
+    蕴含证明不是「同一句话印在两处」），都不算。
     """
     text = reference or ""
-    return len(_numbers(text)) == 1 and _bound_key(text) == key
+    if len(_numbers(text)) != 1:
+        return False
+    parts = _bound_parts(text)
+    if parts is None:
+        return False
+    ref_sign, ref_number = parts
+    return float(ref_number) == float(value_number) and ref_sign in _BOUND_SUBSUMED_BY[value_sign]
 
 
 def signed_value_reason(value_text: str | None, reference: str | None, unit: str | None) -> str | None:
@@ -199,9 +220,10 @@ def signed_value_reason(value_text: str | None, reference: str | None, unit: str
     1. **值就是一个界**（`_is_exactly_one_bound`）：界在开头，之后只剩它自己的单位。
        `<20 IU/ml` 与 `<1.0` 都算；`40 >20`（界之前有测量值）、`<20 5.2`（界之后还有东西）
        不算。
-    2. **参考范围里也只有这一个界**（`_reference_is_exactly_this_bound`）：方向与数值都
-       相同，且没有第二个判据。LDL-C 那一类风险目标印的是另一个数（`<2.6` 对 `<=1.8`），
-       `>20, <30` 那种双界也不够 —— 都不是「报告把同一句话印在两处」。
+    2. **参考范围里只有这一个界、且它蕴含值的界**（`_reference_bound_subsumes`）：同
+       一个数、且值的方向是参考方向的子集 —— 逐字相同算，`<0.1` 对 `≤0.1` 也算（#293）。
+       LDL-C 那一类风险目标印的是另一个数（`<2.6` 对 `<=1.8`），`>20, <30` 那种双界也
+       不够 —— 都不是「报告把同一句话印在两处」。
     3. 由 1+2 蕴含：`AIP < 0.01` 的参考范围是空的，影射到哪一个阈值是医学判断、不是
        文本问题 —— 不猜（#235 的「不做」），于是它继续落 `invalid_value`。
 
@@ -211,8 +233,11 @@ def signed_value_reason(value_text: str | None, reference: str | None, unit: str
     """
     if not _is_exactly_one_bound(value_text, unit):
         return None
-    key = _bound_key(value_text or "")
-    if key is None or not _reference_is_exactly_this_bound(reference, key):
+    parts = _bound_parts(value_text or "")
+    if parts is None:
+        return None
+    sign, number = parts
+    if not _reference_bound_subsumes(reference, sign, number):
         return None
     return "within_reference_range"
 
@@ -271,13 +296,18 @@ def _has_word_domain(reference: str | None) -> bool:
 #
 # 两侧都要**整值**匹配（`_as_word` 之后相等），因为子串匹配会咬到真语料里的假朋友：
 # `AB Rh(D) POSITIVE` 是**血型**（描述项），含 "POSITIVE" 却不是阳性检验结果。
+# 中文结果词与英文词在同一个封闭集合里（#293）：检验报告判阴/阳就是这几个词。
+# 「未检测」刻意不在：它说的是「没有测」，不是一个阴性结果 —— 判成阴性正常会替一个
+# 根本没测的项断言正常，落「判不了」才诚实。同理「正常/未见异常」不在：它们是描述性
+# 措辞、不是分类结果词（与英文 `Normal` 不入表同一判据）。
 _QUALITATIVE_WORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("negative", ("not detected", "undetected", "negative", "nil", "absent", "non-reactive", "nonreactive")),
-    ("positive", ("detected", "positive", "reactive", "present")),
+    (
+        "negative",
+        ("not detected", "undetected", "negative", "nil", "absent", "non-reactive", "nonreactive", "阴性", "未检出"),
+    ),
+    ("positive", ("detected", "positive", "reactive", "present", "阳性", "弱阳性", "检出")),
 )
-_QUALITATIVE_BY_WORD = {
-    word: verdict for verdict, words in _QUALITATIVE_WORDS for word in words
-}
+_QUALITATIVE_BY_WORD = {word: verdict for verdict, words in _QUALITATIVE_WORDS for word in words}
 
 
 def qualitative_result_reason(value_text: str | None) -> str | None:
@@ -510,25 +540,64 @@ def tally(reasons: list[str | None]) -> AdmissionTally:
     return AdmissionTally(**counters)
 
 
-def parse_reference_range(value: str | None) -> tuple[float | None, float | None]:
-    """参考范围文本 → ``(low, high)``；解析不出返回 ``(None, None)``。
+@dataclass(frozen=True)
+class ReferenceBound:
+    """参考范围的一个界：数值 + **界本身是否含在范围内**（`<x` 不含、`≤x`/`≥x` 含）。
 
-    **逐字搬自 `evidence_bridge`，语义一字未改**：不剥括号、不归一化单位。括号里包着
-    单位的写法（`3.9-6.1 mmol/L`）由正则本身处理 —— 擅自在这里加一步预处理会改变一
-    批既有报告的判定，那不在本票的射程内。
+    界上值按 `inclusive` 分侧 —— `<5.2` 的 `5.2` 是异常，`≤5.2` 的 `5.2` 才是正常。
+    """
+
+    value: float
+    inclusive: bool
+
+
+def parse_reference_bounds(value: str | None) -> tuple[ReferenceBound | None, ReferenceBound | None]:
+    """参考范围文本 → ``(下界, 上界)``；解析不出返回 ``(None, None)``。
+
+    与 `parse_reference_range` 的差别只有一个：**比较符不丢**（#293）。`<5.2` 与
+    `≤5.2` 是同一个数值、两个判据 —— 界上值一异常一正常，丢掉比较符等于把判据
+    换掉（FHIR R4 `Quantity.comparator`）。
+
+    同一格印两个判据（`>5.2, <8.0`）两侧都解析；两个界互斥成空集（`>8.0, <5.2`、
+    或界值相同而两侧都不含）视为**解析不出** —— 不拿半个界硬判。不剥括号、不归一
+    化单位的旧约不变（括号里包着单位的写法由正则本身处理）。
     """
     text = (value or "").strip()
     match = _range_re.search(text)
     if match:
         low, high = float(match["low"]), float(match["high"])
-        return (low, high) if low <= high else (None, None)
+        if low <= high:
+            return ReferenceBound(low, True), ReferenceBound(high, True)
+        return None, None
+    low = high = None
     match = _upper_re.search(text)
     if match:
-        return None, float(match["high"])
+        high = ReferenceBound(float(match["high"]), match["cmp"] != "<")
     match = _lower_re.search(text)
     if match:
-        return float(match["low"]), None
-    return None, None
+        low = ReferenceBound(float(match["low"]), match["cmp"] != ">")
+    if low is None and high is None:
+        return None, None
+    if (
+        low is not None
+        and high is not None
+        and (low.value > high.value or (low.value == high.value and not (low.inclusive and high.inclusive)))
+    ):
+        return None, None
+    return low, high
+
+
+def parse_reference_range(value: str | None) -> tuple[float | None, float | None]:
+    """参考范围文本 → ``(low, high)``；解析不出返回 ``(None, None)``。
+
+    只问「有没有可解析的界 / 界值是多少」的调用方（证据载荷、准入的存在性判断）
+    用这个签名；比较符的含/不含由 `parse_reference_bounds` 保留。
+    """
+    low, high = parse_reference_bounds(value)
+    return (
+        low.value if low is not None else None,
+        high.value if high is not None else None,
+    )
 
 
 def infer_abnormal_flag(value: str | None, reference: str | None, unit: str | None = None) -> str | None:
@@ -565,12 +634,13 @@ def infer_abnormal_flag(value: str | None, reference: str | None, unit: str | No
     number = single_number(text)
     if number is None:
         return None
-    low, high = parse_reference_range(reference)
+    low, high = parse_reference_bounds(reference)
     if low is None and high is None:
         return None
-    if low is not None and number < low:
+    # 界上值按「界含不含」分侧（#293）：`<5.2` 的 `5.2` 是 H，`≤5.2` 的 `5.2` 才是 N。
+    if low is not None and (number < low.value or (number == low.value and not low.inclusive)):
         return "L"
-    if high is not None and number > high:
+    if high is not None and (number > high.value or (number == high.value and not high.inclusive)):
         return "H"
     return "N"
 
@@ -590,9 +660,7 @@ def infer_abnormal_flag(value: str | None, reference: str | None, unit: str | No
 # 名称与数值的项）仍会落 `missing_reference_range`，患者会被问一次 —— 那比反过来（把该
 # 问的项静默吞掉）安全。
 _NO_OWN_INTERVAL_NAME_RE = re.compile(r"\b(?:ratio|index)\b|比率|比值", re.IGNORECASE)
-_NO_OWN_INTERVAL_TEXT_RE = re.compile(
-    r"ref\.?\s*range|target\s|reference\s*(?:range|interval)", re.IGNORECASE
-)
+_NO_OWN_INTERVAL_TEXT_RE = re.compile(r"ref\.?\s*range|target\s|reference\s*(?:range|interval)", re.IGNORECASE)
 # 判据明明是**阈值**的项（报告印的是 `Normal (>=90)`、`Positive (Normal <0.6)`）**不**在
 # 这一条里：`parse_reference_range` 能从中解析出**一个**边界，所以它已被判成 H/L/N ——
 # 那是正确的处置，本函数不把它捞走（#205 的「单边界判据」那一半）。
@@ -674,4 +742,3 @@ def _evidence_contains_value(evidence: str, value: float) -> bool:
         if math.isclose(float(match), value, rel_tol=1e-9, abs_tol=1e-12):
             return True
     return False
-
