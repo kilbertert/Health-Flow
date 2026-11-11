@@ -10,8 +10,7 @@
 - **没有组级状态**：组只带成员名单（`metric_ids`）与计数。同组「异常」与「待核对」
   并存时两者都在计数里；`metric_ids` 即原文回链（每条指标的 `evidence_text` /
   `page_number` / `source_id` 随响应出域，分组不复制证据）。
-- 患者排除的行**仍在** `metric_ids` 里（它仍在这份报告上），计数口径照「指标确认
-  决策」不计它 —— 与全报告计数同一个函数。
+- 患者排除或未核对的行保留在 `other`（它仍在这份报告上）；排除行不参与正常/异常计数 —— 与全报告计数同一个函数。
 """
 
 from collections.abc import Iterable
@@ -39,7 +38,9 @@ class SystemGroup:
 
 def _group_key(metric: Any, catalog: Iterable[str] | None) -> str:
     code = getattr(metric, "metric_code", None)
-    if not code and catalog is not None:
+    if getattr(metric, "confirmation_status", None) not in {"confirmed", "corrected"}:
+        code = None
+    if not code and catalog is not None and getattr(metric, "confirmation_status", None) in {"confirmed", "corrected"}:
         code = resolve_metric_code(getattr(metric, "metric_name", "") or "", catalog)
     return METRIC_SYSTEM_MAP.get(code, OTHER_GROUP_KEY) if code else OTHER_GROUP_KEY
 
