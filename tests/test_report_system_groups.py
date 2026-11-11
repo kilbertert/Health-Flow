@@ -101,10 +101,13 @@ def test_excluded_metric_stays_a_member_but_is_not_counted():
             _metric(2, code="hba1c", value="5.2"),
         ]
     )
-    assert groups[0].metric_ids == [1, 2]
-    assert groups[0].counts.parsed == 2
-    assert groups[0].counts.abnormal == 0  # 排除的不计异常
+    assert groups[0].metric_ids == [2]
+    assert groups[0].counts.parsed == 1
+    assert groups[0].counts.abnormal == 0
     assert groups[0].counts.in_range == 1
+    assert groups[1].key == "other"
+    assert groups[1].metric_ids == [1]
+    assert groups[1].counts.abnormal == groups[1].counts.in_range == 0
 
 
 # ---------------------------------------------------------------------------
