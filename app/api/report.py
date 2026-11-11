@@ -321,6 +321,22 @@ def _partial_files_in_flight(report: ReportModel) -> bool:
     )
 
 
+def _questionnaire_summary(report: ReportModel) -> dict | None:
+    """问卷状态摘要：只复述**落库的事实**，不推断。
+
+    没有答案行 → `None`（从未作答，含功能上线前的旧报告）。`unanswered`
+    不建行，所以摘要的状态只会是 `skipped`/`partial`/`answered` 之一——
+    服务端不替患者宣布他「没答」，那只是一种没有记录。
+    """
+    row = getattr(report, "questionnaire_response", None)
+    if row is None:
+        return None
+    return {
+        "status": row.status,
+        "questionnaire_version": row.questionnaire_version,
+    }
+
+
 @dataclass(frozen=True)
 class ParseOutcome:
     """一次报告解析的结果：**成没成，没成的话坏在哪一环**（GLOSSARY.md 的「解读失败」）。
@@ -931,6 +947,10 @@ def _report_response(
             }
             for event in sorted(report.audit_events, key=lambda item: item.id)
         ],
+        # #292 契约冻结：分组字段已出域但尚无装配（#294 落地）；None = 无分组结论，
+        # 与 admission=None「还没有准入结论」同一约定。
+        system_groups=None,
+        questionnaire=_questionnaire_summary(report),
     )
 
 
