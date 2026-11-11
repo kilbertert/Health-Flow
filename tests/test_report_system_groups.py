@@ -101,10 +101,13 @@ def test_excluded_metric_stays_a_member_but_is_not_counted():
             _metric(2, code="hba1c", value="5.2"),
         ]
     )
-    assert groups[0].metric_ids == [1, 2]
-    assert groups[0].counts.parsed == 2
-    assert groups[0].counts.abnormal == 0  # 排除的不计异常
+    assert groups[0].metric_ids == [2]
+    assert groups[0].counts.parsed == 1
+    assert groups[0].counts.abnormal == 0
     assert groups[0].counts.in_range == 1
+    assert groups[1].key == "other"
+    assert groups[1].metric_ids == [1]
+    assert groups[1].counts.abnormal == groups[1].counts.in_range == 0
 
 
 # ---------------------------------------------------------------------------
@@ -164,3 +167,31 @@ def test_unsettled_metric_without_catalog_is_other():
         abnormal_flag="H",
     )
     assert system_groups([metric], catalog=None)[0].key == "other"
+
+
+def test_pending_provisional_code_is_not_a_verified_group():
+    for catalog in (None, ["fasting_glucose"], ["creatinine"]):
+        groups = system_groups([_metric(1, code="fasting_glucose", name="空腹血糖", status="pending")], catalog=catalog)
+        assert groups[0].key == "other"
+
+
+def test_assessment_persists_resolved_code_for_reopening():
+    import tests.test_report_confirmation as T
+    from app.api.report import _assess_report, _ordered_metrics, _report_response
+
+    session, report = T._assessment_fixture(metric_code=None, metric_name="空腹血糖", metric_value="6.5")
+    try:
+        with (
+            patch(
+                "app.api.report.fetch_metric_catalog", return_value=[{"code": "fasting_glucose", "label": "空腹血糖"}]
+            ),
+            patch("app.api.report.match_published_evidence", return_value=T._evidence_result()),
+        ):
+            first = asyncio.run(_assess_report(report, session))
+        session.expire_all()
+        reread = _report_response(report, _ordered_metrics(session, report.id).all())
+        assert first.system_groups == reread.system_groups
+        assert reread.metrics[0].metric_code == "fasting_glucose"
+        assert reread.system_groups[0].key == "cardiovascular_metabolic"
+    finally:
+        session.close()

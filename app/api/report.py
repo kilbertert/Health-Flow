@@ -1180,6 +1180,10 @@ async def _assess_report(report: ReportModel, db: Session, *, owned_by_account: 
         catalog = [item["code"] for item in await fetch_metric_catalog()]
     except EvidenceBridgeError:
         catalog = None
+    if catalog is not None:
+        for metric in metrics:
+            if not metric.metric_code and metric.confirmation_status in {"confirmed", "corrected"}:
+                metric.metric_code = resolve_metric_code(metric.metric_name or "", catalog)
     observations, local_skipped, local_unmatched = build_observations_with_unmatched(metrics, catalog)
     typed_result = EvidenceMatchResponse.model_validate(await match_published_evidence(observations))
     source_by_id = {

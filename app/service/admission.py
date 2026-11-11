@@ -202,6 +202,8 @@ def _reference_bound_subsumes(reference: str | None, value_sign: str, value_numb
     蕴含证明不是「同一句话印在两处」），都不算。
     """
     text = reference or ""
+    if parse_reference_bounds(text) == (None, None):
+        return False
     if len(_numbers(text)) != 1:
         return False
     parts = _bound_parts(text)
