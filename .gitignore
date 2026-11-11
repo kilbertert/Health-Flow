@@ -105,3 +105,6 @@ node_modules/
 
 # AFK sandbox worktrees (one per run; residue if not ignored)
 .sandcastle/worktrees/
+
+# llmdoc scratch (investigations, reflections)
+.llmdoc-tmp/
