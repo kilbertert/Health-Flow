@@ -45,9 +45,7 @@ BASH = "/bin/bash"
 
 
 def _git(*args: str) -> str:
-    return subprocess.run(
-        ["git", *args], cwd=REPO_ROOT, capture_output=True, text=True, check=True
-    ).stdout.strip()
+    return subprocess.run(["git", *args], cwd=REPO_ROOT, capture_output=True, text=True, check=True).stdout.strip()
 
 
 TARGET_SHA = _git("rev-parse", "HEAD")
@@ -114,7 +112,7 @@ exec "$@"
 
 # 一台「入口」：`/ready` 返回可配置的 JSON，其余路径按目录提供文件。这样自检的两条
 # 判据都是真的在打 HTTP —— 不是把结果喂进函数里。
-_SERVER_PY = '''import sys, http.server, socketserver
+_SERVER_PY = """import sys, http.server, socketserver
 
 root, port, ready = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 
@@ -137,15 +135,14 @@ class H(http.server.SimpleHTTPRequestHandler):
 socketserver.TCPServer.allow_reuse_address = True
 with socketserver.TCPServer(("127.0.0.1", port), H) as httpd:
     httpd.serve_forever()
-'''
+"""
 
 READY_OK = '{"status":"ready","report_provider":"configured","account_auth":"required"}'
 READY_DEGRADED = '{"status":"degraded","report_provider":"unconfigured","account_auth":"required"}'
 # 配置过期也表现为 degraded（app/main.py），但**字段形状是完整的** —— 除了把它交给
 # `check_ok()` 没有别的办法在本地复现「进程手里是过期凭据」这件事，这正是这条用例的价值。
 READY_STALE = (
-    '{"status":"degraded","report_provider":"configured","account_auth":"required",'
-    '"config_freshness":"stale"}'
+    '{"status":"degraded","report_provider":"configured","account_auth":"required","config_freshness":"stale"}'
 )
 
 
@@ -157,8 +154,12 @@ def _free_port() -> int:
 
 def _run_script(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [BASH, str(SCRIPT), *args], cwd=REPO_ROOT, env=env,
-        capture_output=True, text=True, timeout=900,
+        [BASH, str(SCRIPT), *args],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=900,
     )
 
 
@@ -265,13 +266,16 @@ class _FakeHost:
         script.write_text(_SERVER_PY)
         self.server = subprocess.Popen(
             ["python3", str(script), str(self.root / "frontend"), str(self.port), ready],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
         for _ in range(60):
             try:
                 subprocess.run(
                     ["curl", "-sf", "-o", "/dev/null", f"http://127.0.0.1:{self.port}/ready"],
-                    check=True, capture_output=True, timeout=3,
+                    check=True,
+                    capture_output=True,
+                    timeout=3,
                 )
                 return
             except Exception:
@@ -285,8 +289,11 @@ class _FakeHost:
 
     def run_remote(self, block: str, **overrides: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [BASH, "-c", block], env=self.env(**overrides),
-            capture_output=True, text=True, timeout=300,
+            [BASH, "-c", block],
+            env=self.env(**overrides),
+            capture_output=True,
+            text=True,
+            timeout=300,
         )
 
 
@@ -336,11 +343,7 @@ def test_generation_time_variables_are_all_assigned_before_the_heredoc() -> None
 
     # 生成期引用 = 单个 `$VAR` / `${VAR}`（前面不是反斜杠）。
     pattern = re.compile(r"(?<!\\)\$\{?([A-Z_][A-Z0-9_]*)")
-    referenced = {
-        name
-        for line in lines[start + 1 : end]
-        for name in pattern.findall(line)
-    }
+    referenced = {name for line in lines[start + 1 : end] for name in pattern.findall(line)}
     assert referenced, "远端块里一个变量都没有，说明这条守卫的解析坏了"
 
     preamble = "\n".join(lines[:start])
@@ -351,11 +354,7 @@ def test_generation_time_variables_are_all_assigned_before_the_heredoc() -> None
     # 反过来的那一半同样要盯：**转义**的 `\$VAR` 是远端期变量，块必须自己给它一个值。
     # 反过来写（把生成期的值当远端期的转义掉）在 `set -u` 下就是 `VAR: unbound variable`，
     # 而它在本地 dry-run 里看起来完全正常 —— 实测就撞到过一次。
-    escaped = {
-        name
-        for line in lines[start + 1 : end]
-        for name in re.findall(r"\\\$\{?([A-Z_][A-Z0-9_]*)", line)
-    }
+    escaped = {name for line in lines[start + 1 : end] for name in re.findall(r"\\\$\{?([A-Z_][A-Z0-9_]*)", line)}
     defined_in_block = set(re.findall(r"^([A-Z_][A-Z0-9_]*)=", "\n".join(lines[start + 1 : end]), re.MULTILINE))
     undefined = escaped - defined_in_block
     assert not undefined, (
@@ -387,13 +386,9 @@ def test_the_remote_block_contains_no_backticks() -> None:
     start = next(i for i, line in enumerate(lines) if "REMOTE_CMD <<EOF" in line)
     end = next(i for i in range(start + 1, len(lines)) if lines[i].rstrip() == "EOF")
     offenders = [
-        f"{start + 1 + offset}: {line}"
-        for offset, line in enumerate(lines[start + 1 : end], start=1)
-        if "`" in line
+        f"{start + 1 + offset}: {line}" for offset, line in enumerate(lines[start + 1 : end], start=1) if "`" in line
     ]
-    assert not offenders, (
-        "远端块里出现了反引号（裸 heredoc 会把它当命令替换）：\n" + "\n".join(offenders)
-    )
+    assert not offenders, "远端块里出现了反引号（裸 heredoc 会把它当命令替换）：\n" + "\n".join(offenders)
 
 
 @needs_topology
@@ -459,18 +454,14 @@ def test_the_staged_files_are_readable_by_the_service_identity(host: _FakeHost) 
     installed = host.root / "frontend" / "index.html"
     assert installed.is_file()
     mode = stat.S_IMODE(installed.stat().st_mode)
-    assert mode & 0o044, (
-        f"部署后的前端对组/其他不可读（mode={oct(mode)}）—— 服务以另一个身份运行，读不到它"
-    )
+    assert mode & 0o044, f"部署后的前端对组/其他不可读（mode={oct(mode)}）—— 服务以另一个身份运行，读不到它"
 
 
 # ── 用法与参数校验（不碰主机、不需要构建） ──────────────────────────────────
 
 
 def test_refuses_both_commit_and_rollback() -> None:
-    result = _run_script(
-        dict(os.environ), "--commit", TARGET_SHA, "--rollback-to", TARGET_SHA
-    )
+    result = _run_script(dict(os.environ), "--commit", TARGET_SHA, "--rollback-to", TARGET_SHA)
     assert result.returncode == 64
     assert "只能给一个" in result.stderr
 
@@ -726,16 +717,23 @@ def test_transfer_refuses_a_payload_that_does_not_match_the_declared_identity() 
         payload = handle.name
     try:
         result = subprocess.run(
-            [dev_host, "cp", "36", payload,
-             "--dest", "/tmp/health-flow-artifact-identity-probe.txt",
-             "--artifact-sha256", "0" * 64],
-            capture_output=True, text=True, timeout=120,
+            [
+                dev_host,
+                "cp",
+                "36",
+                payload,
+                "--dest",
+                "/tmp/health-flow-artifact-identity-probe.txt",
+                "--artifact-sha256",
+                "0" * 64,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
     finally:
         os.unlink(payload)
-    assert result.returncode == 77, (
-        f"产物身份不符却没有被拒（rc={result.returncode}）：{result.stdout}{result.stderr}"
-    )
+    assert result.returncode == 77, f"产物身份不符却没有被拒（rc={result.returncode}）：{result.stdout}{result.stderr}"
     assert "产物身份不符" in (result.stdout + result.stderr)
 
 
@@ -756,10 +754,14 @@ def test_a_run_leaves_no_worktree_registration_behind(scratch) -> None:
     数全量会让这条断言依赖**整个仓库的全局状态**：并行跑时别的 worker 正在加/减登记，
     于是它必红 —— 而失败看起来像「脚本漏了注销」，实际是测试之间在抢同一份状态。
     """
+
     def registrations() -> int:
         listed = subprocess.run(
-            ["git", "worktree", "list"], cwd=REPO_ROOT,
-            capture_output=True, text=True, check=True,
+            ["git", "worktree", "list"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout
         return sum(1 for line in listed.splitlines() if str(scratch) in line)
 
@@ -782,3 +784,27 @@ def test_rollback_to_is_the_same_path_as_commit(host: _FakeHost) -> None:
     via_rollback = _run_script(host.env(), "--rollback-to", TARGET_SHA, "--dry-run")
     assert via_rollback.returncode == 0, via_rollback.stderr
     assert _parse_dry_run(via_rollback.stdout)["block"] == via_commit
+
+
+@needs_topology
+def test_service_wheel_is_staged_under_the_project_not_transport_tmp(host: _FakeHost) -> None:
+    parsed = host.stage()
+    block = parsed["block"]
+    install = re.search(r'--force-reinstall "([^"\n]+\.whl)"', block)
+    assert install
+    wheel = Path(install.group(1))
+    assert wheel.is_relative_to(Path(str(host.backup_dir) + "-artifacts"))
+    assert not wheel.is_relative_to(host.root / "var")
+    assert not wheel.is_relative_to(host.staging.parent)
+
+
+def test_staging_parent_contract_without_production_topology():
+    source = SCRIPT.read_text()
+    assignment = "\n".join(line for line in source.splitlines() if line.startswith(("STAGE_PARENT=", "STAGE_DIR=")))
+    env = {**os.environ, "BACKUP_DIR": "/trusted/root-owned", "APP_ROOT": "/service-writable", "SHORT_SHA": "a" * 12}
+    result = subprocess.run(
+        [BASH, "-c", assignment + '\nprintf "%s" "$STAGE_DIR"'], env=env, capture_output=True, text=True, check=True
+    )
+    assert result.stdout == "/trusted/root-owned-artifacts/deploy-36-" + "a" * 12
+    assert "unsafe-stage-parent=owner" in source
+    assert "unsafe-stage-parent=writable" in source

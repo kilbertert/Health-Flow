@@ -300,7 +300,8 @@ REMOTE_TARBALL="$REMOTE_TARBALL_BASE-$SHORT_SHA.tar.gz"
 # inheriting anything from the caller, and `--dry-run` prints the exact bytes that
 # will execute rather than a template someone has to read in their head.
 TARGET_SHA=$FULL_SHA
-STAGE_DIR="$REMOTE_TARBALL_BASE-$SHORT_SHA"
+STAGE_PARENT="$BACKUP_DIR-artifacts"
+STAGE_DIR="$STAGE_PARENT/deploy-36-$SHORT_SHA"
 MARKER="$APP_ROOT/deployed-revision"
 
 # ── 3. 远端命令 ─────────────────────────────────────────────────────────────
@@ -357,6 +358,18 @@ step_failed() { echo "mutate-failed=\$1"; mutate_rc=1; }
 #
 # A permission/disk failure on the tar is a different thing: a partial archive is not a
 # rollback point, so it is removed rather than left to be mistaken for one.
+# Validate the parent before creating the root-controlled artifact directory.
+for protected_dir in "${BACKUP_DIR%/*}" "$STAGE_PARENT"; do
+  if [ "\$protected_dir" = "$STAGE_PARENT" ] && [ ! -e "\$protected_dir" ]; then
+    mkdir -m 0755 "\$protected_dir" || exit 1
+  fi
+  [ ! -L "\$protected_dir" ] || { echo "unsafe-stage-parent=symlink"; exit 1; }
+  [ "\$(stat -c %u "\$protected_dir")" = "\$(id -u)" ] \
+    || { echo "unsafe-stage-parent=owner"; exit 1; }
+  protected_mode=\$(stat -c %a "\$protected_dir")
+  [ \$((8#\$protected_mode & 0022)) -eq 0 ] \
+    || { echo "unsafe-stage-parent=writable"; exit 1; }
+done
 mkdir -p "$BACKUP_DIR" || step_failed "backup-mkdir"
 if [ -d "$APP_ROOT/frontend" ]; then
   tar czf "\$BACKUP" -C "$APP_ROOT/frontend" . 2>/dev/null \
@@ -422,7 +435,6 @@ if [ "\$mutate_rc" = "0" ]; then
     || step_failed "pip-install"
   runuser -u health-flow -- "$APP_ROOT/.venv/bin/pip" check \
     || step_failed "pip-check"
-  chown -R health-flow:health-flow "$STAGE_DIR" || step_failed "chown-stage"
 fi
 
 # ---- 写入修订标记 ----
