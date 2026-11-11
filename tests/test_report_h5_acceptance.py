@@ -32,3 +32,8 @@ def test_open_boundary_is_not_sent_as_an_inclusive_v3_range(value, reference, fl
 @pytest.mark.parametrize("reference", ["男:3.5-5.5 女:2.5-4.5", "<3 或 >5", "<3 or >5"])
 def test_conditional_ranges_are_not_guessed(reference):
     assert infer_abnormal_flag("3", reference) is None
+
+
+@pytest.mark.parametrize("reference", ["男≤5.2", "男<5.2", "female <=5.2"])
+def test_signed_values_do_not_bypass_population_reference_guard(reference):
+    assert infer_abnormal_flag("<5.2", reference) is None
