@@ -51,8 +51,8 @@ no project argument. Both answer *where* something is; neither replaces reading 
 - AGENTS.md
 - CLAUDE.md
 - README.md
-- docs/ — 39 markdown file(s)
-- docs/adr/ — 31 markdown file(s)
+- docs/ — 40 markdown file(s)
+- docs/adr/ — 32 markdown file(s)
 - docs/agents/ — 5 markdown file(s)
 
 ## Tree (depth 2, first 80 lines; dependencies, build
@@ -137,7 +137,7 @@ docs/
     0009-adr-check-scope-and-self-application.md
     0010-required-checks-on-self-hosted.md
     0011-interpretation-failure-is-a-named-conclusion.md
-    ... (21 more)
+    ... (22 more)
   agents/
     architecture-decisions.md
     domain.md

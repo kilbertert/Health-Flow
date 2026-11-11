@@ -300,7 +300,7 @@ REMOTE_TARBALL="$REMOTE_TARBALL_BASE-$SHORT_SHA.tar.gz"
 # inheriting anything from the caller, and `--dry-run` prints the exact bytes that
 # will execute rather than a template someone has to read in their head.
 TARGET_SHA=$FULL_SHA
-STAGE_DIR="$REMOTE_TARBALL_BASE-$SHORT_SHA"
+STAGE_DIR="$APP_ROOT/var/deploy-36-$SHORT_SHA"
 MARKER="$APP_ROOT/deployed-revision"
 
 # ── 3. 远端命令 ─────────────────────────────────────────────────────────────

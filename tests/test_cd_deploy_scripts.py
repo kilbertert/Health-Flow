@@ -782,3 +782,14 @@ def test_rollback_to_is_the_same_path_as_commit(host: _FakeHost) -> None:
     via_rollback = _run_script(host.env(), "--rollback-to", TARGET_SHA, "--dry-run")
     assert via_rollback.returncode == 0, via_rollback.stderr
     assert _parse_dry_run(via_rollback.stdout)["block"] == via_commit
+
+
+@needs_topology
+def test_service_wheel_is_staged_under_the_project_not_transport_tmp(host: _FakeHost) -> None:
+    parsed = host.stage()
+    block = parsed["block"]
+    install = re.search(r'--force-reinstall "([^"\n]+\.whl)"', block)
+    assert install
+    wheel = Path(install.group(1))
+    assert wheel.is_relative_to(host.root / "var"), "service cannot traverse a restricted transport /tmp"
+    assert not wheel.is_relative_to(host.staging.parent)
