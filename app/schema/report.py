@@ -16,12 +16,23 @@ from app.service.interpretation_failure import (
     FAILURE_LITERAL,
     PATIENT_ACTION_LITERAL,
 )
+from app.service.questionnaire_vocabulary import QUESTIONNAIRE_STATUSES
 from app.service.recommendation_empty_reason import (
     CartLinkReasonLiteral,
     RecommendationReasonLiteral,
 )
 from app.service.report_status import PATIENT_STATUSES
 from app.service.report_subject import SUBJECT_CONSISTENCIES_ORDERED
+
+
+class MetricRangeDisplay(BaseModel):
+    """Server-parsed range for display only; it never grants evidence admission."""
+
+    value: float = Field(allow_inf_nan=False)
+    low: float | None = Field(None, allow_inf_nan=False)
+    high: float | None = Field(None, allow_inf_nan=False)
+    low_inclusive: bool = True
+    high_inclusive: bool = True
 
 
 class MetricRecord(BaseModel):
@@ -70,6 +81,7 @@ class MetricRecord(BaseModel):
     # 当前生效值四元组（GLOSSARY.md 的「指标生效值」）：修正值 > 确认值 > 模型值；
     # excluded 的指标没有生效值（四项皆 None）。定义见 app/service/metric_effective_value.py，
     # 与证据边界用的是同一个函数、同一份输入。
+    range_display: MetricRangeDisplay | None = None
     effective_value: str | None = None
     effective_unit: str | None = None
     effective_reference_range: str | None = None
@@ -309,6 +321,92 @@ class ReportMetricCounts(BaseModel):
     in_range: int = 0
 
 
+class ReportSystemGroup(BaseModel):
+    """一个器官/系统分组（#291 的「系统分组」）。
+
+    `key`/`name` 来自 `app/service/metric_system_map.py` 的声明序；`metric_ids`
+    按报告内指标的原序列出——原文回链（`page_number`/`bbox`/`source_file_index`）
+    挂在指标自己身上，组不重复携带。
+
+    **刻意没有组级单一状态与分数。** 「异常/待核对/范围内」是每行指标自己
+    的判定（`MetricRecord.inferred_abnormal_flag`），同组并存时两者都展示；
+    组只带同一份判定的三个互斥计数（`counts`），服务端算好——前端把组内
+    行数相加属于同一口径的复述，自己造谓词才是第二个判定入口。
+
+    `counts` 与 `ReportMetricCounts` 同形状：`parsed` 是组内行数。
+    """
+
+    key: str
+    name: str
+    metric_ids: list[int] = Field(default_factory=list)
+    counts: "ReportMetricCounts" = Field(default_factory=lambda: ReportMetricCounts())
+
+
+class QuestionnaireSummary(BaseModel):
+    """报告响应里的问卷状态摘要（#291 的可选问卷）。
+
+    只够渲染入口与徽标：状态 + 作答时的题目版本。完整题目定义与答案明细
+    走问卷端点（#295 落地），不进报告响应——每份报告都带的字段不承担
+    只有问卷页才读的体积。
+    """
+
+    status: Literal[*QUESTIONNAIRE_STATUSES]
+    questionnaire_version: str | None = None
+
+
+class QuestionnaireOption(BaseModel):
+    id: str
+    label: str
+
+
+class QuestionnaireQuestion(BaseModel):
+    id: str
+    text: str
+    options: list[QuestionnaireOption] = Field(default_factory=list)
+
+
+class PersonalizedTip(BaseModel):
+    """一条根据用户回答整理的就医沟通问题：注明回答来源，不作生活方式处方。
+
+    只组织已声明过的（题目, 选项）组合——词表外没有提示，服务端不凭模型生成，
+    也不把 `action_status=not_available` 的证据内容升级成行动建议。
+    """
+
+    question_id: str
+    option_id: str
+    text: str
+
+
+class QuestionnaireState(BaseModel):
+    """问卷端点的出域形状：题目定义 + 当前答案状态，一份响应讲全。
+
+    `status` 与 `answers` 描述**已保存的事实**，不描述这次请求想改什么；
+    `revision` 是并发裁决的凭据（提交时回传，旧凭据被拒绝）。`tips` 是从已保存
+    答案**派生**的呈现内容（不落库），每条注明它引用的回答——患者据此区分
+    「报告事实」与「我的自述」。
+    """
+
+    questionnaire_version: str
+    status: Literal[*QUESTIONNAIRE_STATUSES]
+    questions: list[QuestionnaireQuestion] = Field(default_factory=list)
+    answers: dict[str, str] = Field(default_factory=dict)
+    revision: int = 0
+    tips: list[PersonalizedTip] = Field(default_factory=list)
+
+
+class QuestionnaireSubmission(BaseModel):
+    """问卷提交。**`skipped=true` 与空 answers 不是一回事**：前者是「选择
+    不答」的明确表态，后者是不完整的提交（按 partial 计）。两者都允许，
+    服务端只校验提交过的组合属于词表。
+    """
+
+    questionnaire_version: str = Field(..., min_length=1)
+    answers: dict[str, str] = Field(default_factory=dict)
+    skipped: bool = False
+    #: 提交方读到的 revision；并发时旧凭据被拒绝，不覆盖新答案。
+    base_revision: int = Field(default=0, ge=0)
+
+
 class MedicalReportResponse(BaseModel):
     id: int
     patient_id: str
@@ -361,6 +459,13 @@ class MedicalReportResponse(BaseModel):
     # `tests/test_report_status_vocabulary.py` 的守卫）。逐条目是带类型的记录，
     # action 取自唯一的词表。
     audit_events: list[ReportAuditEventRecord] = Field(default_factory=list)
+    # 系统分组（#291）：`None` 表示这份报告还没有分组结论（未评估或本服务
+    # 尚不产生分组）——与 `admission=None` 同一约定：缺省不冒充「无映射」，
+    # 空列表才是「评估过但没有任何指标可归组」。字段类型化、缺省兼容旧报告。
+    system_groups: list[ReportSystemGroup] | None = None
+    # 问卷状态摘要（#291）：`None` 表示没有任何问卷记录（含功能上线前的
+    # 旧报告——它们从未作答）。`unanswered` 不建行，所以不会出现在这里。
+    questionnaire: QuestionnaireSummary | None = None
 
     model_config = {"from_attributes": True}
 
