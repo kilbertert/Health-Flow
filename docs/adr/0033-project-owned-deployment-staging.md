@@ -1,4 +1,4 @@
-# 33. Stage service-readable deployment artifacts below the project root
+# 33. Stage service-readable artifacts under an administrator-owned parent
 
 Date: 2026-11-11
 Status: Accepted
@@ -6,9 +6,12 @@ Status: Accepted
 ## Decision
 
 Transport may use the host temporary directory, but the root deployment process
-extracts the artifact beneath the project's `var/` directory before the service
-identity installs its wheel. The service identity can traverse that existing
-project tree. It does not need access to the transport parent's permissions.
+extracts the artifact beneath the administrator-owned artifact directory next to the backup directory before the
+service identity installs its wheel. The parent must not be a symlink, must be
+owned by the deploying identity, and must not be group/other writable. The service
+identity can traverse this tree but cannot replace the staging directory. The
+existing backup directory can remain service-owned; artifacts use a separately
+validated parent. The service needs no access to the transport parent.
 
 ## Alternatives considered
 
@@ -16,7 +19,7 @@ Making the host-wide temporary directory traversable would repair this deploymen
 but change a global host boundary for one application's install. Making just the
 wheel world-readable cannot repair an inaccessible ancestor. Installing as root
 would avoid traversal but change the established owner of the project virtualenv.
-Project-local extraction keeps the existing install identity and transport API.
+Extraction below the protected backup directory keeps the existing install identity and transport API.
 
 ## Consequences
 
