@@ -141,7 +141,7 @@ def test_answered_status_and_each_answer_produces_a_clinician_question(rig):
     )
     state = response.json()
     assert state["status"] == "answered"
-    # 「均衡/平稳」这类无风险信号不出提示 —— 提示只覆盖值得提示的回答。
+    # 每个回答都只生成就医沟通项；不对用户自述做健康判定。
     assert {t["question_id"] for t in state["tips"]} == {"sleep", "diet", "exercise", "stress"}
 
 
@@ -269,3 +269,24 @@ def test_report_deletion_cascades_the_questionnaire_row(rig):
     assert client.delete(f"/api/health/report/{report_id}", cookies=cookies).status_code == 200
     with SessionLocal() as session:
         assert session.query(ReportQuestionnaireResponse).count() == 0
+
+
+@pytest.mark.parametrize("saved_status", ["answered", "skipped"])
+def test_old_questionnaire_summary_matches_version_aware_endpoint(rig, saved_status):
+    client, sessions, report_id, cookies = rig
+    with sessions() as db:
+        db.add(
+            ReportQuestionnaireResponse(
+                report_id=report_id,
+                owner_id=OWNER,
+                questionnaire_version="old-v0",
+                status=saved_status,
+                answers={},
+                revision=1,
+            )
+        )
+        db.commit()
+    report = client.get(f"/api/health/report/{report_id}", cookies=cookies).json()
+    state = client.get(_url(report_id), cookies=cookies).json()
+    assert report["questionnaire"]["status"] == state["status"] == "unanswered"
+    assert report["questionnaire"]["questionnaire_version"] == state["questionnaire_version"]

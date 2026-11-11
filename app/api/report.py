@@ -343,8 +343,8 @@ def _questionnaire_summary(report: ReportModel) -> dict | None:
     if row is None:
         return None
     return {
-        "status": row.status,
-        "questionnaire_version": row.questionnaire_version,
+        "status": state_for(row)["status"],
+        "questionnaire_version": QUESTIONNAIRE_VERSION,
     }
 
 
