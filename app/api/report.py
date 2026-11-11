@@ -46,7 +46,9 @@ from app.schema.report import (
     RecommendationResponse,
     ReportConfirmationRequest,
     ReportMetricCounts,
+    ReportSystemGroup,
 )
+from app.service.admission import range_display
 from app.service.admission_projection import (
     admission_shapes,
     has_conclusion,
@@ -88,7 +90,7 @@ from app.service.report_material import (
 from app.service.report_material import (
     resolve as resolve_material,
 )
-from app.service.report_metric_counts import metric_counts
+from app.service.report_metric_counts import MetricCounts, metric_counts
 from app.service.report_ownership import UNOWNED_SENTINEL, resolve_owner
 from app.service.report_status import record_event, transition
 from app.service.report_subject import (
@@ -98,6 +100,7 @@ from app.service.report_subject import (
     gate,
     initial_consistency,
 )
+from app.service.report_system_groups import system_groups
 from app.service.upload_policy import upload_policy
 from app.service.vision_encoder import ParsedReport, get_vision_encoder_service
 
@@ -242,6 +245,7 @@ def _metric_response(metric: MetricModel, admission: str | None = None) -> Metri
         abnormal_flag=metric.abnormal_flag,
         inferred_abnormal_flag=infer_abnormal_flag_for_metric(metric),
         admission_reason=admission,
+        range_display=range_display(metric),
         # 历史行里可能存着退化框（零面积）。它不是可用的指针 —— 按词条
         # 「任一组件缺失时定位为空，不猜测」，读出来就是 None，而不是让
         # 整份报告打不开。
@@ -315,10 +319,7 @@ def _partial_files_in_flight(report: ReportModel) -> bool:
     状态（`processing`）拒人，这个函数只为那句话提供依据。
     """
     parsed = report.parsed_content or {}
-    return any(
-        isinstance(item, dict) and item.get("status") == "failed"
-        for item in parsed.get("file_results") or []
-    )
+    return any(isinstance(item, dict) and item.get("status") == "failed" for item in parsed.get("file_results") or [])
 
 
 @dataclass(frozen=True)
@@ -338,6 +339,7 @@ class ParseOutcome:
 
     succeeded: bool
     failure: InterpretationFailure | None = None
+
 
 @router.post("/report/upload", response_model=MedicalReportResponse, status_code=202)
 async def upload_report(
@@ -542,9 +544,9 @@ def _parse_report(
         )
         # 报告级成因：所有失败文件里**最上游**的那一环。一个指标都没抽到、而每个文件
         # 又都说自己没错（抽取器答上了、只是页面里没有可确认的指标）时，那是内容事实。
-        failure = report_failure(
-            parsed.failure for _, _, parsed, _ in parsed_reports if parsed.failure
-        ) or (None if parsed_metrics else "content_unrecognized")
+        failure = report_failure(parsed.failure for _, _, parsed, _ in parsed_reports if parsed.failure) or (
+            None if parsed_metrics else "content_unrecognized"
+        )
 
         with factory() as db:
             report = db.get(ReportModel, report_id)
@@ -655,7 +657,6 @@ def _parse_report(
         except Exception:  # noqa: BLE001 —— 见上：这一层的失败不许逃出解析路径
             logger.exception("could not record the parsing failure", extra={"report_id": report_id})
         return ParseOutcome(succeeded=False, failure=failure)
-
 
 
 def _confirmed_conditions(report: ReportModel) -> list[tuple[str, str]]:
@@ -851,6 +852,16 @@ def _carried_forward(parsed_content: dict | None) -> dict:
     }
 
 
+def _counts_out(counts: MetricCounts) -> ReportMetricCounts:
+    return ReportMetricCounts(
+        parsed=counts.parsed,
+        abnormal=counts.abnormal,
+        needs_review=counts.needs_review,
+        undecided=counts.undecided,
+        in_range=counts.in_range,
+    )
+
+
 def _report_response(
     report: ReportModel,
     metrics: list[MetricModel],
@@ -871,13 +882,7 @@ def _report_response(
         department=report.department,
         metrics=[_metric_response(metric, reason) for metric, reason in pairs],
         admission=ledger,
-        counts=ReportMetricCounts(
-            parsed=counts.parsed,
-            abnormal=counts.abnormal,
-            needs_review=counts.needs_review,
-            undecided=counts.undecided,
-            in_range=counts.in_range,
-        ),
+        counts=_counts_out(counts),
         files=[
             {
                 "file_index": item.file_index,
@@ -931,6 +936,21 @@ def _report_response(
             }
             for event in sorted(report.audit_events, key=lambda item: item.id)
         ],
+        # #294：分组只在有结论的报告上装配（与 admission=None「还没跑过评估」同一约定）
+        # —— 确认前的编码未落定，按它归组会给一个随后漂移的「结论」。None = 无分组结论。
+        system_groups=(
+            [
+                ReportSystemGroup(
+                    key=group.key,
+                    name=group.name,
+                    metric_ids=group.metric_ids,
+                    counts=_counts_out(group.counts),
+                )
+                for group in system_groups(metrics, catalog=catalog)
+            ]
+            if assessed
+            else None
+        ),
     )
 
 
@@ -1119,9 +1139,7 @@ async def assess_report(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
-async def _assess_report(
-    report: ReportModel, db: Session, *, owned_by_account: bool = False
-) -> MedicalReportResponse:
+async def _assess_report(report: ReportModel, db: Session, *, owned_by_account: bool = False) -> MedicalReportResponse:
     # 准入由调用方按状态判定(仍有文件未解析完 → 状态是 processing)。
     # 这里不再从 parsed_content 重新推导闸门 —— 那是旧的双通道。
     if report.status not in {"confirmed", "assessed"}:

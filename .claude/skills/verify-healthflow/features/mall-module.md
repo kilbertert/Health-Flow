@@ -5,3 +5,12 @@ Set `HEALTHFLOW_E2E_CONSUMER_FIXTURE` to a trusted local module exporting `start
 Build the normal React assets first because the server runner requires them. Keep distinct loopback origins via `HEALTHFLOW_E2E_PORT` and `HEALTHFLOW_E2E_MALL_ORIGIN`. The harness continues to own temporary RSA keys, database and cleanup. Never point it at a working database.
 
 Record exactly which consumer scenarios ran and identify both source revisions/build artifacts. Upstream fixture results do not prove production authentication, scientific correctness, model extraction or payment. See `docs/mall-module/qa-plan.md`.
+
+Report-upgrade acceptance also opens real report pages at 360/390px, expands metric
+cards and reference bars, operates tabs/options using the keyboard, and exercises
+questionnaire failure recovery, reload, skip/reanswer and account isolation. Check
+that no-card results preserve the server summary. An old-response fixture may omit
+additive fields, but label it as compatibility coverage, not backend evidence.
+
+The evidence endpoint must also be run without a fake matcher for excluded
+reference endpoints. Retain the HTTP response and the final patient summary.
