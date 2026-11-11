@@ -150,4 +150,22 @@ test.describe('跨源 Bearer 会话', () => {
     expect(blocked.reached).toBe(false);
     expect(blocked.error).toContain('Failed to fetch');
   });
+
+  test('问卷保存的 PUT 预检在商城源被放行', async ({ page }) => {
+    await page.goto(`${mallOrigin}/`);
+
+    // PUT + Content-Type: application/json 必然触发预检。预检不放行 PUT 的话 fetch
+    // 会像上一条用例一样抛 TypeError，根本拿不到状态码；拿到 401（未带会话 → 鉴权
+    // 拒绝）反而证明浏览器已经把请求放给了服务端。同源部署与 TestClient 都测不出
+    // 这一格——只有真实跨源才暴露，这正是线上验收撞上它的方式。
+    const put = await responseHeaders(page, '/api/health/report/0/questionnaire', () =>
+      callApi(page, '/api/health/report/0/questionnaire', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      }),
+    );
+    expect(put.body.status).toBe(401);
+    expect(put.headers['access-control-allow-origin']).toBe(mallOrigin);
+  });
 });
