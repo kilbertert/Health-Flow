@@ -45,7 +45,6 @@ class UserAccount(Base):
     )
 
 
-
 class UserSession(Base):
     """Server-side session; the browser only receives the random token.
 
@@ -63,7 +62,6 @@ class UserSession(Base):
     expires_at = Column(DateTime, nullable=False, index=True)
     last_seen_at = Column(DateTime, default=datetime.now, nullable=False)
     revoked_at = Column(DateTime)
-
 
 
 class MedicalReport(Base):
@@ -97,6 +95,12 @@ class MedicalReport(Base):
     audit_events = relationship("ReportAuditEvent", back_populates="report", cascade="all, delete-orphan")
     extraction_job = relationship(
         "ReportExtractionJob",
+        back_populates="report",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+    questionnaire_response = relationship(
+        "ReportQuestionnaireResponse",
         back_populates="report",
         uselist=False,
         cascade="all, delete-orphan",
@@ -165,6 +169,50 @@ class ReportAuditEvent(Base):
     created_at = Column(DateTime, default=datetime.now, nullable=False)
 
     report = relationship("MedicalReport", back_populates="audit_events")
+
+
+class ReportQuestionnaireResponse(Base):
+    """一份报告的生活问卷答案（#291 的可选问卷）。
+
+    **一份报告一行**（`report_id` 唯一）。重答是 UPDATE 原行而不是追加：
+    患者读到的永远只有「当前答案」一个版本，历史答案没有展示面，多留
+    一份历史只是多存一份健康自述。`revision` 单调递增，是「并发旧请求
+    不能覆盖新答案」的裁决依据——写方先读 revision，只有读到同一值才落。
+
+    `questionnaire_version` 记的是**作答那一刻**的题目版本（词表在
+    `app/service/questionnaire_vocabulary.py`）。换版本后旧答案不再算
+    「已答」——题目可能已不同义，不能拿旧答案套新题。
+
+    答案与原始抽取、证据结果**分开存储**：抽取/证据是机器对报告事实的
+    产出，问卷是患者自述；「四类来源分开」（#291）落在表这一层。
+    删除报告/撤回解读同意时经 `ondelete="CASCADE"` 与 `delete-orphan`
+    一并清除——问卷是报告的派生数据，不是独立资产。
+    """
+
+    __tablename__ = "report_questionnaire_responses"
+    __table_args__ = (UniqueConstraint("report_id", name="uq_report_questionnaire_report"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    report_id = Column(
+        Integer,
+        ForeignKey("medical_reports.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    #: 主体存储标识，与 `medical_reports.owner_id` 同一形状；没有外键，
+    #: 理由与 `user_sessions.account_id` 相同（它是身份，不是一张表的键）。
+    owner_id = Column(String(128), nullable=False, index=True)
+    questionnaire_version = Column(String(64), nullable=False)
+    #: 词表 `QUESTIONNAIRE_STATUSES`：unanswered 不建行，跳过/部分/已答各有行。
+    status = Column(String(16), nullable=False)
+    #: `{question_id: option_id}`；skipped 时为空 dict（「选择不答」没有答案）。
+    answers = Column(JSON, nullable=False, default=dict)
+    #: 单调递增的乐观并发计数；每次成功提交 +1。
+    revision = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, nullable=False, default=datetime.now)
+    updated_at = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
+
+    report = relationship("MedicalReport", back_populates="questionnaire_response")
 
 
 class ReportExtractionJob(Base):
@@ -270,9 +318,7 @@ class TicketSubject(Base):
     """
 
     __tablename__ = "ticket_subjects"
-    __table_args__ = (
-        UniqueConstraint("tenant_id", "external_subject", name="uq_ticket_subjects_identity"),
-    )
+    __table_args__ = (UniqueConstraint("tenant_id", "external_subject", name="uq_ticket_subjects_identity"),)
 
     id = Column(String(36), primary_key=True)
     tenant_id = Column(String(64), nullable=False, index=True)
