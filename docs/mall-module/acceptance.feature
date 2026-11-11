@@ -11,3 +11,21 @@ Feature: Verify the external mall consumer against the real HealthFlow service
       When the customer explicitly confirms the abnormal observations
       Then hidden observations stay pending
       And published card text, source links and recommendation consent behave as specified
+  Rule: Report upgrades preserve facts and optional choices
+    Scenario: An open boundary cannot become normal in evidence matching
+      Given a confirmed value exactly on an excluded reference endpoint
+      When the report is assessed through the evidence API
+      Then the observation is explicitly withheld and remains visibly abnormal
+      And the summary does not say all observations are normal
+    Scenario: Empty evidence is not a clean bill of health
+      Given abnormal observations without published findings
+      When the report is opened at mobile widths 360 and 390
+      Then the server summary is shown without an invented healthy conclusion
+      And expanding an indicator shows the source and server-parsed range
+    Scenario: Optional answers survive failures and concurrent writes
+      Given a report with no lifestyle answers
+      When the user answers by keyboard, saves, reloads, skips and answers again
+      Then saved answers are restored with their source labels
+      And a failed submission preserves the draft and base report
+      And conflicting writes from the same revision have only one winner
+      And withdrawal deletes the answers with the report

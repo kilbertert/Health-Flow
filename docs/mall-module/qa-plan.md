@@ -8,3 +8,11 @@ The external consumer supplies an authorized fixture module and test directory. 
 4. Verify teardown removes the run's temporary database, keys and listeners.
 
 Normal runs with no consumer configuration retain the current empty mall page and test directory. Consumer-specific routes, assets and fixtures belong in its private repository. This extension does not prove production authentication, model extraction, medical correctness or payment.
+
+Report upgrade acceptance additionally covers mobile report pages at 360/390px,
+keyboard interaction, expanded ranges, absent additive fields and no-card/unknown
+states. Exercise questionnaire persistence, failure recovery, skip/reanswer,
+concurrent writes and deletion. Health-related output must distinguish self-reports
+from report observations; unreviewed prescriptive advice is not part of acceptance.
+An injected browser response verifies rendering only. Parser/worker failure checks
+must verify no candidate metrics or successful report are persisted.
