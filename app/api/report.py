@@ -29,7 +29,7 @@ from app.api.deps import ACCESS_REASON_HEADER, db_dependency, session_owner_depe
 from app.config import get_settings
 from app.data.models import MedicalReport as ReportModel
 from app.data.models import MetricRecord as MetricModel
-from app.data.models import ReportExtractionJob
+from app.data.models import ReportExtractionJob, ReportQuestionnaireResponse
 from app.data.models import ReportFile as ReportFileModel
 from app.schema.evidence import (
     EvidenceMatchResponse,
@@ -42,6 +42,8 @@ from app.schema.report import (
     CartLinkResponse,
     MedicalReportResponse,
     MetricRecord,
+    QuestionnaireState,
+    QuestionnaireSubmission,
     RecommendationGroup,
     RecommendationResponse,
     ReportConfirmationRequest,
@@ -76,6 +78,7 @@ from app.service.mall_goods import MallGoodsItem, fetch_goods, label_pairs_for, 
 from app.service.metric_effective_value import effective_value
 from app.service.metric_rows import deduplicate
 from app.service.origin_location import page_url, source_id_for
+from app.service.questionnaire_vocabulary import QUESTIONNAIRE_VERSION
 from app.service.recommendation_empty_reason import REPORT_ACCESS_BY_STATUS
 from app.service.report_deletion import delete_reports
 from app.service.report_material import (
@@ -90,6 +93,12 @@ from app.service.report_material import (
 )
 from app.service.report_metric_counts import metric_counts
 from app.service.report_ownership import UNOWNED_SENTINEL, resolve_owner
+from app.service.report_questionnaire import (
+    is_same_answer_set,
+    state_for,
+    status_for,
+    validate_submission,
+)
 from app.service.report_status import record_event, transition
 from app.service.report_subject import (
     SubjectGateError,
@@ -315,10 +324,7 @@ def _partial_files_in_flight(report: ReportModel) -> bool:
     状态（`processing`）拒人，这个函数只为那句话提供依据。
     """
     parsed = report.parsed_content or {}
-    return any(
-        isinstance(item, dict) and item.get("status") == "failed"
-        for item in parsed.get("file_results") or []
-    )
+    return any(isinstance(item, dict) and item.get("status") == "failed" for item in parsed.get("file_results") or [])
 
 
 def _questionnaire_summary(report: ReportModel) -> dict | None:
@@ -354,6 +360,7 @@ class ParseOutcome:
 
     succeeded: bool
     failure: InterpretationFailure | None = None
+
 
 @router.post("/report/upload", response_model=MedicalReportResponse, status_code=202)
 async def upload_report(
@@ -558,9 +565,9 @@ def _parse_report(
         )
         # 报告级成因：所有失败文件里**最上游**的那一环。一个指标都没抽到、而每个文件
         # 又都说自己没错（抽取器答上了、只是页面里没有可确认的指标）时，那是内容事实。
-        failure = report_failure(
-            parsed.failure for _, _, parsed, _ in parsed_reports if parsed.failure
-        ) or (None if parsed_metrics else "content_unrecognized")
+        failure = report_failure(parsed.failure for _, _, parsed, _ in parsed_reports if parsed.failure) or (
+            None if parsed_metrics else "content_unrecognized"
+        )
 
         with factory() as db:
             report = db.get(ReportModel, report_id)
@@ -671,7 +678,6 @@ def _parse_report(
         except Exception:  # noqa: BLE001 —— 见上：这一层的失败不许逃出解析路径
             logger.exception("could not record the parsing failure", extra={"report_id": report_id})
         return ParseOutcome(succeeded=False, failure=failure)
-
 
 
 def _confirmed_conditions(report: ReportModel) -> list[tuple[str, str]]:
@@ -1139,9 +1145,7 @@ async def assess_report(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
-async def _assess_report(
-    report: ReportModel, db: Session, *, owned_by_account: bool = False
-) -> MedicalReportResponse:
+async def _assess_report(report: ReportModel, db: Session, *, owned_by_account: bool = False) -> MedicalReportResponse:
     # 准入由调用方按状态判定(仍有文件未解析完 → 状态是 processing)。
     # 这里不再从 parsed_content 重新推导闸门 —— 那是旧的双通道。
     if report.status not in {"confirmed", "assessed"}:
@@ -1381,6 +1385,79 @@ async def delete_report(
     # 有两份实现就一定有一份会漂，而漂丢的那一半是「报告行指向不存在的文件」。
     delete_reports(db, [report]).commit(db)
     return {"message": "报告已删除", "report_id": report_id}
+
+
+def _questionnaire_row(db: Session, report_id: int) -> ReportQuestionnaireResponse | None:
+    return db.query(ReportQuestionnaireResponse).filter(ReportQuestionnaireResponse.report_id == report_id).first()
+
+
+@router.get("/report/{report_id}/questionnaire", response_model=QuestionnaireState)
+async def get_questionnaire(
+    report_id: int,
+    request: Request,
+    db: Session = Depends(db_dependency),
+    owner_id: str | None = Depends(session_owner_dependency),
+):
+    """问卷状态：题目定义 + 已保存的答案事实 + 由答案派生的个性化提示。
+
+    没有答案行 → `unanswered`（含功能上线前的旧报告）；旧题目版本的行如实
+    按「未答」读出 —— 行保留、等重答覆盖，不拿旧答案套新题。
+    """
+    report = _authorized_report(
+        db,
+        report_id,
+        owner_id=resolve_owner(request).storage_id,
+    )
+    return QuestionnaireState(**state_for(_questionnaire_row(db, report.id)))
+
+
+@router.put("/report/{report_id}/questionnaire", response_model=QuestionnaireState)
+async def put_questionnaire(
+    report_id: int,
+    submission: QuestionnaireSubmission,
+    request: Request,
+    db: Session = Depends(db_dependency),
+    owner_id: str | None = Depends(session_owner_dependency),
+):
+    """提交问卷：可跳过、可部分回答、可重答（UPDATE 原行，不追加历史版本）。
+
+    裁决顺序即责任顺序：先词表校验（422），再并发凭据（409）。`base_revision`
+    与当前不同且内容不同的提交被拒绝 —— 那是并发旧请求，不能覆盖新答案；
+    与已保存内容**相同**的重放则幂等返回现状（重试安全）。
+    """
+    report = _authorized_report(
+        db,
+        report_id,
+        owner_id=resolve_owner(request).storage_id,
+    )
+    detail = validate_submission(submission)
+    if detail is not None:
+        raise HTTPException(status_code=422, detail=detail)
+    row = _questionnaire_row(db, report.id)
+    current_revision = row.revision if row is not None else 0
+    if submission.base_revision != current_revision:
+        if is_same_answer_set(row, submission):
+            return QuestionnaireState(**state_for(row))
+        raise HTTPException(status_code=409, detail="问卷已被更新，请刷新后重试")
+    answers = {} if submission.skipped else dict(submission.answers)
+    status = status_for(submission.answers, submission.skipped)
+    if row is None:
+        row = ReportQuestionnaireResponse(
+            report_id=report.id,
+            owner_id=resolve_owner(request).storage_id,
+            questionnaire_version=QUESTIONNAIRE_VERSION,
+            status=status,
+            answers=answers,
+            revision=1,
+        )
+        db.add(row)
+    else:
+        row.questionnaire_version = QUESTIONNAIRE_VERSION
+        row.status = status
+        row.answers = answers
+        row.revision += 1
+    db.commit()
+    return QuestionnaireState(**state_for(row))
 
 
 @router.post("/report/{report_id}/recommendations/{spu_id}/cart-link", response_model=CartLinkResponse)

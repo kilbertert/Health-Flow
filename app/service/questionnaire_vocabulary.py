@@ -60,14 +60,11 @@ QUESTIONNAIRE_QUESTIONS: Final[tuple[dict, ...]] = (
     },
 )
 
-QUESTIONNAIRE_QUESTION_IDS: Final[frozenset[str]] = frozenset(
-    question["id"] for question in QUESTIONNAIRE_QUESTIONS
-)
+QUESTIONNAIRE_QUESTION_IDS: Final[frozenset[str]] = frozenset(question["id"] for question in QUESTIONNAIRE_QUESTIONS)
 
 #: 每题允许的选项 ID。答案提交按这个表校验——题目/选项之外的 ID 一律拒绝。
 QUESTIONNAIRE_OPTION_IDS: Final[dict[str, frozenset[str]]] = {
-    question["id"]: frozenset(option["id"] for option in question["options"])
-    for question in QUESTIONNAIRE_QUESTIONS
+    question["id"]: frozenset(option["id"] for option in question["options"]) for question in QUESTIONNAIRE_QUESTIONS
 }
 
 #: 问卷状态。**唯一词表**，schema 的 Literal 从这里派生：
@@ -85,3 +82,29 @@ QUESTIONNAIRE_STATUSES: Final[tuple[str, ...]] = (
 )
 
 QuestionnaireStatusLiteral = Literal["unanswered", "skipped", "partial", "answered"]
+
+#: 个性化生活方式提示（#295）：**已审核的静态文案**，按（题目, 选项）查取。
+#: 只覆盖值得提示的选项——「规律/均衡/经常/平稳」这类无风险信号的回答不出提示。
+#:
+#: 出处与审核口径：通用公共卫生健康生活方式建议（非个体诊疗建议），不引用疾病、
+#: 不承诺疗效、不给用药或复查周期；文案随本表一同评审，改动需重新注明出处与审核。
+#: 每条提示由 `report_questionnaire.personalized_tips` 按答案派生并注明引用的回答
+#: —— 字典查不到就没有提示，服务端不凭模型生成。
+PERSONALIZED_TIPS: Final[dict[str, dict[str, str]]] = {
+    "sleep": {
+        "short": "作息不规律时，先固定起床时间往往比提早入睡更容易建立节律；睡前一小时减少屏幕使用也有帮助。",
+        "troubled": "入睡困难或睡不解乏持续存在时，可以在下次就诊时把睡眠情况告诉医生。",
+    },
+    "diet": {
+        "irregular": "进餐时间不规律时，先固定一餐的时间、再逐步稳定其余两餐，通常比一次到位更容易坚持。",
+        "heavy": "口味偏重时，可以从把调味减到习惯量的一半开始；外卖为主的阶段，优先选清淡做法的菜品。",
+    },
+    "exercise": {
+        "occasional": "不规律的活动也有价值。把目标先设为每周固定一到两次、每次十来分钟，比追求强度更容易形成习惯。",
+        "sedentary": "久坐偏长时，可以在每个工作时段插入几分钟站立或走动，先让「打断久坐」成为习惯。",
+    },
+    "stress": {
+        "moderate": "有压力但能应付时，保持现有的减压方式即可；也可以留意压力与睡眠、饮食之间的相互影响。",
+        "high": "持续高压或明显焦虑时，向专业人员寻求心理支持是合理的求助途径，不是软弱的表现。",
+    },
+}

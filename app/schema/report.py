@@ -354,11 +354,25 @@ class QuestionnaireQuestion(BaseModel):
     options: list[QuestionnaireOption] = Field(default_factory=list)
 
 
+class PersonalizedTip(BaseModel):
+    """一条个性化生活方式提示（#295）：注明它引用的那个回答，与报告事实分开发布。
+
+    只组织已声明过的（题目, 选项）组合——词表外没有提示，服务端不凭模型生成，
+    也不把 `action_status=not_available` 的证据内容升级成行动建议。
+    """
+
+    question_id: str
+    option_id: str
+    text: str
+
+
 class QuestionnaireState(BaseModel):
     """问卷端点的出域形状：题目定义 + 当前答案状态，一份响应讲全。
 
     `status` 与 `answers` 描述**已保存的事实**，不描述这次请求想改什么；
-    `revision` 是并发裁决的凭据（提交时回传，旧凭据被拒绝）。
+    `revision` 是并发裁决的凭据（提交时回传，旧凭据被拒绝）。`tips` 是从已保存
+    答案**派生**的呈现内容（不落库），每条注明它引用的回答——患者据此区分
+    「报告事实」与「我的自述」。
     """
 
     questionnaire_version: str
@@ -366,6 +380,7 @@ class QuestionnaireState(BaseModel):
     questions: list[QuestionnaireQuestion] = Field(default_factory=list)
     answers: dict[str, str] = Field(default_factory=dict)
     revision: int = 0
+    tips: list[PersonalizedTip] = Field(default_factory=list)
 
 
 class QuestionnaireSubmission(BaseModel):
